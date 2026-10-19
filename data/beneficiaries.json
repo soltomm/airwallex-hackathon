@@ -1,0 +1,43 @@
+[
+  {
+    "nickname": "acme-freight-us",
+    "transfer_methods": ["LOCAL"],
+    "beneficiary": {
+      "entity_type": "COMPANY",
+      "company_name": "Acme Freight Inc",
+      "address": {"country_code": "US", "street_address": "1 Harbor Way", "city": "Newark", "state": "NJ", "postcode": "07114"},
+      "bank_details": {
+        "account_currency": "USD", "bank_country_code": "US", "account_name": "Acme Freight Inc",
+        "account_number": "123456789012", "account_routing_type1": "aba", "account_routing_value1": "026073150",
+        "bank_account_category": "Checking"
+      }
+    }
+  },
+  {
+    "nickname": "northwind-parts-gb",
+    "transfer_methods": ["LOCAL"],
+    "beneficiary": {
+      "entity_type": "COMPANY",
+      "company_name": "Northwind Parts Ltd",
+      "address": {"country_code": "GB", "street_address": "10 Canal St", "city": "Manchester", "postcode": "M1 3HE"},
+      "bank_details": {
+        "account_currency": "GBP", "bank_country_code": "GB", "account_name": "Northwind Parts Ltd",
+        "bank_name": "Barclays", "account_number": "41926819", "account_routing_type1": "sort_code",
+        "account_routing_value1": "200000"
+      }
+    }
+  },
+  {
+    "nickname": "rhein-logistik-de",
+    "transfer_methods": ["SWIFT"],
+    "beneficiary": {
+      "entity_type": "COMPANY",
+      "company_name": "Rhein Logistik GmbH",
+      "address": {"country_code": "DE", "street_address": "Hafenstrasse 5", "city": "Duisburg", "postcode": "47119"},
+      "bank_details": {
+        "account_currency": "EUR", "bank_country_code": "DE", "account_name": "Rhein Logistik GmbH",
+        "iban": "DE89370400440532013000", "swift_code": "COBADEFFXXX"
+      }
+    }
+  }
+]
