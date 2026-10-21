@@ -6,3 +6,4 @@ var/
 metal/node_modules/
 *key*.json
 !data/*.json
+data/sanctions/
