@@ -3,3 +3,6 @@
 __pycache__/
 *.egg-info/
 var/
+metal/node_modules/
+*key*.json
+!data/*.json

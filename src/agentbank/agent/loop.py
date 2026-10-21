@@ -5,6 +5,8 @@ and lets approvals pause inside a tool handler. Server-side refusal fallbacks ar
 """
 from __future__ import annotations
 
+import os
+
 import anthropic
 
 from .tools import TOOLS, AgentContext, run_tool
@@ -27,9 +29,15 @@ How you work:
   resulting balances."""
 
 
+def make_client() -> anthropic.Anthropic:
+    """User-level API keys are not tied to a workspace; they must name one per request."""
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    return anthropic.Anthropic(default_headers={"anthropic-workspace-id": workspace} if workspace else None)
+
+
 def run_agent(goal: str, ctx: AgentContext, client: anthropic.Anthropic | None = None,
               on_text=print) -> list:
-    client = client or anthropic.Anthropic()
+    client = client or make_client()
     messages: list = [{"role": "user", "content": goal}]
 
     for _ in range(MAX_TURNS):
