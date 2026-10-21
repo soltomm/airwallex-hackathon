@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sandbox Checkout</title>
+  <script src="https://static.airwallex.com/components/sdk/v1/index.js"></script>
+  <style>
+    :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #612fff; --ok: #15803d; --bad: #b91c1c; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --ok: #4ade80; --bad: #f87171; } }
+    body { margin: 0; padding: 32px 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+    main { max-width: 520px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    p.sub { color: var(--muted); margin: 0 0 24px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+    button { padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); cursor: pointer; font: inherit; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #dropIn { min-height: 40px; border-top: 1px solid var(--line); padding-top: 16px; }
+    #status { margin-top: 16px; font-weight: 600; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); }
+    code { font-size: 13px; }
+    ol { color: var(--muted); padding-left: 20px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Sandbox checkout</h1>
+  <p class="sub">Pays a server-created PaymentIntent through Airwallex.js, so card details never touch our server.</p>
+  <ol>
+    <li>Pick a payment below.</li>
+    <li>Enter test card <code>4035 5010 0000 0008</code>, any future expiry, any CVC.</li>
+    <li>Pay, then run another until the list in the terminal is done.</li>
+  </ol>
+  <div class="row">
+    <button class="primary" data-amount="480" data-ref="DISPUTE-FRAUD">$480 — dispute case: fraud</button>
+    <button class="primary" data-amount="18" data-ref="DISPUTE-NOT-RECEIVED">$18 — dispute case: not received</button>
+    <button class="primary" data-amount="95" data-ref="DISPUTE-CREDIT">$95 — dispute case: credit not processed</button>
+    <button data-amount="50" data-ref="HOLD-1" data-preauth="1">$50 — pre-auth hold (kit 12)</button>
+    <button data-amount="50" data-ref="HOLD-2" data-preauth="1">$50 — pre-auth hold to cancel (kit 12)</button>
+  </div>
+  <div id="dropIn"></div>
+  <div id="status"></div>
+</main>
+<script>
+  const statusEl = document.getElementById('status');
+  let sdkReady = window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
+  let element = null;
+
+  function say(text, cls) { statusEl.textContent = text; statusEl.className = cls || ''; }
+
+  document.querySelectorAll('button[data-amount]').forEach(btn => btn.addEventListener('click', async () => {
+    say('Creating payment…');
+    const preauth = btn.dataset.preauth === '1';
+    const res = await fetch('/api/intent', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: Number(btn.dataset.amount), ref: btn.dataset.ref, preauth }) });
+    const intent = await res.json();
+    if (!res.ok) { say('Server error: ' + (intent.error || res.status), 'bad'); return; }
+    await sdkReady;
+    if (element) { element.destroy && element.destroy(); }
+    document.getElementById('dropIn').innerHTML = '';
+    const options = { intent_id: intent.id, client_secret: intent.client_secret, currency: intent.currency, methods: ['card'] };
+    if (preauth) { options.authorizationType = 'pre_auth'; options.autoCapture = false; }
+    element = await window.AirwallexComponentsSDK.createElement('dropIn', options);
+    element.mount('dropIn');
+    element.on('success', async () => {
+      const check = await fetch('/api/intent/' + intent.id).then(r => r.json());
+      say(`${btn.dataset.ref}: ${check.status} (${intent.id})`, 'ok');
+    });
+    element.on('error', e => say('Payment error: ' + (e.detail && e.detail.error && e.detail.error.message), 'bad'));
+    say(`${btn.dataset.ref}: enter the test card to pay $${btn.dataset.amount}${preauth ? ' as a pre-auth hold' : ''}.`);
+  }));
+</script>
+</body>
+</html>
