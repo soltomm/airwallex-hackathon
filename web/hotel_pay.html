@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hotel Deposit</title>
+  <script src="https://static.airwallex.com/components/sdk/v1/index.js"></script>
+  <style>
+    :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #612fff; --ok: #15803d; --bad: #b91c1c; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --ok: #4ade80; --bad: #f87171; } }
+    body { margin: 0; padding: 32px 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+    main { max-width: 520px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    p.sub { color: var(--muted); margin: 0 0 20px; }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 24px; }
+    dt { color: var(--muted); } dd { margin: 0; }
+    .due { font-size: 18px; font-weight: 600; }
+    #dropIn { min-height: 40px; border-top: 1px solid var(--line); padding-top: 16px; }
+    #status { margin-top: 16px; font-weight: 600; }
+    .ok { color: var(--ok); } .bad { color: var(--bad); }
+    code { font-size: 13px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1 id="hotel"></h1>
+  <p class="sub">Booking <span id="ref"></span>. Sandbox: use test card <code>4035 5010 0000 0008</code>, any future expiry, any CVC.</p>
+  <dl id="terms"></dl>
+  <div id="dropIn"></div>
+  <div id="status"></div>
+</main>
+<script>
+  const B = __BOOKING__;   // filled in by the server
+  const statusEl = document.getElementById('status');
+  const say = (text, cls) => { statusEl.textContent = text; statusEl.className = cls || ''; };
+  const hold = B.cancellation !== 'non_refundable';
+  document.getElementById('hotel').textContent = B.hotel;
+  document.getElementById('ref').textContent = B.booking_ref;
+  const rows = [
+    ['Room', `${B.room}, ${B.guests} guests`], ['Stay', `${B.check_in} to ${B.check_out}`],
+    ['Extras', B.extras.join(', ') || 'none'], ['Cancellation', B.cancellation.replaceAll('_', ' ')],
+    ['Total', `${B.total} ${B.currency}`],
+    [hold ? 'Held on your card now' : 'Charged now', `<span class="due">${B.deposit} ${B.currency}</span>`],
+  ];
+  document.getElementById('terms').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+
+  if (B.status !== 'awaiting_payment') {
+    say(`This booking is ${B.status.replaceAll('_', ' ')}.`, 'ok');
+  } else {
+    (async () => {
+      await window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
+      const options = { intent_id: B.payment_intent_id, client_secret: B.client_secret, currency: B.currency, methods: ['card'] };
+      if (hold) { options.authorizationType = 'pre_auth'; options.autoCapture = false; }
+      const element = await window.AirwallexComponentsSDK.createElement('dropIn', options);
+      element.mount('dropIn');
+      element.on('success', async () => {
+        const b = await fetch(`/api/bookings/${B.booking_ref}`).then(r => r.json());
+        say(hold ? `Deposit held: ${b.status.replaceAll('_', ' ')}.` : `Paid: ${b.status}.`, 'ok');
+      });
+      element.on('error', e => say('Payment error: ' + (e.detail && e.detail.error && e.detail.error.message), 'bad'));
+    })();
+  }
+</script>
+</body>
+</html>

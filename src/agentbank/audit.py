@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-_SECRET_KEYS = {"api_key", "x-api-key", "token", "authorization", "card_number", "cvc", "number"}
+_SECRET_KEYS = {"api_key", "x-api-key", "token", "authorization", "card_number", "cvc", "number", "client_secret"}
 
 
 def _redact(value):

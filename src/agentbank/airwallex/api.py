@@ -106,6 +106,23 @@ class AirwallexAPI:
             "request_id": request_id, "amount": amount.api(), "currency": amount.currency,
             "merchant_order_id": merchant_order_id})
 
+    def get_payment_intent(self, intent_id: str) -> dict:
+        return self.c.get(f"/pa/payment_intents/{intent_id}")
+
+    # Holds: confirm with authorizationType pre_auth and autoCapture false (Airwallex.js), and the
+    # intent waits in REQUIRES_CAPTURE. Capture at most the authorized amount; increment first.
+    def increment_authorization(self, request_id: str, intent_id: str, amount: Money) -> dict:
+        return self.c.post(f"/pa/payment_intents/{intent_id}/increment_authorization",
+                           {"request_id": request_id, "amount": amount.api()})
+
+    def capture_payment_intent(self, request_id: str, intent_id: str, amount: Money) -> dict:
+        return self.c.post(f"/pa/payment_intents/{intent_id}/capture",
+                           {"request_id": request_id, "amount": amount.api()})
+
+    def cancel_payment_intent(self, request_id: str, intent_id: str, reason: str) -> dict:
+        return self.c.post(f"/pa/payment_intents/{intent_id}/cancel",
+                           {"request_id": request_id, "cancellation_reason": reason})
+
     def disputes(self, **params) -> list[dict]:
         return self.c.get("/pa/payment_disputes", params=params).get("items", [])
 

@@ -84,6 +84,35 @@ These came from running kits 1–3 against a real sandbox account. Some contradi
 - FX conversions settle immediately; quotes are single-use; leave `x-api-version` off FX calls.
 - Sandbox rate limits: 10 req/s per endpoint. The client backs off on 429; don't fire parallel bursts in a demo.
 
+## Hotel offer negotiation (our project)
+
+Hotels run their own seller agents (Claude, `seller_agent.py`) that negotiate personalised offers
+with the traveller's Claude, within per-hotel rules in `data/hotels.json`. `SellerPolicy`
+(`offers.py`) decides in code what a seller may commit to. Deposits are paid by card through
+Airwallex (pre-auth hold, released on free cancellation, captured late or at check-out) or by the
+traveller's agent on Metal, under an on-chain mandate capped at the budget (`bookings.py`).
+
+```sh
+pip install -e ".[agent]"                         # anthropic + mcp
+scripts/metal_traveller_setup.sh 0.50             # once: traveller's Metal account + mandate (budget in *USDZ)
+claude mcp add hotels -- $PWD/.venv/bin/python $PWD/scripts/hotel_mcp.py    # search, negotiate, book
+claude mcp add metal-wallet -- $PWD/scripts/metal_wallet_mcp.sh              # pay within the mandate
+(cd metal && npx tsx hotel-pay.ts)                # keep running: x402 endpoint for Metal deposits
+```
+
+Then ask Claude for a Paris hotel, 2 guests, 13-15 Nov 2026, breakfast + late checkout + free
+cancellation, EUR 500 total. Card checkouts open on `http://127.0.0.1:8009/pay/<ref>` (test card
+`4035 5010 0000 0008`). Hotel staff: `python scripts/hotel_ops.py list` and
+`python scripts/hotel_ops.py <ref> status|cancel|check-out|no-show`.
+
+Offline: `python scripts/negotiation_demo.py` (scripted negotiation, no LLM) and
+`python scripts/payments_smoke.py card|metal` (booking and payment, no LLM).
+
+- Metal amounts use a demo rate of 0.001 *USDZ per EUR (faucet amounts are small).
+- Metal testnet needs `@metalntwx/*` 0.3.2; 0.3.0's account factory call reverts.
+- A mandate's budget never resets: after test payments, bind a fresh one with `metal-agent mandate renew`.
+- Metal refunds for free cancellations are recorded as due, not sent.
+
 ## Not covered yet
 
 - Evidence file uploads for kit 4 (multipart to `files.sandbox.airwallex.com`, JPG/PDF only).

@@ -1,0 +1,123 @@
+[
+  {
+    "id": "htl_paris_marais",
+    "name": "Hôtel du Marais (simulated)",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DBL",
+        "name": "Classic Double",
+        "max_guests": 2,
+        "total_rooms": 20,
+        "published_rate": "260",
+        "floor_rate": "205"
+      },
+      {
+        "code": "STE",
+        "name": "Junior Suite",
+        "max_guests": 3,
+        "total_rooms": 4,
+        "published_rate": "420",
+        "floor_rate": "340"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DBL",
+        "night": "2026-11-13",
+        "sold": 12
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-14",
+        "sold": 15
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-15",
+        "sold": 9
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-14",
+        "sold": 4
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "12",
+      "breakfast_price": "25",
+      "late_checkout_price": "40",
+      "high_occupancy": "0.85",
+      "approval_band": "0.05",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.10",
+        "free_until_24h": "0.15"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.20",
+        "free_until_24h": "0.30"
+      },
+      "negotiation_style": "Boutique hotel. Protect the room rate: prefer adding breakfast or late checkout over cutting price. Flexible on cancellation if the guest accepts a larger deposit hold."
+    },
+    "metal": {
+      "payee": "0xfE2386A250ACDe4D33C7CA89eA7896ECCC8edEf1",
+      "usdz_per_eur": "0.001"
+    }
+  },
+  {
+    "id": "htl_paris_opera",
+    "name": "Opéra Lumière (simulated)",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DBL",
+        "name": "Superior Double",
+        "max_guests": 2,
+        "total_rooms": 30,
+        "published_rate": "240",
+        "floor_rate": "195"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DBL",
+        "night": "2026-11-13",
+        "sold": 27
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-14",
+        "sold": 28
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-15",
+        "sold": 27
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "10",
+      "breakfast_price": "25",
+      "late_checkout_price": "40",
+      "high_occupancy": "0.85",
+      "approval_band": "0.05",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.10",
+        "free_until_24h": "0.15"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.20",
+        "free_until_24h": "0.30"
+      },
+      "negotiation_style": "Busy business hotel, nearly full on weekends. Little room to discount; never give late checkout on full days."
+    },
+    "metal": {
+      "payee": "0xECF3323528E7966C0004D46641ccE9D069c1CB0D",
+      "usdz_per_eur": "0.001"
+    }
+  }
+]
