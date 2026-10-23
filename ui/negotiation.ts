@@ -27,6 +27,7 @@ const hotels = new Map<string, { el: HTMLElement; published?: number; rounds: Ma
 const offers = new Map<string, { offer: Offer; el: HTMLElement }>();
 const bookings = new Map<string, HTMLElement>();
 let since = 0;
+let room = "";   // the traveller's session, from search_hotels; the feed is scoped to it
 
 function hotelSection(id: string, name: string): HTMLElement {
   let h = hotels.get(id);
@@ -209,7 +210,7 @@ function parse(result: any): any {
 let failures = 0;
 async function poll() {
   try {
-    const feed = parse(await app.callServerTool({ name: "negotiation_feed", arguments: { since } }));
+    const feed = parse(await app.callServerTool({ name: "negotiation_feed", arguments: { room, since } }));
     for (const ev of feed.events as Event[]) {
       handlers[ev.kind]?.(ev);
       since = ev.seq;
@@ -230,7 +231,10 @@ function applyTheme() {
 }
 
 app.onhostcontextchanged = applyTheme;
-app.ontoolresult = () => {};   // the feed carries everything, including this search's results
+app.ontoolresult = (result) => {   // the search result names the room; the feed carries the rest
+  const data = parse(result);
+  if (data?.room) room = data.room;
+};
 await app.connect();
 applyTheme();
 setInterval(tick, 1000);

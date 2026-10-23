@@ -113,6 +113,21 @@ confirms terms) and bookings as deposits are held or paid. Source in `ui/`; afte
 renders it in a test host with `test/feed.json` (regenerate with `.venv/bin/python ui/test/make_feed.py`)
 and screenshots both themes into `ui/test/out/`. Terminal clients get the same rounds as text.
 
+**Sharing with friends (Render).** `render.yaml` deploys the same server over HTTP: Render >
+New > Blueprint > this repo, then fill in `ANTHROPIC_API_KEY`, `AWX_CLIENT_ID`, `AWX_API_KEY`.
+The MCP URL is `https://<service>.onrender.com/mcp/<HOTELS_ACCESS_TOKEN>` (the token is generated;
+find it under the service's Environment). Friends add it in Claude (Settings > Connectors > Add custom
+connector) or ChatGPT (developer mode connectors). Each chat session gets its own negotiations, offers,
+bookings and panel; hotel inventory is shared. Hosted is card-only, capped per session and per day
+(`HOTELS_MAX_*`, `HOTELS_DAILY_USD`), and resets on every deploy or restart (no persistent disk).
+Try it locally first: `HOTELS_ACCESS_TOKEN=<16+ chars> PORT=8765 python scripts/hotel_mcp.py --http`.
+
+**Evaluating the seller agent.** `python scripts/eval_seller.py [--runs 3] [--only name,...]` plays
+scripted buyers against the real seller agent from fresh inventory and grades each conversation in
+code: the expected outcome (closes a feasible deal, declines honestly, holds the line), no leaks of
+floors, costs or occupancy, every quoted price backed by a committed offer, and deals within budget.
+About $0.15 per conversation on Claude Opus 5.5; transcripts go to `var/evals/`.
+
 Offline: `python scripts/negotiation_demo.py` (scripted negotiation, no LLM) and
 `python scripts/payments_smoke.py card|metal` (booking and payment, no LLM).
 

@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -16,7 +17,7 @@ from agentbank.airwallex import AirwallexError
 from agentbank.audit import AuditLog
 from agentbank.bookings import BookingStore
 from agentbank.ledger import OperationLedger
-from agentbank.offer_desk import OfferDesk
+from agentbank.offer_desk import Limits, OfferDesk
 from agentbank.offers import load_hotels
 
 NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
@@ -182,6 +183,52 @@ class OfferDeskTests(unittest.TestCase):
         for secret in ("floor", "490.80", "450", "breakfast_cost", "occupancy_by_night"):   # floors, costs, failed tries
             self.assertNotIn(secret, text)
         self.assertEqual(self.desk.feed_since(feed["last"])["events"], [])
+
+    def test_seller_unavailable_is_a_clean_reply(self):
+        import anthropic
+        def boom(**kw):
+            raise anthropic.APIConnectionError(message="credit balance too low", request=None)
+        self.claude.beta.messages.create = boom
+        reply = self.desk.negotiate("htl_paris_marais", "2 nights please")
+        self.assertIn("unavailable", reply["seller_message"])
+        self.assertEqual(reply["offers"], [])
+        seller = self.desk.sellers[reply["negotiation_id"]]
+        self.assertEqual((seller.messages, seller.buyer_turns), ([], 0))   # nothing half-recorded
+
+    def test_tenants_are_isolated(self):
+        self.claude.turns = [tool_turn(("make_offer", {**TERMS, "deposit_pct": "0.6", "total": "500"})),
+                             text_turn("Offer made.")]
+        alice = self.desk.negotiate("htl_paris_marais", "hi", tenant="alice")
+        offer_id = alice["offers"][0]["offer_id"]
+        # Bob cannot continue Alice's negotiation, book her offer, or see her feed.
+        self.assertIn("error", self.desk.negotiate("htl_paris_marais", "hi", alice["negotiation_id"], tenant="bob"))
+        self.assertEqual(self.desk.book(offer_id, True, "card", tenant="bob")["result"], "not_booked")
+        self.assertEqual(self.desk.feed_since(0, tenant="bob")["events"], [])
+        ref = self.desk.book(offer_id, True, "card", tenant="alice")["booking_ref"]
+        self.assertIn("error", self.desk.booking_status(ref, tenant="bob"))
+        self.assertIn("error", self.desk.cancel_booking(ref, tenant="bob"))
+        self.assertEqual(self.desk.booking_status(ref, tenant="alice")["status"], "awaiting_payment")
+        self.assertEqual(self.desk.booking_status(ref, tenant=None)["status"], "awaiting_payment")   # hotel pages
+        kinds = [e["kind"] for e in self.desk.feed_since(0, tenant="alice")["events"]]
+        self.assertEqual(kinds, ["buyer", "activity", "seller", "booking"])
+        self.assertNotIn("tenant", json.dumps(self.desk.feed_since(0, tenant="alice")))
+        # Inventory is shared: Alice's booking took a room for everyone.
+        self.assertEqual(self.desk.hotels["htl_paris_marais"].booked[("DBL", datetime(2026, 11, 13).date())], 13)
+
+    def test_limits_for_a_shared_deployment(self):
+        self.desk.limits = Limits(negotiations_per_tenant=1, turns_per_tenant=2)
+        self.claude.turns = [text_turn("a"), text_turn("b")]
+        first = self.desk.negotiate("htl_paris_marais", "hi", tenant="t")
+        self.assertIn("error", self.desk.negotiate("htl_paris_opera", "hi", tenant="t"))   # second negotiation
+        self.desk.negotiate("htl_paris_marais", "again", first["negotiation_id"], tenant="t")
+        self.assertIn("limit", self.desk.negotiate("htl_paris_marais", "more", first["negotiation_id"],
+                                                   tenant="t")["error"])
+        self.desk.limits = Limits(daily_usd=Decimal("0"))
+        self.assertIn("daily budget", self.desk.negotiate("htl_paris_marais", "hi", tenant="other")["error"])
+
+    def test_payment_methods_can_be_restricted(self):
+        self.desk.payment_methods = ("card",)
+        self.assertIn("card", self.desk.book(self.offer(), True, "metal")["reason"])
 
     def hold(self, **terms):
         ref = self.desk.book(self.offer(**terms), True, "card")["booking_ref"]

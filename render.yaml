@@ -1,0 +1,30 @@
+# Render blueprint: the hotels MCP server for friends' Claude / ChatGPT (card payments only).
+# Dashboard > New > Blueprint > this repo. Render asks for the sync:false secrets; the MCP URL is
+#   https://<service>.onrender.com/mcp/<HOTELS_ACCESS_TOKEN>   (token: service > Environment)
+services:
+  - type: web
+    name: hotel-negotiation
+    runtime: python
+    plan: free            # sleeps after 15 min idle (first call then takes ~1 min); "starter" stays up
+    buildCommand: pip install -e ".[agent]"
+    startCommand: python scripts/hotel_mcp.py --http
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.7
+      - key: HOTELS_ACCESS_TOKEN        # secret part of the MCP URL: share the URL only with friends
+        generateValue: true
+      - key: ANTHROPIC_API_KEY          # pays for the hotels' seller agents
+        sync: false
+      - key: AWX_CLIENT_ID              # Airwallex sandbox, for card deposits
+        sync: false
+      - key: AWX_API_KEY
+        sync: false
+      - key: HOTELS_PAYMENT_METHODS     # Metal needs the traveller's own wallet: local demo only
+        value: card
+      - key: HOTELS_MAX_NEGOTIATIONS    # per chat session
+        value: "4"
+      - key: HOTELS_MAX_TURNS           # buyer messages per chat session, across negotiations
+        value: "12"
+      - key: HOTELS_DAILY_USD           # stop seller agents after ~this much model spend per day
+        value: "10"
