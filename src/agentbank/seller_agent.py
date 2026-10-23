@@ -20,6 +20,8 @@ from .offers import EXTRAS, OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy
 from .policy import Verdict
 
 MAX_TOOL_TURNS = 10
+# Claude Opus 5.5, $ per million tokens: uncached input, cache writes (1.25x), cache reads, output.
+PRICES = {"input": Decimal("4"), "cache_write": Decimal("5"), "cache_read": Decimal("0.20"), "output": Decimal("20")}
 
 SYSTEM = """You are the sales agent for {name}. You negotiate room bookings with AI agents
 acting for travellers. Prices are in {currency}, totals for the whole stay.
@@ -88,7 +90,7 @@ class SellerAgent:
         self.now = now
         self.messages: list = []
         self.buyer_turns = 0
-        self.usage = {"input": 0, "output": 0, "cache_read": 0, "requests": 0}   # for evals and cost caps
+        self.usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "requests": 0}   # evals, caps
         self.system = SYSTEM.format(name=hotel.name, currency=hotel.currency,
                                     style=hotel.negotiation_style or "none")
 
@@ -142,8 +144,11 @@ class SellerAgent:
 
         for _ in range(MAX_TOOL_TURNS):
             try:
+                # Automatic prompt caching: the instructions, tools and conversation so far are resent on
+                # every step and every turn; the cache serves that prefix at a fraction of the price.
                 response = self.client.beta.messages.create(
                     model=MODEL, max_tokens=16000, system=self.system, tools=TOOLS, messages=self.messages,
+                    cache_control={"type": "ephemeral"},
                     output_config={"effort": "medium"},
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default",
                 )
@@ -162,6 +167,7 @@ class SellerAgent:
                 self.usage["input"] += getattr(u, "input_tokens", 0) or 0
                 self.usage["output"] += getattr(u, "output_tokens", 0) or 0
                 self.usage["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
+                self.usage["cache_write"] += getattr(u, "cache_creation_input_tokens", 0) or 0
             self.usage["requests"] += 1
             text = [b.text for b in response.content if b.type == "text" and b.text.strip()] or text
             if response.stop_reason == "refusal":
@@ -208,3 +214,9 @@ def _activity(name: str, args: dict, result: dict) -> str:
     if name == "make_offer":
         return f"committed {result['offer_id']}: {terms}" if result.get("committed") else "revised a draft offer"
     return name
+
+
+def usage_cost(usage: dict, since: dict | None = None) -> Decimal:
+    """Estimated $ for `usage` (minus `since`, to price one turn) at PRICES."""
+    since = since or {}
+    return sum(((usage.get(k, 0) - since.get(k, 0)) * price for k, price in PRICES.items()), Decimal(0)) / 1_000_000

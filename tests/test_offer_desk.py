@@ -230,6 +230,16 @@ class OfferDeskTests(unittest.TestCase):
         self.desk.payment_methods = ("card",)
         self.assertIn("card", self.desk.book(self.offer(), True, "metal")["reason"])
 
+    def test_prompt_caching_and_cost(self):
+        from agentbank.seller_agent import usage_cost
+        self.negotiate(tool_turn(("get_inventory", {"check_in": "2026-11-13", "check_out": "2026-11-15"})),
+                       text_turn("Hello."))
+        self.assertTrue(all(r.get("cache_control") == {"type": "ephemeral"} for r in self.claude.requests))
+        # 1M uncached in, 1M cache write, 1M cache read, 1M out at Opus 5.5 prices: 4 + 5 + 0.20 + 20
+        self.assertEqual(usage_cost({"input": 10**6, "cache_write": 10**6, "cache_read": 10**6, "output": 10**6}),
+                         Decimal("29.20"))
+        self.assertEqual(usage_cost({"input": 3_000_000}, {"input": 1_000_000}), Decimal("8"))
+
     def hold(self, **terms):
         ref = self.desk.book(self.offer(**terms), True, "card")["booking_ref"]
         pid = self.desk.bookings.get(ref)["payment_intent_id"]

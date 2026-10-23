@@ -26,12 +26,11 @@ from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy, load_hotels
 from .policy import Verdict
-from .seller_agent import SellerAgent
+from .seller_agent import SellerAgent, usage_cost
 
 PAYMENT_METHODS = ("card", "metal")
 LOCAL = "local"
 _PRIVATE = ("client_secret", "approval_fingerprint", "history", "tenant")   # kept out of buyer-facing views
-_PRICE_IN, _PRICE_OUT = Decimal("4") / 1_000_000, Decimal("20") / 1_000_000   # Claude Opus 5.5, $ per token
 
 
 @dataclass
@@ -157,8 +156,7 @@ class OfferDesk:
         before = dict(seller.usage)
         reply = seller.reply(message)
         self.turns[tenant] = self.turns.get(tenant, 0) + 1
-        cost = ((seller.usage["input"] - before["input"]) * _PRICE_IN +
-                (seller.usage["output"] - before["output"]) * _PRICE_OUT)
+        cost = usage_cost(seller.usage, before)
         day = self.now().date().isoformat()
         self.spend[day] = self.spend.get(day, Decimal(0)) + cost
         offers = [self.view(i) for i in reply["offer_ids"]]
