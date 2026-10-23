@@ -65,7 +65,9 @@ class AirwallexClient:
             hint = ""
             if r.body.get("code") == "non_json_response":
                 hint = " (HTML 403 usually means a malformed client ID or API key)"
-            raise AirwallexError(r.status, r.body.get("code"), f"login failed{hint}", r.body)
+            detail = r.body.get("message") if isinstance(r.body, dict) else None
+            raise AirwallexError(r.status, r.body.get("code"), f"login failed{hint}{f' ({detail})' if detail else ''}",
+                                 r.body)
         self._token = r.body["token"]
         self._token_expires = _parse_expiry(r.body.get("expires_at"))
         return self._token
