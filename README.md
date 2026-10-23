@@ -151,7 +151,8 @@ leaves the capture standing; `hotel_ops.py <ref> settle` retries it. `scripts/on
 each hotel. Sandbox lessons (2026-10-23): an ACTIVE connected account still fails PaymentIntents with
 "not enabled for payment acceptance" until it has `store_details` (store names in unaccented Latin
 letters) and the `payments_visa`/`payments_mastercard` capabilities are enabled, a few seconds after
-activation; a FundsSplit is only accepted once the intent has SUCCEEDED.
+activation; a FundsSplit is only accepted once the intent has SUCCEEDED. Verified live: EUR 520 tagged
+intent split EUR 457.60 to the hotel, and an untagged GBP 451.20 intent split GBP 397.06 (both RELEASED).
 
 **Revenue desk (hotel dashboard).** The offer desk logs every search, negotiation, policy check, committed
 offer and booking to `var/demand.jsonl` (hotel side: it holds floors). The dashboard shows the funnel,
