@@ -6,6 +6,8 @@ but that id, so the terms the traveller confirmed are exactly the terms that get
 """
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
@@ -42,6 +44,9 @@ class OfferDesk:
         self.approvals = ApprovalStore(ttl_seconds=int(OFFER_TTL.total_seconds()))
         self.sellers: dict[str, SellerAgent] = {}   # negotiation_id -> that hotel's seller agent
         self.offers: dict[str, Offer] = {}          # committed offers, bookable by id
+        self.feed: list[dict] = []                  # what live views show; never the hotel's floors
+        self._feed_lock = threading.Lock()
+        self._last_refresh = 0.0
         for b in bookings.all().values():           # rooms already sold survive restarts
             if b["status"] not in ("cancelled", "cancelled_refund_due"):
                 self._reserve(b["hotel_id"], b["room_code"], b["check_in"], b["check_out"])
@@ -89,6 +94,8 @@ class OfferDesk:
                                 "bookable_as_requested": d.allowed, "notes": [] if d.allowed else list(d.public)})
         self.audit.record("search", check_in=check_in, check_out=check_out, guests=guests, extras=extras,
                           cancellation=cancellation, results=len(results))
+        self._emit("search", request={"check_in": check_in, "check_out": check_out, "guests": guests,
+                                      "extras": extras, "cancellation": cancellation}, results=results)
         return results
 
     def negotiate(self, hotel_id: str, message: str, negotiation_id: str | None = None) -> dict:
@@ -101,11 +108,18 @@ class OfferDesk:
             return {"error": f"unknown hotel {hotel_id}"}
         else:
             negotiation_id = "neg_" + uuid.uuid4().hex[:10]
-            seller = self.sellers[negotiation_id] = SellerAgent(self.hotels[hotel_id], self.commit, self.audit,
-                                                                client=self.client, now=self.now)
+            seller = self.sellers[negotiation_id] = SellerAgent(
+                self.hotels[hotel_id], self.commit, self.audit, client=self.client, now=self.now,
+                on_activity=lambda text, nid=negotiation_id: self._emit("activity", negotiation_id=nid, text=text))
+        hotel = self.hotels[hotel_id].name
+        self._emit("buyer", negotiation_id=negotiation_id, hotel_id=hotel_id, hotel=hotel,
+                   round=seller.buyer_turns + 1, message=message)
         reply = seller.reply(message)
+        offers = [self.view(i) for i in reply["offer_ids"]]
+        self._emit("seller", negotiation_id=negotiation_id, hotel_id=hotel_id, hotel=hotel,
+                   round=seller.buyer_turns, message=reply["message"], offers=offers)
         return {"negotiation_id": negotiation_id, "round": seller.buyer_turns, "seller_activity": reply["activity"],
-                "seller_message": reply["message"], "offers": [self.view(i) for i in reply["offer_ids"]]}
+                "seller_message": reply["message"], "offers": offers}
 
     def book(self, offer_id: str, traveller_confirmed: bool, payment_method: str = "card") -> dict:
         if not traveller_confirmed:
@@ -152,7 +166,9 @@ class OfferDesk:
             try:
                 self.payments.open_card_payment(ref)
             except BookingError as e:
+                self.note_booking(ref)
                 return {"result": "booked_payment_unavailable", "reason": str(e), **self.booking_view(ref)}
+        self.note_booking(ref)
         return {"result": "booked", **self.booking_view(ref)}
 
     def _booked_before(self, op) -> dict:
@@ -180,9 +196,12 @@ class OfferDesk:
 
     def booking_status(self, ref: str) -> dict:
         try:
+            before = self.bookings.get(ref)["status"]
             b = self.payments.refresh(ref)
         except BookingError as e:
             return {"error": str(e)}
+        if b["status"] != before:
+            self.note_booking(ref)
         if b["method"] == "card" and b["status"] == "awaiting_payment" and not b.get("payment_intent_id"):
             try:
                 self.payments.open_card_payment(ref)
@@ -197,4 +216,28 @@ class OfferDesk:
             return {"error": str(e)}
         if b["status"] in ("cancelled", "cancelled_refund_due"):
             self._reserve(b["hotel_id"], b["room_code"], b["check_in"], b["check_out"], rooms=-1)
+        self.note_booking(ref)
         return self.booking_view(ref)
+
+    # ---- live feed (the in-chat negotiation panel polls this) ---------------
+    def _emit(self, kind: str, **data) -> None:
+        with self._feed_lock:
+            self.feed.append({"seq": len(self.feed) + 1, "at": self.now().isoformat(), "kind": kind, **data})
+
+    def note_booking(self, ref: str) -> None:
+        self._emit("booking", booking=self.booking_view(ref))
+
+    def feed_since(self, since: int = 0) -> dict:
+        """Events after `since`. Every few seconds, also picks up card holds confirmed on the checkout page."""
+        if time.monotonic() - self._last_refresh > 5:
+            self._last_refresh = time.monotonic()
+            shown = {e["booking"]["booking_ref"] for e in list(self.feed) if e["kind"] == "booking"}
+            for ref in shown:
+                b = self.bookings.get(ref)
+                if b["method"] == "card" and b["status"] == "awaiting_payment" and b.get("payment_intent_id"):
+                    try:
+                        self.booking_status(ref)
+                    except Exception:   # a slow or failing Airwallex read must not break the live view
+                        pass
+        with self._feed_lock:
+            return {"events": self.feed[since:], "last": len(self.feed)}

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Negotiation Room</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --card: #ffffff; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4;
+    --buyer: #eef2ff; --buyer-fg: #3730a3; --seller: #f5f5f4; --accent: #612fff; --accent-fg: #fff;
+    --ok: #15803d; --ok-bg: #dcfce7; --warn: #a16207; --warn-bg: #fef9c3; --bad: #b91c1c; --bad-bg: #fee2e2;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #1c1917; --card: #262220; --fg: #f5f5f4; --muted: #a8a29e; --line: #3f3a36;
+    --buyer: #23234a; --buyer-fg: #c7d2fe; --seller: #2e2a27; --accent: #8b6bff;
+    --ok: #4ade80; --ok-bg: #14321f; --warn: #facc15; --warn-bg: #3a3112; --bad: #f87171; --bad-bg: #3b1717;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #1c1917; --card: #262220; --fg: #f5f5f4; --muted: #a8a29e; --line: #3f3a36;
+    --buyer: #23234a; --buyer-fg: #c7d2fe; --seller: #2e2a27; --accent: #8b6bff;
+    --ok: #4ade80; --ok-bg: #14321f; --warn: #facc15; --warn-bg: #3a3112; --bad: #f87171; --bad-bg: #3b1717;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 17px; margin: 0; }
+  .live { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pulse 1.6s infinite; }
+  .live.off::before { background: var(--muted); animation: none; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .request { color: var(--muted); margin: 0 0 14px; }
+  section.hotel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .hotel-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .hotel-head h2 { font-size: 15px; margin: 0; }
+  .published { color: var(--muted); font-size: 13px; }
+  .published s { margin-right: 4px; }
+  .note { color: var(--warn); font-size: 12px; margin-top: 2px; }
+  .round { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+  .bubble { border-radius: 10px; padding: 8px 11px; margin: 6px 0; max-width: 92%; overflow-wrap: anywhere; }
+  .bubble .who { font-size: 11px; font-weight: 600; margin-bottom: 2px; opacity: .8; }
+  .buyer { background: var(--buyer); color: var(--buyer-fg); margin-left: auto; }
+  .seller { background: var(--seller); }
+  .clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .more { background: none; border: 0; color: inherit; opacity: .7; padding: 0; cursor: pointer; font: inherit; font-size: 12px; text-decoration: underline; }
+  ul.activity { list-style: none; margin: 4px 0 6px; padding: 0; font-size: 12px; color: var(--muted); }
+  ul.activity li { padding-left: 16px; position: relative; animation: fade .3s ease-out; }
+  ul.activity li::before { content: "✓"; position: absolute; left: 0; color: var(--ok); }
+  ul.activity li.working::before { content: "…"; color: var(--muted); }
+  @keyframes fade { from { opacity: 0; transform: translateY(-2px); } }
+  .offers { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); margin: 8px 0 2px; }
+  .offer { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); animation: fade .3s ease-out; }
+  .offer .total { font-size: 20px; font-weight: 700; }
+  .offer .saving { color: var(--ok); font-size: 12px; font-weight: 600; margin-left: 4px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .meta { font-size: 11px; color: var(--muted); }
+  .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  button.act { flex: 1; min-width: 90px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  button.act.alt { background: transparent; color: var(--accent); }
+  button.act:disabled { opacity: .5; cursor: default; }
+  .expired { opacity: .55; }
+  .bookings h2 { font-size: 15px; margin: 0 0 8px; }
+  .booking { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
+  .booking:first-of-type { border-top: 0; }
+  .pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .empty { color: var(--muted); font-size: 13px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; } }
+</style>
+</head>
+<body>
+<header><h1>Negotiation room</h1><span class="live" id="live">live</span></header>
+<p class="request" id="request">Waiting for a search…</p>
+<div id="hotels"></div>
+<section class="hotel bookings" id="bookings" hidden><h2>Bookings</h2><div id="booking-list"></div></section>
+<script>/*__BUNDLE__*/</script>
+</body>
+</html>

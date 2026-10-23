@@ -14,6 +14,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from mcp.server.apps import Apps
 from mcp.server.mcpserver import MCPServer
 
 from _bootstrap import ROOT, connect
@@ -30,7 +31,30 @@ except ConfigError:
     api = None   # negotiation still works; card payments report that Airwallex is not configured
 desk = OfferDesk.from_files(ROOT, api)
 
-server = MCPServer("hotels", instructions="""Hotel marketplace for AI travel agents (simulated inventory).
+# In-chat negotiation panel (MCP App; Claude Desktop and claude.ai render it). Built from ui/ by
+# `cd ui && npm run build`. Clients without Apps support get the same tools as plain text.
+PANEL = "ui://hotels/negotiation.html"
+apps = Apps()
+apps.add_html_resource(PANEL, (ROOT / "web" / "negotiation_app.html").read_text(), title="Negotiation room",
+                       prefers_border=True)
+
+
+@apps.tool(resource_uri=PANEL)
+def search_hotels(check_in: str, check_out: str, guests: int, extras: list[str], cancellation: str) -> list[dict]:
+    """Published prices for a stay. Dates are ISO (2026-11-13). extras: any of "breakfast",
+    "late_checkout". cancellation: "non_refundable", "free_until_48h" or "free_until_24h".
+    Opens the live negotiation room in clients that show apps."""
+    return desk.search(check_in, check_out, guests, extras, cancellation)
+
+
+@apps.tool(resource_uri=PANEL, visibility=["app"])
+def negotiation_feed(since: int = 0) -> dict:
+    """Events after `since` for the negotiation room: searches, each round's messages, the hotel
+    agent's steps as they happen, offers and bookings. Called by the panel, not the model."""
+    return desk.feed_since(since)
+
+
+server = MCPServer("hotels", extensions=[apps], instructions="""Hotel marketplace for AI travel agents (simulated inventory).
 1. search_hotels shows published prices; they are a starting point, not final.
 2. negotiate sends your message to a hotel's own sales agent. State the traveller's dates, guests,
    must-haves and budget. Keep the negotiation_id to continue. Hotels can trade price against
@@ -41,14 +65,9 @@ server = MCPServer("hotels", instructions="""Hotel marketplace for AI travel age
    show the traveller that round as "Round N - <hotel>", list the seller_activity lines, quote the
    hotel's message (blockquote), then say in one line what you will counter with and why.
 4. book_offer returns the next payment step: a checkout link for the traveller (card), or a URL to
-   pay with the Metal wallet's pay tool (metal). Check booking_status after payment.""")
-
-
-@server.tool()
-def search_hotels(check_in: str, check_out: str, guests: int, extras: list[str], cancellation: str) -> list[dict]:
-    """Published prices for a stay. Dates are ISO (2026-11-13). extras: any of "breakfast",
-    "late_checkout". cancellation: "non_refundable", "free_until_48h" or "free_until_24h"."""
-    return desk.search(check_in, check_out, guests, extras, cancellation)
+   pay with the Metal wallet's pay tool (metal). Check booking_status after payment.
+5. In clients that show apps, search_hotels opens a live negotiation room for the traveller. When
+   they click Book there, a message arrives in the chat: confirm those exact terms as in step 3.""")
 
 
 @server.tool()
@@ -120,6 +139,7 @@ class PayHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         try:
             b = desk.payments.record_metal_payment(m.group(1), body["transaction"], body.get("payer", ""), body["usdz"])
+            desk.note_booking(m.group(1))
         except (BookingError, KeyError) as e:
             return self._send(409, {"error": str(e)})
         self._send(200, {"status": b["status"]})

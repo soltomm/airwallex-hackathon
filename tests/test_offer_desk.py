@@ -164,6 +164,25 @@ class OfferDeskTests(unittest.TestCase):
         self.assertIn("/pay/", status["next_step"])
         self.assertEqual(self.desk.payments.api.calls, [("create", "300.00 EUR")])
 
+    def test_live_feed_for_the_negotiation_panel(self):
+        self.desk.search("2026-11-13", "2026-11-15", 2, ["breakfast"], "free_until_48h")
+        reply = self.negotiate(
+            tool_turn(("get_inventory", {"check_in": "2026-11-13", "check_out": "2026-11-15"})),
+            tool_turn(("make_offer", {**TERMS, "deposit_pct": "0.2", "total": "450"})),
+            tool_turn(("make_offer", {**TERMS, "deposit_pct": "0.6", "total": "500"})),
+            text_turn("EUR 500 with a 60% hold."))
+        self.desk.book(reply["offers"][0]["offer_id"], True, "card")
+        feed = self.desk.feed_since(0)
+        kinds = [e["kind"] for e in feed["events"]]
+        self.assertEqual(kinds, ["search", "buyer", "activity", "activity", "activity", "seller", "booking"])
+        self.assertEqual(feed["events"][1]["round"], 1)
+        self.assertEqual(feed["events"][5]["offers"][0]["total"], "500.00 EUR")
+        self.assertNotIn("client_secret", feed["events"][-1]["booking"])
+        text = json.dumps(feed)
+        for secret in ("floor", "490.80", "450", "breakfast_cost", "occupancy_by_night"):   # floors, costs, failed tries
+            self.assertNotIn(secret, text)
+        self.assertEqual(self.desk.feed_since(feed["last"])["events"], [])
+
     def hold(self, **terms):
         ref = self.desk.book(self.offer(**terms), True, "card")["booking_ref"]
         pid = self.desk.bookings.get(ref)["payment_intent_id"]

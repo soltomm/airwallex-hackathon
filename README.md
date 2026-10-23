@@ -105,6 +105,14 @@ cancellation, EUR 500 total. Card checkouts open on `http://127.0.0.1:8009/pay/<
 `4035 5010 0000 0008`). Hotel staff: `python scripts/hotel_ops.py list` and
 `python scripts/hotel_ops.py <ref> status|cancel|check-out|no-show`.
 
+**Live negotiation room (MCP App).** In Claude Desktop and claude.ai, `search_hotels` opens a panel in
+the chat that follows every round live: both agents' messages, the hotel agent's steps as it works
+(never its floors), offers with Book buttons (they post the choice into the chat, so Claude still
+confirms terms) and bookings as deposits are held or paid. Source in `ui/`; after editing,
+`cd ui && npm install && npm run build` regenerates `web/negotiation_app.html`. `node test/run.mjs`
+renders it in a test host with `test/feed.json` (regenerate with `.venv/bin/python ui/test/make_feed.py`)
+and screenshots both themes into `ui/test/out/`. Terminal clients get the same rounds as text.
+
 Offline: `python scripts/negotiation_demo.py` (scripted negotiation, no LLM) and
 `python scripts/payments_smoke.py card|metal` (booking and payment, no LLM).
 

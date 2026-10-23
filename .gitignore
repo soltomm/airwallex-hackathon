@@ -7,3 +7,5 @@ metal/node_modules/
 *key*.json
 !data/*.json
 data/sanctions/
+ui/node_modules/
+ui/test/out/

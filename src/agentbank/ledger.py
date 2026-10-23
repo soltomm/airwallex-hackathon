@@ -56,14 +56,16 @@ class OperationLedger:
         )
 
     def get(self, key: str) -> Operation | None:
-        row = self.db.execute("SELECT key, request_id, status, result FROM ops WHERE key=?", (key,)).fetchone()
+        with self._lock:   # one connection is shared by every thread: serialise all use of it
+            row = self.db.execute("SELECT key, request_id, status, result FROM ops WHERE key=?", (key,)).fetchone()
         if not row:
             return None
         return Operation(row[0], row[1], OpStatus(row[2]), json.loads(row[3]) if row[3] else None)
 
     def _set(self, key: str, status: OpStatus, result: dict | None = None) -> None:
-        self.db.execute("UPDATE ops SET status=?, result=?, updated=? WHERE key=?",
-                        (status.value, json.dumps(result) if result is not None else None, time.time(), key))
+        with self._lock:
+            self.db.execute("UPDATE ops SET status=?, result=?, updated=? WHERE key=?",
+                            (status.value, json.dumps(result) if result is not None else None, time.time(), key))
 
     def begin(self, key: str) -> Operation:
         """Claim a key. New keys get a fresh UUID; STARTED keys (a crashed earlier attempt)
@@ -106,6 +108,7 @@ class OperationLedger:
             self._set(key, OpStatus.STARTED)
 
     def unresolved(self) -> list[Operation]:
-        rows = self.db.execute("SELECT key FROM ops WHERE status IN (?, ?)",
-                               (OpStatus.STARTED.value, OpStatus.UNKNOWN.value)).fetchall()
-        return [self.get(r[0]) for r in rows]
+        with self._lock:
+            rows = self.db.execute("SELECT key FROM ops WHERE status IN (?, ?)",
+                                   (OpStatus.STARTED.value, OpStatus.UNKNOWN.value)).fetchall()
+            return [self.get(r[0]) for r in rows]

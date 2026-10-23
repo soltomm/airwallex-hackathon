@@ -72,8 +72,10 @@ TOOLS = [
 
 class SellerAgent:
     def __init__(self, hotel: Hotel, commit: Callable[[Offer], str], audit: AuditLog,
-                 client=None, max_buyer_turns: int = 6, now=lambda: datetime.now(timezone.utc)):
+                 client=None, max_buyer_turns: int = 6, now=lambda: datetime.now(timezone.utc),
+                 on_activity: Callable[[str], None] | None = None):
         self.hotel = hotel
+        self.on_activity = on_activity   # called with each activity line as it happens (live views)
         self.policy = SellerPolicy(hotel, now=now)
         self.commit = commit
         self.audit = audit
@@ -158,6 +160,8 @@ class SellerAgent:
                 if result.get("committed"):
                     offer_ids.append(result["offer_id"])
                 activity.append(_activity(block.name, block.input, result))
+                if self.on_activity:
+                    self.on_activity(activity[-1])
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": json.dumps(result), "is_error": is_error})
             self.messages.append({"role": "user", "content": results})
@@ -172,8 +176,12 @@ def _activity(name: str, args: dict, result: dict) -> str:
     """What the seller did, for the buyer to show: terms and outcomes, never the hotel's floors."""
     if name == "get_inventory":
         return "checked rooms, occupancy and the hotel's rules"
-    terms = (f"{args.get('total')} total, {', '.join(args.get('extras', [])) or 'no extras'}, "
-             f"{args.get('cancellation', '').replace('_', ' ')}, deposit {args.get('deposit_pct')}")
+    try:
+        hold = f"{Decimal(args.get('deposit_pct', '0')) * 100:.0f}% hold"
+    except InvalidOperation:
+        hold = "hold"
+    extras = ", ".join(e.replace("_", " ") for e in args.get("extras", [])) or "no extras"
+    terms = f"{args.get('total')} total · {extras} · {args.get('cancellation', '').replace('_', ' ')} · {hold}"
     if name == "price_check":   # tested prices and verdicts would bracket the floor: say only that it happened
         return "checked a pricing option against the hotel's rules"
     if name == "make_offer":

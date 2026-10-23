@@ -1,0 +1,286 @@
+[
+ {
+  "seq": 1,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "search",
+  "request": {
+   "check_in": "2026-11-13",
+   "check_out": "2026-11-15",
+   "guests": 2,
+   "extras": [
+    "breakfast",
+    "late_checkout"
+   ],
+   "cancellation": "free_until_48h"
+  },
+  "results": [
+   {
+    "hotel_id": "htl_paris_marais",
+    "hotel": "Hôtel du Marais (simulated)",
+    "room_code": "DBL",
+    "room": "Classic Double",
+    "max_guests": 2,
+    "published_total": "726.00 EUR",
+    "bookable_as_requested": true,
+    "notes": []
+   },
+   {
+    "hotel_id": "htl_paris_marais",
+    "hotel": "Hôtel du Marais (simulated)",
+    "room_code": "STE",
+    "room": "Junior Suite",
+    "max_guests": 3,
+    "published_total": "1078.00 EUR",
+    "bookable_as_requested": false,
+    "notes": [
+     "no Junior Suite left on 2026-11-14"
+    ]
+   },
+   {
+    "hotel_id": "htl_paris_opera",
+    "hotel": "Opéra Lumière (simulated)",
+    "room_code": "DBL",
+    "room": "Superior Double",
+    "max_guests": 2,
+    "published_total": "682.00 EUR",
+    "bookable_as_requested": false,
+    "notes": [
+     "late checkout unavailable: the room is needed that day"
+    ]
+   }
+  ]
+ },
+ {
+  "seq": 2,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "buyer",
+  "negotiation_id": "neg_817fb28a28",
+  "hotel_id": "htl_paris_marais",
+  "hotel": "Hôtel du Marais (simulated)",
+  "round": 1,
+  "message": "Hello! I'm booking for 2 adults, 13–15 Nov 2026. Must-haves: breakfast for both guests, late checkout, and free cancellation. Our budget is €500 total. What can you offer?"
+ },
+ {
+  "seq": 3,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "checked rooms, occupancy and the hotel's rules"
+ },
+ {
+  "seq": 4,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "checked a pricing option against the hotel's rules"
+ },
+ {
+  "seq": 5,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "checked a pricing option against the hotel's rules"
+ },
+ {
+  "seq": 6,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "committed ofr_6aabdb79be: 539 total · breakfast, late checkout · free until 48h · 100% hold"
+ },
+ {
+  "seq": 7,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "committed ofr_e80834eb15: 560 total · breakfast, late checkout · free until 48h · 50% hold"
+ },
+ {
+  "seq": 8,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "seller",
+  "negotiation_id": "neg_817fb28a28",
+  "hotel_id": "htl_paris_marais",
+  "hotel": "Hôtel du Marais (simulated)",
+  "round": 1,
+  "message": "I can't reach **€500** with all three must-haves, but here are two options:\n- **€539** with the full stay held on your card\n- **€560** with only half held\nBoth keep breakfast, late checkout and free cancellation until 48h before arrival.",
+  "offers": [
+   {
+    "offer_id": "ofr_6aabdb79be",
+    "hotel_id": "htl_paris_marais",
+    "room": "Classic Double",
+    "check_in": "2026-11-13",
+    "check_out": "2026-11-15",
+    "guests": 2,
+    "extras": [
+     "breakfast",
+     "late_checkout"
+    ],
+    "cancellation": "free_until_48h",
+    "deposit": "539.00 EUR",
+    "expires_at": "2026-10-23T02:55:38.929527+00:00",
+    "hotel": "Hôtel du Marais (simulated)",
+    "deposit_pct": "1",
+    "total": "539.00 EUR"
+   },
+   {
+    "offer_id": "ofr_e80834eb15",
+    "hotel_id": "htl_paris_marais",
+    "room": "Classic Double",
+    "check_in": "2026-11-13",
+    "check_out": "2026-11-15",
+    "guests": 2,
+    "extras": [
+     "breakfast",
+     "late_checkout"
+    ],
+    "cancellation": "free_until_48h",
+    "deposit": "280.00 EUR",
+    "expires_at": "2026-10-23T02:55:38.929527+00:00",
+    "hotel": "Hôtel du Marais (simulated)",
+    "deposit_pct": "0.5",
+    "total": "560.00 EUR"
+   }
+  ]
+ },
+ {
+  "seq": 9,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "buyer",
+  "negotiation_id": "neg_ef017de374",
+  "hotel_id": "htl_paris_opera",
+  "hotel": "Opéra Lumière (simulated)",
+  "round": 1,
+  "message": "Hello! 2 adults, 13–15 Nov 2026, breakfast, late checkout and free cancellation, €500 total budget."
+ },
+ {
+  "seq": 10,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_ef017de374",
+  "text": "checked rooms, occupancy and the hotel's rules"
+ },
+ {
+  "seq": 11,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_ef017de374",
+  "text": "committed ofr_4454fdeb20: 546 total · breakfast · free until 48h · 100% hold"
+ },
+ {
+  "seq": 12,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "seller",
+  "negotiation_id": "neg_ef017de374",
+  "hotel_id": "htl_paris_opera",
+  "hotel": "Opéra Lumière (simulated)",
+  "round": 1,
+  "message": "We're nearly full on 15 Nov, so **late checkout isn't possible**. With breakfast and free cancellation, the best I can do is **€546**. We're happy to keep your luggage after checkout.",
+  "offers": [
+   {
+    "offer_id": "ofr_4454fdeb20",
+    "hotel_id": "htl_paris_opera",
+    "room": "Superior Double",
+    "check_in": "2026-11-13",
+    "check_out": "2026-11-15",
+    "guests": 2,
+    "extras": [
+     "breakfast"
+    ],
+    "cancellation": "free_until_48h",
+    "deposit": "546.00 EUR",
+    "expires_at": "2026-10-23T02:55:38.929527+00:00",
+    "hotel": "Opéra Lumière (simulated)",
+    "deposit_pct": "1",
+    "total": "546.00 EUR"
+   }
+  ]
+ },
+ {
+  "seq": 13,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "buyer",
+  "negotiation_id": "neg_817fb28a28",
+  "hotel_id": "htl_paris_marais",
+  "hotel": "Hôtel du Marais (simulated)",
+  "round": 2,
+  "message": "Thanks. We're fine with a full card hold, and we have a competing quote at €546 without late checkout. Can you do €520?"
+ },
+ {
+  "seq": 14,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "checked a pricing option against the hotel's rules"
+ },
+ {
+  "seq": 15,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "activity",
+  "negotiation_id": "neg_817fb28a28",
+  "text": "committed ofr_5e915f643c: 525 total · breakfast, late checkout · free until 48h · 100% hold"
+ },
+ {
+  "seq": 16,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "seller",
+  "negotiation_id": "neg_817fb28a28",
+  "hotel_id": "htl_paris_marais",
+  "hotel": "Hôtel du Marais (simulated)",
+  "round": 2,
+  "message": "Since you're flexible on the deposit, I can meet you at **€525** with the full stay held on your card. That's my final offer.",
+  "offers": [
+   {
+    "offer_id": "ofr_5e915f643c",
+    "hotel_id": "htl_paris_marais",
+    "room": "Classic Double",
+    "check_in": "2026-11-13",
+    "check_out": "2026-11-15",
+    "guests": 2,
+    "extras": [
+     "breakfast",
+     "late_checkout"
+    ],
+    "cancellation": "free_until_48h",
+    "deposit": "525.00 EUR",
+    "expires_at": "2026-10-23T02:55:38.929527+00:00",
+    "hotel": "Hôtel du Marais (simulated)",
+    "deposit_pct": "1",
+    "total": "525.00 EUR"
+   }
+  ]
+ },
+ {
+  "seq": 17,
+  "at": "2026-10-23T02:40:38.929527+00:00",
+  "kind": "booking",
+  "booking": {
+   "booking_ref": "BKG-78D295F9",
+   "offer_id": "ofr_5e915f643c",
+   "hotel_id": "htl_paris_marais",
+   "room": "Classic Double",
+   "check_in": "2026-11-13",
+   "check_out": "2026-11-15",
+   "guests": 2,
+   "extras": [
+    "breakfast",
+    "late_checkout"
+   ],
+   "cancellation": "free_until_48h",
+   "deposit": "525.00",
+   "expires_at": "2026-10-23T02:55:38.929527+00:00",
+   "hotel": "Hôtel du Marais (simulated)",
+   "deposit_pct": "1",
+   "total": "525.00",
+   "room_code": "DBL",
+   "currency": "EUR",
+   "method": "card",
+   "status": "awaiting_payment",
+   "booked_at": "2026-10-23T02:40:38.929527+00:00",
+   "payment_attempts": 1,
+   "payment_intent_id": "int_1",
+   "next_step": "traveller opens http://127.0.0.1:8009/pay/BKG-78D295F9 and authorises a hold of 525.00 EUR by card",
+   "free_cancellation_until": "2026-11-11T15:00:00+00:00"
+  }
+ }
+]
