@@ -3,6 +3,7 @@ for Claude, so no API calls are made. Run: python -m unittest discover tests"""
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from types import SimpleNamespace as NS
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from agentbank.airwallex import AirwallexError
 from agentbank.audit import AuditLog
 from agentbank.bookings import BookingStore
 from agentbank.ledger import OperationLedger
@@ -28,7 +30,12 @@ class FakeAirwallex:
     def __init__(self):
         self.intents, self.calls = {}, []
 
+    fail_next = False
+
     def create_payment_intent(self, request_id, amount, merchant_order_id):
+        if self.fail_next:
+            self.fail_next = False
+            raise AirwallexError(403, "unauthorized", "login failed", {})
         pid = f"int_{len(self.intents) + 1}"
         self.intents[pid] = {"id": pid, "status": "REQUIRES_PAYMENT_METHOD", "amount": amount.api(),
                              "client_secret": "secret"}
@@ -103,6 +110,10 @@ class OfferDeskTests(unittest.TestCase):
                       ("make_offer", {**TERMS, "deposit_pct": "0.6", "total": "500"})),
             text_turn("We can do EUR 500 with a 60% deposit hold."))
         self.assertEqual(len(reply["offers"]), 1)
+        self.assertEqual(reply["round"], 1)
+        self.assertEqual(reply["seller_activity"][1], "checked a pricing option against the hotel's rules")
+        self.assertFalse(any("450" in a for a in reply["seller_activity"]))   # failed attempts reveal nothing
+        self.assertIn("committed", reply["seller_activity"][-1])
         self.assertEqual(reply["offers"][0]["total"], "500.00 EUR")
         # The rejected 450 offer came back to the seller as not committed, with the floor.
         first = json.loads(self.claude.requests[1]["messages"][-1]["content"][0]["content"])
@@ -128,6 +139,30 @@ class OfferDeskTests(unittest.TestCase):
         self.assertEqual(self.desk.book(offer_id, True, "card")["result"], "already_booked")
         self.assertEqual(self.desk.payments.api.calls, [("create", "300.00 EUR")])
         self.assertEqual(self.desk.hotels["htl_paris_marais"].booked[("DBL", datetime(2026, 11, 13).date())], 13)
+
+    def test_book_from_worker_threads_like_the_mcp_sdk(self):
+        offer_id = self.offer()   # the ledger's connection was opened on this (main) thread
+        results = []
+        workers = [threading.Thread(target=lambda: results.append(self.desk.book(offer_id, True, "card")["result"]))
+                   for _ in range(4)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+        self.assertEqual(len(results), 4, "a booking call raised instead of answering")
+        self.assertEqual(results.count("booked"), 1, results)
+        self.assertTrue(set(results) <= {"booked", "already_booked", "booking_in_progress"}, results)
+        self.assertEqual(self.desk.payments.api.calls, [("create", "300.00 EUR")])
+
+    def test_airwallex_failure_keeps_booking_and_retries(self):
+        self.desk.payments.api.fail_next = True
+        booked = self.desk.book(self.offer(), True, "card")
+        self.assertEqual(booked["result"], "booked_payment_unavailable")
+        self.assertIn("login failed", booked["reason"])
+        self.assertIn("retry", booked["next_step"])
+        status = self.desk.booking_status(booked["booking_ref"])   # Airwallex is back
+        self.assertIn("/pay/", status["next_step"])
+        self.assertEqual(self.desk.payments.api.calls, [("create", "300.00 EUR")])
 
     def hold(self, **terms):
         ref = self.desk.book(self.offer(**terms), True, "card")["booking_ref"]

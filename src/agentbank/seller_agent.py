@@ -131,7 +131,7 @@ class SellerAgent:
         self.client = self.client or make_client()
         self.messages.append({"role": "user", "content": buyer_message})
         self.audit.record("buyer_message", hotel=self.hotel.id, turn=self.buyer_turns, message=buyer_message)
-        offer_ids, text = [], []
+        offer_ids, text, activity = [], [], []
 
         for _ in range(MAX_TOOL_TURNS):
             response = self.client.beta.messages.create(
@@ -157,6 +157,7 @@ class SellerAgent:
                                   result=result)
                 if result.get("committed"):
                     offer_ids.append(result["offer_id"])
+                activity.append(_activity(block.name, block.input, result))
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": json.dumps(result), "is_error": is_error})
             self.messages.append({"role": "user", "content": results})
@@ -164,4 +165,17 @@ class SellerAgent:
         message = "\n".join(text)
         self.audit.record("seller_message", hotel=self.hotel.id, turn=self.buyer_turns, message=message,
                           offer_ids=offer_ids)
-        return {"message": message, "offer_ids": offer_ids}
+        return {"message": message, "offer_ids": offer_ids, "activity": activity}
+
+
+def _activity(name: str, args: dict, result: dict) -> str:
+    """What the seller did, for the buyer to show: terms and outcomes, never the hotel's floors."""
+    if name == "get_inventory":
+        return "checked rooms, occupancy and the hotel's rules"
+    terms = (f"{args.get('total')} total, {', '.join(args.get('extras', [])) or 'no extras'}, "
+             f"{args.get('cancellation', '').replace('_', ' ')}, deposit {args.get('deposit_pct')}")
+    if name == "price_check":   # tested prices and verdicts would bracket the floor: say only that it happened
+        return "checked a pricing option against the hotel's rules"
+    if name == "make_offer":
+        return f"committed {result['offer_id']}: {terms}" if result.get("committed") else "revised a draft offer"
+    return name

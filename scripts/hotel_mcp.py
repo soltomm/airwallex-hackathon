@@ -10,6 +10,7 @@ live in var/bookings.json.
 """
 import json
 import re
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -36,6 +37,9 @@ server = MCPServer("hotels", instructions="""Hotel marketplace for AI travel age
    extras, cancellation terms and the deposit hold.
 3. Before book_offer, show the traveller the exact terms of one offer_id, ask how they want to pay
    the deposit (card, or metal if they gave you a Metal wallet), and get an explicit yes.
+   Make the negotiation visible as it happens: after every negotiate call, before your next move,
+   show the traveller that round as "Round N - <hotel>", list the seller_activity lines, quote the
+   hotel's message (blockquote), then say in one line what you will counter with and why.
 4. book_offer returns the next payment step: a checkout link for the traveller (card), or a URL to
    pay with the Metal wallet's pay tool (metal). Check booking_status after payment.""")
 
@@ -94,6 +98,8 @@ class PayHandler(BaseHTTPRequestHandler):
                 b = desk.payments.refresh(m.group(1))
                 if b["method"] != "card":
                     return self._send(409, {"error": "this booking is paid on Metal"})
+                if b["status"] == "awaiting_payment" and not b.get("payment_intent_id"):
+                    b = desk.payments.open_card_payment(m.group(1))   # retry after an Airwallex failure
                 page = (ROOT / "web" / "hotel_pay.html").read_text().replace("__BOOKING__", json.dumps(b).replace("</", "<\\/"))
                 return self._send(200, page.encode(), "text/html; charset=utf-8")
             if m := re.fullmatch(r"/api/bookings/([\w-]+)", self.path):
@@ -123,6 +129,9 @@ class PayHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    pay = ThreadingHTTPServer(("127.0.0.1", PAY_PORT), PayHandler)
-    threading.Thread(target=pay.serve_forever, daemon=True).start()
+    try:
+        pay = ThreadingHTTPServer(("127.0.0.1", PAY_PORT), PayHandler)
+        threading.Thread(target=pay.serve_forever, daemon=True).start()
+    except OSError as e:   # another copy (e.g. Claude Desktop and Claude Code both running) serves the pages
+        print(f"checkout pages not started on :{PAY_PORT}: {e}", file=sys.stderr)
     server.run()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -45,7 +46,10 @@ class OperationLedger:
     def __init__(self, path: str | Path = "var/ledger.sqlite3"):
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path), isolation_level=None)
+        # Tool calls arrive on worker threads (the MCP SDK runs sync tools off the event loop).
+        self.db = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
+        self._lock = threading.RLock()
+        self._inflight: set[str] = set()   # keys being executed right now, in this process
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS ops (key TEXT PRIMARY KEY, request_id TEXT NOT NULL,"
             " status TEXT NOT NULL, result TEXT, updated REAL NOT NULL)"
@@ -64,14 +68,16 @@ class OperationLedger:
     def begin(self, key: str) -> Operation:
         """Claim a key. New keys get a fresh UUID; STARTED keys (a crashed earlier attempt)
         keep their request_id so the retry is deduped by Airwallex."""
-        op = self.get(key)
-        if op is None:
-            rid = str(uuid.uuid4())
-            self.db.execute("INSERT INTO ops VALUES (?, ?, ?, NULL, ?)", (key, rid, OpStatus.STARTED.value, time.time()))
-            return Operation(key, rid, OpStatus.STARTED, None)
-        if op.status is OpStatus.STARTED:
+        with self._lock:
+            op = self.get(key)
+            if op is not None and (op.status is not OpStatus.STARTED or key in self._inflight):
+                raise DuplicateOperation(op)
+            if op is None:
+                op = Operation(key, str(uuid.uuid4()), OpStatus.STARTED, None)
+                self.db.execute("INSERT INTO ops VALUES (?, ?, ?, NULL, ?)",
+                                (key, op.request_id, OpStatus.STARTED.value, time.time()))
+            self._inflight.add(key)
             return op
-        raise DuplicateOperation(op)
 
     def run(self, key: str, call: Callable[[str], dict]) -> dict:
         """Execute `call(request_id)` at most once per key."""
@@ -84,7 +90,11 @@ class OperationLedger:
         except AirwallexError as e:
             self._set(key, OpStatus.FAILED, {"status": e.status, "code": e.code, "message": e.message})
             raise
-        self._set(key, OpStatus.SUCCEEDED, result)
+        else:
+            self._set(key, OpStatus.SUCCEEDED, result)
+        finally:
+            with self._lock:
+                self._inflight.discard(key)
         return result
 
     def resolve_unknown(self, key: str, found: dict | None) -> None:

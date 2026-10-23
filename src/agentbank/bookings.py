@@ -19,7 +19,7 @@ from datetime import date, datetime, time as dtime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from .airwallex import AirwallexAPI
+from .airwallex import AirwallexAPI, AirwallexError
 from .audit import AuditLog
 from .ledger import OperationLedger
 from .money import Money
@@ -90,10 +90,20 @@ class HotelPayments:
 
     # ---- card (Airwallex) ---------------------------------------------------
     def open_card_payment(self, ref: str) -> dict:
-        """Create the PaymentIntent the traveller confirms on the checkout page."""
+        """Create the PaymentIntent the traveller confirms on the checkout page. A definite
+        Airwallex failure leaves the booking without one; the next call tries again."""
         b = self.store.get(ref)
+        if b.get("payment_intent_id"):
+            return b
         charge = self._money(b, "deposit")
-        pi = self.ledger.run(f"pi:{ref}", lambda rid: self._api().create_payment_intent(rid, charge, ref))
+        attempt = b.get("payment_attempts", 0)
+        key = f"pi:{ref}" if attempt == 0 else f"pi:{ref}:retry-{attempt}"   # a retry is a new operation
+        self.store.update(ref, "opening card payment", payment_attempts=attempt + 1)
+        try:
+            pi = self.ledger.run(key, lambda rid: self._api().create_payment_intent(rid, charge, ref))
+        except AirwallexError as e:
+            self._log(ref, "card_payment_failed", error=str(e))
+            raise BookingError(f"Airwallex could not open the card payment ({e}); the room stays reserved") from e
         self._log(ref, "card_payment_opened", payment_intent_id=pi["id"], amount=str(charge),
                   hold=b["cancellation"] != Cancellation.NON_REFUNDABLE.value)
         return self.store.update(ref, "card payment opened", payment_intent_id=pi["id"],

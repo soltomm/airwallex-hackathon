@@ -15,7 +15,7 @@ from .airwallex import AirwallexAPI
 from .approvals import ApprovalStore
 from .audit import AuditLog
 from .bookings import BookingError, BookingStore, HotelPayments, usdz
-from .ledger import OperationLedger
+from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy, load_hotels
 from .policy import Verdict
@@ -104,8 +104,8 @@ class OfferDesk:
             seller = self.sellers[negotiation_id] = SellerAgent(self.hotels[hotel_id], self.commit, self.audit,
                                                                 client=self.client, now=self.now)
         reply = seller.reply(message)
-        return {"negotiation_id": negotiation_id, "seller_message": reply["message"],
-                "offers": [self.view(i) for i in reply["offer_ids"]]}
+        return {"negotiation_id": negotiation_id, "round": seller.buyer_turns, "seller_activity": reply["activity"],
+                "seller_message": reply["message"], "offers": [self.view(i) for i in reply["offer_ids"]]}
 
     def book(self, offer_id: str, traveller_confirmed: bool, payment_method: str = "card") -> dict:
         if not traveller_confirmed:
@@ -117,7 +117,7 @@ class OfferDesk:
             return {"result": "not_booked", "reason": f"unknown offer {offer_id}"}
         done = self.ledger.get(f"booking:{offer_id}")
         if done is not None:
-            return {"result": "already_booked", **self.booking_view(done.result["booking_ref"])}
+            return self._booked_before(done)
         h = self.hotels[offer.hotel_id]
         d = self._policy(offer.hotel_id).evaluate(offer)   # inventory or the clock may have moved
         if d.verdict is not Verdict.EXECUTE:
@@ -142,7 +142,10 @@ class OfferDesk:
                    if payment_method == "metal" else {})})
             return {"booking_ref": ref}
 
-        ref = self.ledger.run(f"booking:{offer_id}", reserve)["booking_ref"]
+        try:
+            ref = self.ledger.run(f"booking:{offer_id}", reserve)["booking_ref"]
+        except DuplicateOperation as e:   # a concurrent call for the same offer got there first
+            return self._booked_before(e.op)
         self.audit.record("booking_confirmed", booking_ref=ref, offer_id=offer_id, method=payment_method,
                           approval_fingerprint=approval.fingerprint())
         if payment_method == "card":
@@ -152,11 +155,18 @@ class OfferDesk:
                 return {"result": "booked_payment_unavailable", "reason": str(e), **self.booking_view(ref)}
         return {"result": "booked", **self.booking_view(ref)}
 
+    def _booked_before(self, op) -> dict:
+        if op.result:
+            return {"result": "already_booked", **self.booking_view(op.result["booking_ref"])}
+        return {"result": "booking_in_progress", "reason": "this offer is being booked; check again shortly"}
+
     def booking_view(self, ref: str) -> dict:
         b = self.bookings.get(ref)
         view = {k: v for k, v in b.items() if k not in _PRIVATE}
         if b["status"] == "awaiting_payment":
-            if b["method"] == "card":
+            if b["method"] == "card" and not b.get("payment_intent_id"):
+                view["next_step"] = "card payment not open yet: call booking_status to retry"
+            elif b["method"] == "card":
                 hold = b["cancellation"] != Cancellation.NON_REFUNDABLE.value
                 view["next_step"] = (f"traveller opens {self.pay_base_url}/pay/{ref} and "
                                      f"{'authorises a hold of' if hold else 'pays'} {b['deposit']} {b['currency']} by card")
@@ -170,10 +180,15 @@ class OfferDesk:
 
     def booking_status(self, ref: str) -> dict:
         try:
-            self.payments.refresh(ref)
-            return self.booking_view(ref)
+            b = self.payments.refresh(ref)
         except BookingError as e:
             return {"error": str(e)}
+        if b["method"] == "card" and b["status"] == "awaiting_payment" and not b.get("payment_intent_id"):
+            try:
+                self.payments.open_card_payment(ref)
+            except BookingError as e:
+                return {**self.booking_view(ref), "payment_error": str(e)}
+        return self.booking_view(ref)
 
     def cancel_booking(self, ref: str) -> dict:
         try:
