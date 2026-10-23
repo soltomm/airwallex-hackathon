@@ -114,6 +114,18 @@ class AirwallexAPI:
     def get_payment_intent(self, intent_id: str) -> dict:
         return self.c.get(f"/pa/payment_intents/{intent_id}")
 
+    # Multi-Currency Pricing: a quote fixes the merchant -> shopper rate; applying it to an intent
+    # re-denominates the intent in the shopper's currency (original_amount keeps the merchant's).
+    def create_conversion_quote(self, request_id: str, merchant_currency: str, shopper_currency: str,
+                                validity_period: str = "HR_24") -> dict:
+        return self.c.post("/pa/conversion_quotes/create", {
+            "request_id": request_id, "merchant_currency": merchant_currency,
+            "shopper_currency": shopper_currency, "validity_period": validity_period})
+
+    def apply_conversion_quote(self, request_id: str, intent_id: str, quote_id: str) -> dict:
+        return self.c.post(f"/pa/payment_intents/{intent_id}/update",
+                           {"request_id": request_id, "conversion_quote_id": quote_id})
+
     # Holds: confirm with authorizationType pre_auth and autoCapture false (Airwallex.js), and the
     # intent waits in REQUIRES_CAPTURE. Capture at most the authorized amount; increment first.
     def increment_authorization(self, request_id: str, intent_id: str, amount: Money) -> dict:

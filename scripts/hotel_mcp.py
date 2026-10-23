@@ -111,17 +111,20 @@ def negotiate(hotel_id: str, message: str, ctx: Context, negotiation_id: str | N
 
 
 @server.tool()
-def book_offer(offer_id: str, traveller_confirmed: bool, payment_method: str, ctx: Context) -> dict:
+def book_offer(offer_id: str, traveller_confirmed: bool, payment_method: str, ctx: Context,
+               currency: str | None = None) -> dict:
     """Book a committed offer exactly as offered. Set traveller_confirmed only after the traveller
     explicitly accepted these terms. payment_method: "card" (Airwallex hold or charge, paid by the
     traveller on a checkout page) or "metal" (paid by the agent from the traveller's Metal wallet).
+    currency (card only, optional): "USD" or "GBP" to hold the deposit in the traveller's currency;
+    the price stays in EUR and the rate is locked now (shown in the booking's `fx`).
     Offers expire 15 minutes after they are made."""
-    return desk.book(offer_id, traveller_confirmed, payment_method, tenant=tenant_of(ctx))
+    return desk.book(offer_id, traveller_confirmed, payment_method, tenant=tenant_of(ctx), currency=currency)
 
 
 @server.tool()
 def booking_status(booking_ref: str, ctx: Context) -> dict:
-    """Current state of a booking and its deposit."""
+    """Current state of a booking and its deposit (in EUR, and in the guest's currency under `fx`)."""
     return desk.booking_status(booking_ref, tenant=tenant_of(ctx))
 
 
@@ -134,7 +137,7 @@ def cancel_booking(booking_ref: str, ctx: Context) -> dict:
 
 # ---- hotel web pages (shared by the local and hosted servers) ---------------
 PAGE_FIELDS = ("booking_ref", "hotel", "room", "guests", "check_in", "check_out", "extras", "cancellation",
-               "total", "deposit", "currency", "status", "payment_intent_id", "client_secret")
+               "total", "deposit", "currency", "status", "payment_intent_id", "client_secret", "fx")
 
 
 def dashboard_page(data_url: str) -> bytes:

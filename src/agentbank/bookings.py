@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .airwallex import AirwallexAPI, AirwallexError, AmbiguousResult
 from .audit import AuditLog
+from .guest_currency import charged, describe, lock_rate
 from .ledger import OperationLedger
 from .money import Money
 from .offers import Cancellation
@@ -98,21 +99,39 @@ class HotelPayments:
         Airwallex failure leaves the booking without one; the next call tries again."""
         b = self.store.get(ref)
         if b.get("payment_intent_id"):
-            return b
+            return self._guest_currency(b)
         charge = self._money(b, "deposit")
+        # Tag the intent with the hotel's connected account, except in a guest currency: Airwallex
+        # refuses conversion quotes on platform payments, so those stay untagged and are split all the same.
+        guest = b.get("guest_currency") and b["guest_currency"] != b["currency"]
+        tag = None if guest else b.get("payout", {}).get("connected_account")
         attempt = b.get("payment_attempts", 0)
         key = f"pi:{ref}" if attempt == 0 else f"pi:{ref}:retry-{attempt}"   # a retry is a new operation
         self.store.update(ref, "opening card payment", payment_attempts=attempt + 1)
         try:
-            pi = self.ledger.run(key, lambda rid: self._api().create_payment_intent(
-                rid, charge, ref, b.get("payout", {}).get("connected_account")))
+            pi = self.ledger.run(key, lambda rid: self._api().create_payment_intent(rid, charge, ref, tag))
         except AirwallexError as e:
             self._log(ref, "card_payment_failed", error=str(e))
             raise BookingError(f"Airwallex could not open the card payment ({e}); the room stays reserved") from e
         self._log(ref, "card_payment_opened", payment_intent_id=pi["id"], amount=str(charge),
                   hold=b["cancellation"] != Cancellation.NON_REFUNDABLE.value)
-        return self.store.update(ref, "card payment opened", payment_intent_id=pi["id"],
-                                 client_secret=pi.get("client_secret"))
+        return self._guest_currency(self.store.update(ref, "card payment opened", payment_intent_id=pi["id"],
+                                                      client_secret=pi.get("client_secret")))
+
+    def _guest_currency(self, b: dict) -> dict:
+        """Re-denominate a fresh intent in the guest's currency at a locked rate. If Airwallex
+        can't quote, the deposit stays in the hotel's currency and the booking says so."""
+        want, ref = b.get("guest_currency"), b["booking_ref"]
+        if not want or want == b["currency"] or "fx" in b or b["status"] != "awaiting_payment":
+            return b
+        try:
+            fx = lock_rate(self._api(), self.ledger, ref, b["payment_intent_id"], self._money(b, "total"), want)
+        except AirwallexError as e:
+            self._log(ref, "guest_currency_failed", currency=want, error=str(e))
+            return self.store.update(ref, f"{want} unavailable; deposit stays in {b['currency']}",
+                                     fx={"currency": None, "requested": want, "error": str(e)})
+        self._log(ref, "guest_currency_locked", **fx)
+        return self.store.update(ref, f"rate locked: 1 {b['currency']} = {fx['rate']} {fx['currency']}", fx=fx)
 
     def refresh(self, ref: str) -> dict:
         """Read the card payment's state from Airwallex and record what changed."""
@@ -122,45 +141,53 @@ class HotelPayments:
         status = self._api().get_payment_intent(b["payment_intent_id"]).get("status")
         if status == "REQUIRES_CAPTURE":
             self._log(ref, "deposit_held", amount=b["deposit"])
-            return self.store.update(ref, f"deposit {b['deposit']} {b['currency']} held on card", status="deposit_held")
+            return self.store.update(ref, f"deposit {describe(b, 'deposit')} held on card", status="deposit_held")
         if status == "SUCCEEDED":
             self._log(ref, "paid", amount=b["deposit"])
-            self.store.update(ref, f"charged {b['deposit']} {b['currency']}", status="paid")
-            return self.settle(ref, self._money(b, "deposit"))
+            self.store.update(ref, f"charged {describe(b, 'deposit')}", status="paid")
+            return self.settle(ref, "deposit")
         return b
 
     # ---- payouts --------------------------------------------------------------
-    def settle(self, ref: str, captured: Money | None = None) -> dict:
-        """Pay the hotel its share of a captured card payment by funds split; the commission stays
-        with the platform. Called after each capture; call again (hotel_ops.py settle) to retry."""
+    def settle(self, ref: str, field: str | None = None) -> dict:
+        """Pay the hotel its share of a captured card payment (`field`: "deposit" or "total") by funds
+        split, in the currency the card was charged; the commission stays with the platform. Called
+        after each capture; call again without `field` (hotel_ops.py settle) to retry."""
         b = self.store.get(ref)
         payout = b.get("payout")
         done = b.get("settlement", {})
         if not payout or b["method"] != "card" or done.get("funds_split_id"):
             return b
-        if captured is None:
-            if "captured" not in done:
-                return b   # nothing captured yet
-            captured = Money.of(done["captured"], b["currency"])
-        commission = Money.of((captured.amount * Decimal(payout["commission_pct"])).quantize(Decimal("0.01")),
-                              b["currency"])
-        to_hotel = captured - commission
-        settlement = {"captured": str(captured.amount), "commission": str(commission.amount),
-                      "hotel_payout": str(to_hotel.amount), "connected_account": payout["connected_account"]}
+        field = field or done.get("field")
+        if field is None:
+            return b   # nothing captured yet
+        pct = Decimal(payout["commission_pct"])
+
+        def split(m: Money) -> tuple[Money, Money]:
+            commission = Money.of((m.amount * pct).quantize(Decimal("0.01")), m.currency)
+            return commission, m - commission
+
+        commission, to_hotel = split(charged(b, field))      # what moves, in the card's currency
+        commission_h, to_hotel_h = split(self._money(b, field))   # the same in the hotel's currency
+        settlement = {"field": field, "captured": b[field], "commission": str(commission_h.amount),
+                      "hotel_payout": str(to_hotel_h.amount), "connected_account": payout["connected_account"],
+                      **({"charged": {"currency": to_hotel.currency, "captured": str(charged(b, field).amount),
+                                      "commission": str(commission.amount), "hotel_payout": str(to_hotel.amount)}}
+                         if to_hotel.currency != b["currency"] else {})}
         attempt = done.get("attempts", 0)
         key = f"split:{ref}" if attempt == 0 else f"split:{ref}:retry-{attempt}"   # a retry is a new operation
         try:
-            split = self.ledger.run(key, lambda rid: self._api().create_funds_split(
+            made = self.ledger.run(key, lambda rid: self._api().create_funds_split(
                 rid, b["payment_intent_id"], to_hotel, payout["connected_account"],
                 {"booking_ref": ref, "commission": str(commission)}))
         except (AirwallexError, AmbiguousResult) as e:   # the capture stands; the payout can be retried
             self._log(ref, "payout_failed", error=str(e))
             return self.store.update(ref, f"payout to hotel not sent ({e})",
                                      settlement={**settlement, "attempts": attempt + 1, "error": str(e)[:300]})
-        self._log(ref, "hotel_paid_out", funds_split_id=split["id"], **settlement)
+        self._log(ref, "hotel_paid_out", funds_split_id=made["id"], **settlement)
         return self.store.update(ref, f"{to_hotel} to the hotel, {commission} platform commission",
-                                 settlement={**settlement, "attempts": attempt + 1, "funds_split_id": split["id"],
-                                             "split_status": split.get("status")})
+                                 settlement={**settlement, "attempts": attempt + 1, "funds_split_id": made["id"],
+                                             "split_status": made.get("status")})
 
     # ---- Metal --------------------------------------------------------------
     def record_metal_payment(self, ref: str, transaction: str, payer: str, amount_usdz: str) -> dict:
@@ -196,14 +223,14 @@ class HotelPayments:
         elif free and b["method"] == "card":
             self.ledger.run(f"cancel:{ref}", lambda rid: self._api().cancel_payment_intent(
                 rid, b["payment_intent_id"], "Free cancellation"))
-            outcome, status = f"free cancellation: hold of {b['deposit']} {b['currency']} released", "cancelled"
+            outcome, status = f"free cancellation: hold of {describe(b, 'deposit')} released", "cancelled"
         elif free:   # Metal deposit already paid
             outcome, status = f"free cancellation: refund of {b['metal']['usdz']} *USDZ due to the traveller", "cancelled_refund_due"
         elif b["status"] == "deposit_held":
             self.ledger.run(f"capture:{ref}", lambda rid: self._api().capture_payment_intent(
-                rid, b["payment_intent_id"], self._money(b, "deposit")))
-            outcome, status = f"late cancellation: deposit {b['deposit']} {b['currency']} captured", "cancelled_fee_charged"
-            captured = self._money(b, "deposit")
+                rid, b["payment_intent_id"], charged(b, "deposit")))
+            outcome, status = f"late cancellation: deposit {describe(b, 'deposit')} captured", "cancelled_fee_charged"
+            captured = "deposit"
         else:
             outcome, status = "late or non-refundable cancellation: payment kept", "cancelled_fee_charged"
         self._log(ref, "booking_cancelled", outcome=outcome,
@@ -213,20 +240,20 @@ class HotelPayments:
 
     def check_out(self, ref: str) -> dict:
         b = self.refresh(ref)
-        total = self._money(b, "total")
+        total = charged(b, "total")
         captured = None
         if b["status"] == "deposit_held":
-            if self._money(b, "deposit") < total:
+            if charged(b, "deposit") < total:
                 self.ledger.run(f"increment:{ref}", lambda rid: self._api().increment_authorization(
                     rid, b["payment_intent_id"], total))
             self.ledger.run(f"capture:{ref}", lambda rid: self._api().capture_payment_intent(
                 rid, b["payment_intent_id"], total))
-            outcome = f"hold raised to {total} and captured"
-            captured = total
+            outcome = f"hold raised to {describe(b, 'total')} and captured"
+            captured = "total"
         elif b["status"] == "paid" and b["method"] == "card":
-            outcome = f"already charged {b['deposit']} {b['currency']} at booking"
+            outcome = f"already charged {describe(b, 'deposit')} at booking"
         elif b["status"] == "paid":
-            balance = total - self._money(b, "deposit")
+            balance = self._money(b, "total") - self._money(b, "deposit")
             outcome = f"Metal deposit kept; balance {balance} due at the desk"
         else:
             raise BookingError(f"booking {ref} is {b['status']}; cannot check out")
@@ -239,9 +266,9 @@ class HotelPayments:
         captured = None
         if b["status"] == "deposit_held":
             self.ledger.run(f"capture:{ref}", lambda rid: self._api().capture_payment_intent(
-                rid, b["payment_intent_id"], self._money(b, "deposit")))
-            outcome = f"no-show: deposit {b['deposit']} {b['currency']} captured"
-            captured = self._money(b, "deposit")
+                rid, b["payment_intent_id"], charged(b, "deposit")))
+            outcome = f"no-show: deposit {describe(b, 'deposit')} captured"
+            captured = "deposit"
         elif b["status"] == "paid":
             outcome = "no-show: payment kept"
         else:

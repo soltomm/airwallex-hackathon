@@ -12,6 +12,7 @@
     main { max-width: 520px; margin: 0 auto; }
     h1 { font-size: 22px; margin: 0 0 4px; }
     p.sub { color: var(--muted); margin: 0 0 20px; }
+    span.sub { color: var(--muted); font-size: 14px; font-weight: 400; }
     dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 24px; }
     dt { color: var(--muted); } dd { margin: 0; }
     .due { font-size: 18px; font-weight: 600; }
@@ -34,13 +35,17 @@
   const statusEl = document.getElementById('status');
   const say = (text, cls) => { statusEl.textContent = text; statusEl.className = cls || ''; };
   const hold = B.cancellation !== 'non_refundable';
+  const fx = B.fx && B.fx.currency ? B.fx : null;   // deposit held in the guest's currency at a locked rate
+  const both = f => fx ? `${fx[f]} ${fx.currency} <span class="sub">(${B[f]} ${B.currency})</span>` : `${B[f]} ${B.currency}`;
   document.getElementById('hotel').textContent = B.hotel;
   document.getElementById('ref').textContent = B.booking_ref;
   const rows = [
     ['Room', `${B.room}, ${B.guests} guests`], ['Stay', `${B.check_in} to ${B.check_out}`],
     ['Extras', B.extras.join(', ') || 'none'], ['Cancellation', B.cancellation.replaceAll('_', ' ')],
-    ['Total', `${B.total} ${B.currency}`],
-    [hold ? 'Held on your card now' : 'Charged now', `<span class="due">${B.deposit} ${B.currency}</span>`],
+    ['Total', both('total')],
+    [hold ? 'Held on your card now' : 'Charged now', `<span class="due">${both('deposit')}</span>`],
+    ...(fx ? [['Rate', `1 ${B.currency} = ${fx.rate} ${fx.currency}, locked by Airwallex`]] : []),
+    ...(B.fx && !fx ? [['Currency', `${B.fx.requested} was unavailable, so the deposit is in ${B.currency}`]] : []),
   ];
   document.getElementById('terms').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 
@@ -49,7 +54,9 @@
   } else {
     (async () => {
       await window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
-      const options = { intent_id: B.payment_intent_id, client_secret: B.client_secret, currency: B.currency, methods: ['card'] };
+      const options = { intent_id: B.payment_intent_id, client_secret: B.client_secret,
+                        currency: fx ? fx.currency : B.currency, methods: ['card'] };
+      if (fx) options.quote_id = fx.quote_id;
       if (hold) { options.authorizationType = 'pre_auth'; options.autoCapture = false; }
       const element = await window.AirwallexComponentsSDK.createElement('dropIn', options);
       element.mount('dropIn');
