@@ -156,7 +156,7 @@ class OfferDesk:
         before = dict(seller.usage)
         reply = seller.reply(message)
         self.turns[tenant] = self.turns.get(tenant, 0) + 1
-        cost = usage_cost(seller.usage, before)
+        cost = usage_cost(seller.usage, before, seller.model)
         day = self.now().date().isoformat()
         self.spend[day] = self.spend.get(day, Decimal(0)) + cost
         offers = [self.view(i) for i in reply["offer_ids"]]

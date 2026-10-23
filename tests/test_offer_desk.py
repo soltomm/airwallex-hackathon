@@ -235,10 +235,18 @@ class OfferDeskTests(unittest.TestCase):
         self.negotiate(tool_turn(("get_inventory", {"check_in": "2026-11-13", "check_out": "2026-11-15"})),
                        text_turn("Hello."))
         self.assertTrue(all(r.get("cache_control") == {"type": "ephemeral"} for r in self.claude.requests))
-        # 1M uncached in, 1M cache write, 1M cache read, 1M out at Opus 5.5 prices: 4 + 5 + 0.20 + 20
-        self.assertEqual(usage_cost({"input": 10**6, "cache_write": 10**6, "cache_read": 10**6, "output": 10**6}),
-                         Decimal("29.20"))
-        self.assertEqual(usage_cost({"input": 3_000_000}, {"input": 1_000_000}), Decimal("8"))
+        million = {"input": 10**6, "cache_write": 10**6, "cache_read": 10**6, "output": 10**6}
+        self.assertEqual(usage_cost(million, model="claude-sonnet-5-5"), Decimal("14.70"))   # 2 + 2.50 + 0.20 + 10
+        self.assertEqual(usage_cost(million, model="claude-opus-5-5"), Decimal("29.20"))     # 4 + 5 + 0.20 + 20
+        self.assertEqual(usage_cost({"input": 3_000_000}, {"input": 1_000_000}, "claude-sonnet-5-5"), Decimal("4"))
+        self.assertEqual(self.claude.requests[0]["model"], "claude-sonnet-5-5")
+
+    def test_offers_are_whole_euros(self):
+        reply = self.negotiate(tool_turn(("make_offer", {**TERMS, "deposit_pct": "1", "total": "480.90"})),
+                               tool_turn(("make_offer", {**TERMS, "deposit_pct": "1", "total": "495"})),
+                               text_turn("EUR 495."))
+        self.assertEqual([o["total"] for o in reply["offers"]], ["495.00 EUR"])
+        self.assertTrue(self.claude.requests[1]["messages"][-1]["content"][0]["is_error"])
 
     def hold(self, **terms):
         ref = self.desk.book(self.offer(**terms), True, "card")["booking_ref"]

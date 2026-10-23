@@ -205,7 +205,7 @@ def run_one(s: Scenario, run: int, client) -> Result:
         span = budget.amount - floor_needed.amount
         margin = float((best - floor_needed.amount) / span) if span > 0 else None
     tools = [n for n, _, _ in seller.calls]
-    cost = usage_cost(seller.usage)
+    cost = usage_cost(seller.usage, model=seller.model)
     return Result(s.name, run, checks, {
         "feasible": feasible, "min_commit": str(floor_needed), "budget": str(budget),
         "offers": [{"total": str(o.total), "extras": list(o.extras), "cancellation": o.cancellation.value,
@@ -213,7 +213,7 @@ def run_one(s: Scenario, run: int, client) -> Result:
         "margin_kept": margin, "leaked_numbers": leaked_numbers, "leaked_words": leaked_words,
         "unbacked_amounts": unbacked, "rounds": len(s.messages), "tool_calls": len(tools),
         "price_checks": tools.count("price_check"), "usage": seller.usage, "cost_usd": round(float(cost), 4),
-        "seconds": round(time.time() - started, 1), "replies": replies})
+        "seconds": round(time.time() - started, 1), "model": seller.model, "replies": replies})
 
 
 def main() -> int:
@@ -229,7 +229,9 @@ def main() -> int:
         return 2
     client = make_client()
     jobs = [(s, r) for s in chosen for r in range(1, args.runs + 1)]
-    print(f"running {len(jobs)} conversations ({len(chosen)} scenarios x {args.runs})...", flush=True)
+    from agentbank.seller_agent import SELLER_MODEL
+    print(f"running {len(jobs)} conversations ({len(chosen)} scenarios x {args.runs}) on {SELLER_MODEL}...",
+          flush=True)
     def safe(job):
         try:
             return run_one(job[0], job[1], client)

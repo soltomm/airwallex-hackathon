@@ -11,17 +11,27 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Callable
 
+import os
+
 import anthropic
 
-from .agent.loop import MODEL, make_client
+from .agent.loop import make_client
 from .audit import AuditLog
 from .money import Money
 from .offers import EXTRAS, OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy
 from .policy import Verdict
 
 MAX_TOOL_TURNS = 10
-# Claude Opus 5.5, $ per million tokens: uncached input, cache writes (1.25x), cache reads, output.
-PRICES = {"input": Decimal("4"), "cache_write": Decimal("5"), "cache_read": Decimal("0.20"), "output": Decimal("20")}
+# Sellers run on Claude Sonnet 5.5 by default: half Opus 5.5's price, measured with scripts/eval_seller.py.
+# SELLER_MODEL=claude-opus-5-5 switches back without a code change.
+SELLER_MODEL = os.environ.get("SELLER_MODEL", "claude-sonnet-5-5")
+# $ per million tokens: uncached input, 5-minute cache writes, cache reads, output.
+MODEL_PRICES = {
+    "claude-sonnet-5-5": {"input": Decimal("2"), "cache_write": Decimal("2.50"), "cache_read": Decimal("0.20"),
+                          "output": Decimal("10")},
+    "claude-opus-5-5": {"input": Decimal("4"), "cache_write": Decimal("5"), "cache_read": Decimal("0.20"),
+                        "output": Decimal("20")},
+}
 
 SYSTEM = """You are the sales agent for {name}. You negotiate room bookings with AI agents
 acting for travellers. Prices are in {currency}, totals for the whole stay.
@@ -33,6 +43,9 @@ How you work:
 - Check inventory and price_check candidate terms before you offer them.
 - You can trade price against extras, cancellation terms and deposit hold. Explain the
   trade-off in plain words; offer one or two concrete options, not a menu of everything.
+- Protect margin. The lowest price price_check accepts is a limit, not a target: open near
+  what the guest says they can pay (or below the published price when they have room), and
+  concede in steps only when they push back. Price in whole euros.
 - You commit only through make_offer. Code decides whether the hotel can commit; if it
   says no, adjust the terms and try again rather than promising anything in text.
 - Quote a price only for terms you have committed with make_offer, and name its offer_id.
@@ -90,6 +103,7 @@ class SellerAgent:
         self.now = now
         self.messages: list = []
         self.buyer_turns = 0
+        self.model = SELLER_MODEL
         self.usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "requests": 0}   # evals, caps
         self.system = SYSTEM.format(name=hotel.name, currency=hotel.currency,
                                     style=hotel.negotiation_style or "none")
@@ -121,6 +135,9 @@ class SellerAgent:
                 return {"verdict": d.verdict.value, "reasons": list(d.public + d.internal),
                         "published": str(self.hotel.published_total(offer))}, False
             if name == "make_offer":
+                if offer.total.amount != offer.total.amount.to_integral_value():
+                    # A price in cents is usually the computed limit itself, which tells the buyer the floor.
+                    return {"committed": False, "error": "quote whole euros (no cents)"}, True
                 if d.verdict is not Verdict.EXECUTE:
                     return {"committed": False, "verdict": d.verdict.value,
                             "reasons": list(d.public + d.internal)}, False
@@ -147,7 +164,7 @@ class SellerAgent:
                 # Automatic prompt caching: the instructions, tools and conversation so far are resent on
                 # every step and every turn; the cache serves that prefix at a fraction of the price.
                 response = self.client.beta.messages.create(
-                    model=MODEL, max_tokens=16000, system=self.system, tools=TOOLS, messages=self.messages,
+                    model=self.model, max_tokens=16000, system=self.system, tools=TOOLS, messages=self.messages,
                     cache_control={"type": "ephemeral"},
                     output_config={"effort": "medium"},
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default",
@@ -216,7 +233,7 @@ def _activity(name: str, args: dict, result: dict) -> str:
     return name
 
 
-def usage_cost(usage: dict, since: dict | None = None) -> Decimal:
-    """Estimated $ for `usage` (minus `since`, to price one turn) at PRICES."""
-    since = since or {}
-    return sum(((usage.get(k, 0) - since.get(k, 0)) * price for k, price in PRICES.items()), Decimal(0)) / 1_000_000
+def usage_cost(usage: dict, since: dict | None = None, model: str = SELLER_MODEL) -> Decimal:
+    """Estimated $ for `usage` (minus `since`, to price one turn) at `model`'s prices."""
+    since, prices = since or {}, MODEL_PRICES.get(model, MODEL_PRICES["claude-opus-5-5"])   # unknown: price high
+    return sum(((usage.get(k, 0) - since.get(k, 0)) * p for k, p in prices.items()), Decimal(0)) / 1_000_000
