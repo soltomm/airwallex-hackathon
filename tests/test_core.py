@@ -54,7 +54,8 @@ class MoneyTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_rejects_quoted_or_padded_client_id(self):
         # The bug that caused the HTML 403: a 24-char client ID with two stray characters.
-        for bad in ('"AbCdEf1234567890xyzABC"', "AbCdEf1234567890xyzABC ", "Client IDAbCdEf1234567890xyzABC"):
+        for bad in ('"AbCdEf1234567890xyzABC"', "AbCdEf1234567890xyzABC ", "Client IDAbCdEf1234567890xyzABC",
+                    "IDAbCdEf1234567890xyzABC"):
             with self.subTest(bad=bad):
                 os.environ.update(AWX_CLIENT_ID=bad, AWX_API_KEY=KEY)
                 with self.assertRaises(ConfigError):

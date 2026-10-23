@@ -40,8 +40,9 @@ env = os.environ.get
 PUBLIC = (env("PUBLIC_BASE_URL") or env("RENDER_EXTERNAL_URL") or f"http://127.0.0.1:{PAY_PORT}").rstrip("/")
 try:
     _, api = connect()
-except ConfigError:
+except ConfigError as e:
     api = None   # negotiation still works; card payments report that Airwallex is not configured
+    print(f"Airwallex not configured: {e}", file=sys.stderr)   # shows in the host's logs
 desk = OfferDesk.from_files(
     ROOT, api, pay_base_url=PUBLIC,
     payment_methods=tuple(m for m in env("HOTELS_PAYMENT_METHODS", ",".join(PAYMENT_METHODS)).split(",") if m),

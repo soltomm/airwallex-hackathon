@@ -40,6 +40,14 @@ def _check_credential(name: str, value: str) -> str:
             f"{name} contains whitespace, quotes or a label ({len(value)} chars). "
             "Paste the bare value only."
         )
+    # Client IDs are 22 characters; a leftover piece of the "Client ID" label ("ID…") makes 24, and the API
+    # edge answers any wrong-length ID with an HTML 403 instead of a JSON 401 (verified 2026-10-23).
+    if name == "AWX_CLIENT_ID" and len(value) != 22:
+        raise ConfigError(
+            f"AWX_CLIENT_ID is {len(value)} characters, expected 22"
+            f"{' (it starts with ID: a leftover of the label?)' if value.startswith('ID') else ''}. "
+            "Paste the bare value only."
+        )
     return value
 
 
