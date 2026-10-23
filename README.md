@@ -131,6 +131,16 @@ About $0.15 per conversation on Claude Opus 5.5; transcripts go to `var/evals/`.
 Offline: `python scripts/negotiation_demo.py` (scripted negotiation, no LLM) and
 `python scripts/payments_smoke.py card|metal` (booking and payment, no LLM).
 
+**Guest currency (card).** `book_offer(..., currency="USD"|"GBP")` holds the deposit in the guest's
+currency while prices, floors and offers stay in EUR (`guest_currency.py`). It uses Airwallex
+Multi-Currency Pricing: a 24-hour conversion quote is applied to the fresh PaymentIntent, which then reads
+in GBP/USD (`original_amount` keeps the EUR). The booking's `fx` stores the rate and both amounts;
+late-cancellation captures and the check-out increment use that locked rate, rounded half-to-even. If
+Airwallex can't quote, the deposit stays in EUR and `fx.error` says why. `payments_smoke.py card GBP` tries it.
+Verified in the sandbox on 2026-10-23 (EUR 300 -> GBP 260.31 / USD 348.09). Caveats: Airwallex guarantees
+the settled amount only if captured within 12 hours, so a capture weeks later may settle at a newer rate;
+MCP is not available with Payments for Platforms (connected-account split payments).
+
 - Metal amounts use a demo rate of 0.001 *USDZ per EUR (faucet amounts are small).
 - Metal testnet needs `@metalntwx/*` 0.3.2; 0.3.0's account factory call reverts.
 - A mandate's budget never resets: after test payments, bind a fresh one with `metal-agent mandate renew`.

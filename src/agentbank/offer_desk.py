@@ -22,6 +22,7 @@ from .airwallex import AirwallexAPI
 from .approvals import ApprovalStore
 from .audit import AuditLog
 from .bookings import BookingError, BookingStore, HotelPayments, usdz
+from .guest_currency import GUEST_CURRENCIES, describe
 from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy, load_hotels
@@ -166,12 +167,17 @@ class OfferDesk:
                 "seller_message": reply["message"], "offers": offers}
 
     def book(self, offer_id: str, traveller_confirmed: bool, payment_method: str = "card",
-             tenant: str = LOCAL) -> dict:
+             tenant: str = LOCAL, currency: str | None = None) -> dict:
         if not traveller_confirmed:
             return {"result": "not_booked", "reason": "show the traveller the exact terms and get a yes first"}
         if payment_method not in self.payment_methods:
             return {"result": "not_booked",
                     "reason": f"payment_method must be one of {', '.join(self.payment_methods)} on this server"}
+        currency = (currency or "").upper() or None
+        if currency and currency not in GUEST_CURRENCIES:
+            return {"result": "not_booked", "reason": f"currency must be one of {', '.join(GUEST_CURRENCIES)}"}
+        if currency and payment_method != "card":
+            return {"result": "not_booked", "reason": "a guest currency applies to card deposits only"}
         offer = self.offers.get(offer_id)
         if offer is None or self.offer_tenant.get(offer_id) != tenant:
             return {"result": "not_booked", "reason": f"unknown offer {offer_id}"}
@@ -199,6 +205,7 @@ class OfferDesk:
                 "deposit": str(offer.deposit.amount), "method": payment_method, "status": "awaiting_payment",
                 "approval_fingerprint": approval.fingerprint(), "booked_at": self.now().isoformat(),
                 "tenant": tenant,
+                **({"guest_currency": currency} if currency and currency != offer.total.currency else {}),
                 **({"metal": {"usdz": usdz(offer.deposit, h.usdz_per_eur), "pay_to": h.metal_payee}}
                    if payment_method == "metal" else {})})
             return {"booking_ref": ref}
@@ -239,7 +246,7 @@ class OfferDesk:
             elif b["method"] == "card":
                 hold = b["cancellation"] != Cancellation.NON_REFUNDABLE.value
                 view["next_step"] = (f"traveller opens {self.pay_base_url}/pay/{ref} and "
-                                     f"{'authorises a hold of' if hold else 'pays'} {b['deposit']} {b['currency']} by card")
+                                     f"{'authorises a hold of' if hold else 'pays'} {describe(b, 'deposit')} by card")
             else:
                 view["next_step"] = (f"pay {b['metal']['usdz']} *USDZ with the Metal wallet's pay tool: "
                                      f"{self.metal_base_url}/bookings/{ref}/deposit")
