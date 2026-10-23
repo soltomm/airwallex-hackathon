@@ -5,7 +5,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -21,6 +21,7 @@ from agentbank.offer_desk import Limits, OfferDesk
 from agentbank.offers import load_hotels
 
 NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
+MARAIS_ACCOUNT = load_hotels(ROOT / "data/hotels.json")["htl_paris_marais"].connected_account
 TERMS = {"room_code": "DBL", "check_in": "2026-11-13", "check_out": "2026-11-15", "guests": 2,
          "extras": ["breakfast", "late_checkout"], "cancellation": "free_until_48h"}
 
@@ -33,15 +34,21 @@ class FakeAirwallex:
 
     fail_next = False
 
-    def create_payment_intent(self, request_id, amount, merchant_order_id):
+    def create_payment_intent(self, request_id, amount, merchant_order_id, connected_account_id=None):
         if self.fail_next:
             self.fail_next = False
             raise AirwallexError(403, "unauthorized", "login failed", {})
         pid = f"int_{len(self.intents) + 1}"
         self.intents[pid] = {"id": pid, "status": "REQUIRES_PAYMENT_METHOD", "amount": amount.api(),
-                             "client_secret": "secret"}
+                             "client_secret": "secret", "connected_account_id": connected_account_id}
         self.calls.append(("create", str(amount)))
         return self.intents[pid]
+
+    def create_funds_split(self, request_id, pid, amount, destination, metadata=None):
+        if self.intents[pid]["status"] != "SUCCEEDED":
+            raise AirwallexError(400, "validation_error", "Invalid source status for PAYMENT_INTENT creation", {})
+        self.calls.append(("split", str(amount), destination))
+        return {"id": f"spt_{len(self.calls)}", "status": "CREATED"}
 
     def get_payment_intent(self, pid):
         return self.intents[pid]
@@ -266,12 +273,59 @@ class OfferDeskTests(unittest.TestCase):
         ref = self.hold()
         self.desk.payments.now = lambda: datetime(2026, 11, 12, tzinfo=timezone.utc)
         self.assertEqual(self.desk.cancel_booking(ref)["status"], "cancelled_fee_charged")
-        self.assertEqual(self.desk.payments.api.calls[-1], ("capture", "300.00 EUR"))
+        self.assertEqual(self.desk.payments.api.calls[-2:], [("capture", "300.00 EUR"),
+                                                             ("split", "264.00 EUR", MARAIS_ACCOUNT)])
 
     def test_check_out_raises_hold_to_total_then_captures(self):
         ref = self.hold()
         self.assertEqual(self.desk.payments.check_out(ref)["status"], "checked_out")
-        self.assertEqual(self.desk.payments.api.calls[-2:], [("increment", "500.00 EUR"), ("capture", "500.00 EUR")])
+        self.assertEqual(self.desk.payments.api.calls[-3:], [("increment", "500.00 EUR"), ("capture", "500.00 EUR"),
+                                                             ("split", "440.00 EUR", MARAIS_ACCOUNT)])
+
+    def test_card_payments_pay_the_hotel_its_share(self):
+        ref = self.hold()
+        b = self.desk.bookings.get(ref)
+        pid = b["payment_intent_id"]
+        self.assertEqual(self.desk.payments.api.intents[pid]["connected_account_id"], MARAIS_ACCOUNT)
+        self.assertNotIn("payout", self.desk.booking_status(ref))   # commission terms are not the buyer's business
+        self.desk.payments.check_out(ref)
+        settlement = self.desk.bookings.get(ref)["settlement"]
+        self.assertEqual((settlement["captured"], settlement["commission"], settlement["hotel_payout"]),
+                         ("500.00", "60.00", "440.00"))
+        self.assertTrue(settlement["funds_split_id"].startswith("spt_"))
+        self.desk.payments.settle(ref)   # already paid out: no second split
+        self.assertEqual(sum(c[0] == "split" for c in self.desk.payments.api.calls), 1)
+
+    def test_failed_payout_keeps_the_capture_and_retries(self):
+        ref = self.hold()
+        api = self.desk.payments.api
+        real = api.create_funds_split
+        api.create_funds_split = lambda *a, **k: (_ for _ in ()).throw(AirwallexError(500, "x", "down", {}))
+        self.assertEqual(self.desk.payments.check_out(ref)["status"], "checked_out")
+        self.assertIn("error", self.desk.bookings.get(ref)["settlement"])
+        api.create_funds_split = real
+        self.assertTrue(self.desk.payments.settle(ref)["settlement"]["funds_split_id"])
+
+    def test_insights_for_the_hotel(self):
+        self.desk.search("2026-11-13", "2026-11-15", 2, ["breakfast"], "free_until_48h")
+        ref = self.hold()                                                    # one deal at EUR 500
+        self.claude.turns = [tool_turn(("price_check", {**TERMS, "deposit_pct": "0.6", "total": "300"})),
+                             text_turn("We can't go that low.")]
+        self.desk.negotiate("htl_paris_marais", "EUR 300 please")             # one lost below the floor
+        self.desk.payments.check_out(ref)
+        self.desk.now = lambda: NOW + timedelta(hours=1)
+        r = self.desk.insights()
+        marais = next(h for h in r["hotels"] if h["hotel_id"] == "htl_paris_marais")
+        self.assertEqual((marais["funnel"]["negotiations"], marais["funnel"]["bookings"], marais["funnel"]["lost"]),
+                         (2, 1, 1))
+        self.assertEqual(marais["conversion_pct"], "50.0")
+        lost = marais["lost"][0]
+        self.assertEqual((lost["reason"], lost["asked"]), ("price below floor", "300.00"))
+        self.assertGreater(Decimal(lost["gap"]), 0)
+        self.assertIsNotNone(marais["margin"]["kept_of_band_pct"])
+        self.assertEqual((marais["money"]["commission"], marais["money"]["hotel_payout"]), ("60.00", "440.00"))
+        self.assertEqual(marais["nights"][0], {"night": "2026-11-13", "requested": 1, "booked": 1, "lost": 1})
+        self.assertTrue(any("below the floor" in line for line in r["headlines"]))
 
     def test_metal_booking_is_paid_by_the_agent(self):
         booked = self.desk.book(self.offer(), True, "metal")

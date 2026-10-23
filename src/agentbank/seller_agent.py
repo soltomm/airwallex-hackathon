@@ -19,7 +19,7 @@ import anthropic
 from .agent.loop import make_client
 from .audit import AuditLog
 from .money import Money
-from .offers import EXTRAS, OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy
+from .offers import EXTRAS, OFFER_TTL, Cancellation, Hotel, Offer, SellerDecision, SellerPolicy
 from .policy import Verdict
 
 MAX_TOOL_TURNS = 10
@@ -93,9 +93,11 @@ TOOLS = [
 class SellerAgent:
     def __init__(self, hotel: Hotel, commit: Callable[[Offer], str], audit: AuditLog,
                  client=None, max_buyer_turns: int = 6, now=lambda: datetime.now(timezone.utc),
-                 on_activity: Callable[[str], None] | None = None):
+                 on_activity: Callable[[str], None] | None = None,
+                 on_check: Callable[[str, Offer, SellerDecision], None] | None = None):
         self.hotel = hotel
         self.on_activity = on_activity   # called with each activity line as it happens (live views)
+        self.on_check = on_check         # called with each policy decision (hotel-side demand insights)
         self.policy = SellerPolicy(hotel, now=now)
         self.commit = commit
         self.audit = audit
@@ -132,6 +134,8 @@ class SellerAgent:
                         "note": "the check-out day's occupancy decides late checkout"}, False
             offer = self._offer(args)
             d = self.policy.evaluate(offer)
+            if self.on_check:
+                self.on_check(name, offer, d)
             if name == "price_check":
                 return {"verdict": d.verdict.value, "reasons": list(d.public + d.internal),
                         "published": str(self.hotel.published_total(offer))}, False

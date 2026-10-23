@@ -14,6 +14,8 @@ services:
         value: 3.13.7
       - key: HOTELS_ACCESS_TOKEN        # secret part of the MCP URL: share the URL only with friends
         generateValue: true
+      - key: HOTELS_ADMIN_TOKEN         # hotels' revenue dashboard: <service URL>/dashboard/<token>
+        generateValue: true
       - key: ANTHROPIC_API_KEY          # pays for the hotels' seller agents
         sync: false
       - key: AWX_CLIENT_ID              # Airwallex sandbox, for card deposits

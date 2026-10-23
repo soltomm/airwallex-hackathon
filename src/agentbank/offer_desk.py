@@ -22,15 +22,17 @@ from .airwallex import AirwallexAPI
 from .approvals import ApprovalStore
 from .audit import AuditLog
 from .bookings import BookingError, BookingStore, HotelPayments, usdz
+from .insights import DemandLog, report
 from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
-from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerPolicy, load_hotels
+from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerDecision, SellerPolicy, load_hotels
 from .policy import Verdict
 from .seller_agent import SellerAgent, usage_cost
 
 PAYMENT_METHODS = ("card", "metal")
 LOCAL = "local"
-_PRIVATE = ("client_secret", "approval_fingerprint", "history", "tenant")   # kept out of buyer-facing views
+_PRIVATE = ("client_secret", "approval_fingerprint", "history", "tenant", "payout", "settlement",
+            "negotiation_id")   # kept out of buyer-facing views
 
 
 @dataclass
@@ -46,7 +48,7 @@ class OfferDesk:
                  bookings: BookingStore, api: AirwallexAPI | None = None, client=None,
                  pay_base_url: str = "http://127.0.0.1:8009", metal_base_url: str = "http://127.0.0.1:4022",
                  payment_methods: tuple[str, ...] = PAYMENT_METHODS, limits: Limits | None = None,
-                 now=lambda: datetime.now(timezone.utc)):
+                 demand: DemandLog | None = None, now=lambda: datetime.now(timezone.utc)):
         self.hotels = hotels
         self.audit = audit
         self.ledger = ledger
@@ -57,12 +59,14 @@ class OfferDesk:
         self.metal_base_url = metal_base_url     # x402 deposit endpoint (metal/hotel-pay.ts)
         self.payment_methods = payment_methods
         self.limits = limits or Limits()
+        self.demand = demand or DemandLog()       # hotel-side insights; holds floors, never shown to buyers
         self.now = now
         self.approvals = ApprovalStore(ttl_seconds=int(OFFER_TTL.total_seconds()))
         self.sellers: dict[str, SellerAgent] = {}   # negotiation_id -> that hotel's seller agent
         self.seller_tenant: dict[str, str] = {}     # negotiation_id -> tenant
         self.offers: dict[str, Offer] = {}          # committed offers, bookable by id
         self.offer_tenant: dict[str, str] = {}      # offer_id -> tenant
+        self.offer_negotiation: dict[str, str] = {}  # offer_id -> negotiation_id
         self.turns: dict[str, int] = {}             # tenant -> buyer turns sent to sellers
         self.spend: dict[str, Decimal] = {}         # ISO day -> estimated seller spend in $
         self.feed: list[dict] = []                  # what live views show; never the hotel's floors
@@ -75,7 +79,8 @@ class OfferDesk:
     @classmethod
     def from_files(cls, root: Path, api: AirwallexAPI | None = None, **kw) -> "OfferDesk":
         return cls(load_hotels(root / "data/hotels.json"), AuditLog(root / "var/audit.jsonl"),
-                   OperationLedger(root / "var/ledger.sqlite3"), BookingStore(root / "var/bookings.json"), api, **kw)
+                   OperationLedger(root / "var/ledger.sqlite3"), BookingStore(root / "var/bookings.json"), api,
+                   demand=DemandLog(root / "var/demand.jsonl"), **kw)
 
     def _reserve(self, hotel_id: str, room_code: str, check_in: str, check_out: str, rooms: int = 1) -> None:
         h = self.hotels[hotel_id]
@@ -93,11 +98,24 @@ class OfferDesk:
         return {"offer_id": offer_id, **o.terms(), "hotel": h.name, "room": h.rooms[o.room_code].name,
                 "deposit_pct": str(o.deposit_pct), "total": str(o.total)}
 
-    def commit(self, offer: Offer, tenant: str = LOCAL) -> str:
+    def commit(self, offer: Offer, tenant: str = LOCAL, negotiation_id: str | None = None) -> str:
         offer_id = "ofr_" + uuid.uuid4().hex[:10]
         self.offers[offer_id] = offer
         self.offer_tenant[offer_id] = tenant
+        if negotiation_id:
+            self.offer_negotiation[offer_id] = negotiation_id
+        self.demand.record("offer", self.now(), offer_id=offer_id, negotiation_id=negotiation_id,
+                           **self._economics(offer))
         return offer_id
+
+    def _economics(self, offer: Offer) -> dict:
+        h = self.hotels[offer.hotel_id]
+        return {"hotel_id": offer.hotel_id, **offer.terms(), "total": str(offer.total.amount),
+                "floor": str(h.floor_total(offer).amount), "published": str(h.published_total(offer).amount)}
+
+    def _checked(self, negotiation_id: str, tool: str, offer: Offer, d: SellerDecision) -> None:
+        self.demand.record("check", self.now(), negotiation_id=negotiation_id, tool=tool, verdict=d.verdict.name,
+                           reason="; ".join(d.public), **self._economics(offer))
 
     def search(self, check_in: str, check_out: str, guests: int, extras: list[str],
                cancellation: str, tenant: str = LOCAL) -> list[dict]:
@@ -116,6 +134,10 @@ class OfferDesk:
                                 "bookable_as_requested": d.allowed, "notes": [] if d.allowed else list(d.public)})
         self.audit.record("search", tenant=tenant, check_in=check_in, check_out=check_out, guests=guests,
                           extras=extras, cancellation=cancellation, results=len(results))
+        self.demand.record("search", self.now(), tenant=tenant, check_in=check_in, check_out=check_out,
+                           guests=guests, extras=extras, cancellation=cancellation,
+                           results=[{"hotel_id": r["hotel_id"], "room_code": r["room_code"],
+                                     "bookable": r["bookable_as_requested"], "notes": r["notes"]} for r in results])
         self._emit("search", tenant, request={"check_in": check_in, "check_out": check_out, "guests": guests,
                                               "extras": extras, "cancellation": cancellation}, results=results)
         return results
@@ -145,11 +167,14 @@ class OfferDesk:
         if not negotiation_id:
             negotiation_id = "neg_" + uuid.uuid4().hex[:10]
             seller = self.sellers[negotiation_id] = SellerAgent(
-                self.hotels[hotel_id], lambda offer: self.commit(offer, tenant), self.audit, client=self.client,
-                now=self.now,
+                self.hotels[hotel_id], lambda offer, nid=negotiation_id: self.commit(offer, tenant, nid), self.audit,
+                client=self.client, now=self.now,
                 on_activity=lambda text, nid=negotiation_id: self._emit("activity", tenant, negotiation_id=nid,
-                                                                         text=text))
+                                                                         text=text),
+                on_check=lambda tool, offer, d, nid=negotiation_id: self._checked(nid, tool, offer, d))
             self.seller_tenant[negotiation_id] = tenant
+            self.demand.record("negotiation", self.now(), negotiation_id=negotiation_id, hotel_id=hotel_id,
+                               tenant=tenant)
         hotel = self.hotels[hotel_id].name
         self._emit("buyer", tenant, negotiation_id=negotiation_id, hotel_id=hotel_id, hotel=hotel,
                    round=seller.buyer_turns + 1, message=message)
@@ -199,8 +224,11 @@ class OfferDesk:
                 "deposit": str(offer.deposit.amount), "method": payment_method, "status": "awaiting_payment",
                 "approval_fingerprint": approval.fingerprint(), "booked_at": self.now().isoformat(),
                 "tenant": tenant,
+                "negotiation_id": self.offer_negotiation.get(offer_id),
                 **({"metal": {"usdz": usdz(offer.deposit, h.usdz_per_eur), "pay_to": h.metal_payee}}
-                   if payment_method == "metal" else {})})
+                   if payment_method == "metal" else {}),
+                **({"payout": {"connected_account": h.connected_account, "commission_pct": str(h.commission_pct)}}
+                   if payment_method == "card" and h.connected_account else {})})
             return {"booking_ref": ref}
 
         try:
@@ -209,6 +237,9 @@ class OfferDesk:
             return self._booked_before(e.op)
         self.audit.record("booking_confirmed", booking_ref=ref, offer_id=offer_id, method=payment_method,
                           approval_fingerprint=approval.fingerprint())
+        self.demand.record("booking", self.now(), booking_ref=ref, offer_id=offer_id,
+                           negotiation_id=self.offer_negotiation.get(offer_id), hotel_id=offer.hotel_id,
+                           method=payment_method)
         if payment_method == "card":
             try:
                 self.payments.open_card_payment(ref)
@@ -273,6 +304,10 @@ class OfferDesk:
             self._reserve(b["hotel_id"], b["room_code"], b["check_in"], b["check_out"], rooms=-1)
         self.note_booking(ref)
         return self.booking_view(ref)
+
+    def insights(self) -> dict:
+        """The hotels' revenue dashboard data (hotel staff only: it includes floors and lost demand)."""
+        return report(self.demand.entries(), self.hotels, self.bookings.all(), self.now())
 
     # ---- live feed (the in-chat negotiation panel polls this) ---------------
     def _emit(self, kind: str, tenant: str, **data) -> None:

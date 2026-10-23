@@ -15,8 +15,11 @@ Environment (all optional locally):
   PUBLIC_BASE_URL / RENDER_EXTERNAL_URL  where travellers' browsers reach the checkout pages
   HOTELS_PAYMENT_METHODS                 "card,metal" (default) or "card"
   HOTELS_MAX_NEGOTIATIONS, HOTELS_MAX_TURNS, HOTELS_DAILY_USD   caps for a shared deployment
+  HOTELS_ADMIN_TOKEN                     hosted revenue dashboard at <PUBLIC_BASE_URL>/dashboard/<token>
+                                         (locally: http://127.0.0.1:8009/dashboard)
 """
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -134,6 +137,10 @@ PAGE_FIELDS = ("booking_ref", "hotel", "room", "guests", "check_in", "check_out"
                "total", "deposit", "currency", "status", "payment_intent_id", "client_secret")
 
 
+def dashboard_page(data_url: str) -> bytes:
+    return (ROOT / "web" / "hotel_dashboard.html").read_text().replace("__DATA_URL__", json.dumps(data_url)).encode()
+
+
 def web_get(path: str) -> tuple[int, object, str]:
     """(status, body, content type) for the checkout page and booking lookups."""
     try:
@@ -176,7 +183,7 @@ def web_metal_paid(path: str, body: dict) -> tuple[int, object]:
 
 
 class PayHandler(BaseHTTPRequestHandler):
-    """The local server's pages on 127.0.0.1 (the Metal callback trusts local callers)."""
+    """The local server's pages on 127.0.0.1 (the Metal callback and the dashboard trust local callers)."""
 
     def _send(self, status: int, body, content_type="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -187,6 +194,10 @@ class PayHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path == "/dashboard":
+            return self._send(200, dashboard_page("/dashboard/data.json"), "text/html; charset=utf-8")
+        if self.path == "/dashboard/data.json":
+            return self._send(200, desk.insights())
         self._send(*web_get(self.path))
 
     def do_POST(self):
@@ -215,6 +226,19 @@ def serve_http() -> None:
 
     for route in ("/pay/{ref}", "/api/bookings/{ref}", "/healthz"):
         server.custom_route(route, methods=["GET"])(page)
+
+    admin = env("HOTELS_ADMIN_TOKEN", "")
+
+    async def dashboard(request: Request) -> Response:
+        """Hotel staff only: floors and lost demand. Off unless HOTELS_ADMIN_TOKEN is set."""
+        if len(admin) < 16 or not hmac.compare_digest(request.path_params["token"], admin):
+            return JSONResponse({"error": "not found"}, 404)
+        if request.url.path.endswith("/data.json"):
+            return JSONResponse(await run_in_threadpool(desk.insights))
+        return Response(dashboard_page(f"/dashboard/{admin}/data.json"), media_type="text/html; charset=utf-8")
+
+    server.custom_route("/dashboard/{token}", methods=["GET"])(dashboard)
+    server.custom_route("/dashboard/{token}/data.json", methods=["GET"])(dashboard)
     # The secret path is the access control. DNS-rebinding protection guards servers on a user's own
     # machine; this one is public by design, behind TLS at the host's proxy.
     app = server.streamable_http_app(streamable_http_path=f"/mcp/{token}", host="0.0.0.0",

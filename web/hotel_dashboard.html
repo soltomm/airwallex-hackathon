@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Revenue Desk</title>
+  <style>
+    :root { --bg: #fafaf9; --card: #ffffff; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #612fff;
+            --accent-soft: #ece6ff; --ok: #15803d; --bad: #b91c1c; --warn: #b45309; --bar-req: #d6d3d1; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1c1917; --card: #262220; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #9b7bff;
+              --accent-soft: #2e2547; --ok: #4ade80; --bad: #f87171; --warn: #fbbf24; --bar-req: #57534e; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+    main { max-width: 1120px; margin: 0 auto; }
+    header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 20px; }
+    h1 { font-size: 22px; margin: 0; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+    .sub { color: var(--muted); }
+    select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+    .spacer { flex: 1; }
+    .grid { display: grid; gap: 16px; }
+    .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 16px; }
+    .two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-bottom: 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; }
+    .kpi .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .kpi .l { color: var(--muted); font-size: 12px; }
+    .headlines { margin: 0 0 16px; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 6px; }
+    .headlines ul { margin: 0; padding-left: 18px; } .headlines li { margin: 2px 0; }
+    .funnel { display: grid; gap: 8px; }
+    .funnel .row { display: grid; grid-template-columns: 110px 1fr 48px; align-items: center; gap: 8px; }
+    .bar { height: 14px; border-radius: 4px; background: var(--accent); min-width: 2px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .nights { display: flex; align-items: flex-end; gap: 6px; height: 160px; overflow-x: auto; padding-bottom: 4px; }
+    .night { flex: 0 0 auto; width: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
+    .night .stack { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
+    .night .stack div { width: 10px; border-radius: 3px 3px 0 0; min-height: 2px; }
+    .night .d { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .req { background: var(--bar-req); } .bk { background: var(--accent); } .lo { background: var(--bad); }
+    .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+    .chip b { font-variant-numeric: tabular-nums; }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); padding: 6px 8px; white-space: nowrap; }
+    td { border-bottom: 1px solid var(--line); padding: 6px 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    td.r, th.r { text-align: right; }
+    .bad { color: var(--bad); } .ok { color: var(--ok); } .warn { color: var(--warn); }
+    .empty { color: var(--muted); font-style: italic; }
+    code { font-size: 12px; }
+    .section { margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Revenue desk</h1>
+    <span class="sub">What the hotels' agents learned from every negotiation</span>
+    <span class="spacer"></span>
+    <select id="hotel" aria-label="Hotel"></select>
+    <span class="sub" id="updated"></span>
+  </header>
+  <div id="error" class="bad"></div>
+  <div class="headlines" id="headlines" hidden><ul></ul></div>
+  <div class="grid kpis" id="kpis"></div>
+  <div class="grid two">
+    <div class="card"><h2>Funnel</h2><div class="funnel" id="funnel"></div></div>
+    <div class="card"><h2>Why deals were lost</h2><div id="reasons"></div></div>
+  </div>
+  <div class="card section"><h2>Demand by night</h2><div class="nights" id="nights"></div>
+    <div class="legend"><span><i class="req"></i>requested</span><span><i class="bk"></i>booked</span><span><i class="lo"></i>lost</span></div>
+  </div>
+  <div class="card section"><h2>Unmet demand <span id="lostValue"></span></h2><div class="scroll" id="lost"></div></div>
+  <div class="grid two">
+    <div class="card"><h2>Extras</h2><div id="extras"></div></div>
+    <div class="card"><h2>Payouts (Airwallex funds splits)</h2><div class="scroll" id="payouts"></div></div>
+  </div>
+  <div class="card section"><h2>Bookings</h2><div class="scroll" id="bookings"></div></div>
+</main>
+<script>
+  const DATA_URL = __DATA_URL__;   // filled in by the server
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const num = v => Number(v || 0);
+  const money = (v, cur) => `${num(v).toLocaleString(undefined, { maximumFractionDigits: 0 })} ${cur}`;
+  const label = s => esc(String(s ?? '').replaceAll('_', ' '));
+  const day = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  let data = null;
+  let pick = (() => { try { return localStorage.getItem('hotel') || 'all'; } catch { return 'all'; } })();
+
+  function sumObj(list, key) {
+    const out = {};
+    for (const h of list) for (const [k, v] of Object.entries(h[key] || {})) out[k] = (out[k] || 0) + num(v);
+    return out;
+  }
+
+  // Combine hotels for the portfolio view.
+  function view() {
+    const hs = pick === 'all' ? data.hotels : data.hotels.filter(h => h.hotel_id === pick);
+    const funnel = sumObj(hs, 'funnel');
+    funnel.searches = data.requests.searches;
+    const nights = {};
+    for (const h of hs) for (const n of h.nights) {
+      const t = nights[n.night] ||= { night: n.night, requested: 0, booked: 0, lost: 0 };
+      t.requested = n.requested; t.booked += n.booked; t.lost += n.lost;   // every search reaches every hotel
+    }
+    const sold = hs.reduce((a, h) => a + h.margin.sold, 0);
+    const kept = sold ? hs.reduce((a, h) => a + num(h.margin.kept_of_band_pct) * h.margin.sold, 0) / sold : null;
+    const disc = sold ? hs.reduce((a, h) => a + num(h.margin.discount_vs_list_pct) * h.margin.sold, 0) / sold : null;
+    const withName = key => hs.flatMap(h => h[key].map(r => ({ ...r, hotel: h.name })));
+    return {
+      hs, funnel, money: sumObj(hs, 'money'), kept, disc,
+      reasons: sumObj(hs, 'lost_reasons'), turned: sumObj(hs, 'turned_away'), extrasSold: sumObj(hs, 'extras_sold'),
+      nights: Object.values(nights).sort((a, b) => a.night.localeCompare(b.night)),
+      lost: withName('lost').sort((a, b) => b.at.localeCompare(a.at)),
+      payouts: withName('payouts'), bookings: withName('bookings').sort((a, b) => b.booked_at.localeCompare(a.booked_at)),
+    };
+  }
+
+  function table(cols, rows, empty) {
+    if (!rows.length) return `<p class="empty">${empty}</p>`;
+    return `<table><thead><tr>${cols.map(c => `<th class="${c.r ? 'r' : ''}">${c.h}</th>`).join('')}</tr></thead><tbody>` +
+      rows.map(r => `<tr>${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.f(r)}</td>`).join('')}</tr>`).join('') + '</tbody></table>';
+  }
+
+  function render() {
+    const cur = data.currency, v = view(), multi = pick === 'all' && data.hotels.length > 1;
+    const sel = $('hotel');
+    sel.innerHTML = `<option value="all">All hotels</option>` + data.hotels.map(h => `<option value="${esc(h.hotel_id)}">${esc(h.name)}</option>`).join('');
+    sel.value = data.hotels.some(h => h.hotel_id === pick) ? pick : 'all';
+    $('updated').textContent = 'updated ' + new Date(data.generated_at).toLocaleTimeString();
+
+    const names = new Set(v.hs.map(h => h.name));
+    const heads = data.headlines.filter(t => pick === 'all' || [...names].some(n => t.startsWith(n)) || !data.hotels.some(h => t.startsWith(h.name)));
+    $('headlines').hidden = !heads.length;
+    $('headlines').querySelector('ul').innerHTML = heads.map(t => `<li>${esc(t)}</li>`).join('');
+
+    const f = v.funnel, conv = f.negotiations ? (100 * f.bookings / f.negotiations).toFixed(0) + '%' : '–';
+    const commission = v.hs.map(h => h.commission_pct).filter(Boolean);
+    const kpis = [
+      ['Negotiations', f.negotiations || 0, `${f.open || 0} open now`],
+      ['Converted to bookings', conv, `${f.bookings || 0} booked, ${f.lost || 0} lost`],
+      ['Booked revenue', money(v.money.booked_total, cur), `${money(v.money.deposits_held, cur)} held on cards`],
+      ['Margin kept', v.kept == null ? '–' : v.kept.toFixed(0) + '%', v.disc == null ? 'of the floor-to-list band' : `${v.disc.toFixed(0)}% off list on average`],
+      ['Paid out to hotels', money(v.money.hotel_payout, cur), `${money(v.money.captured, cur)} captured`],
+      ['Platform commission', money(v.money.commission, cur), commission.length ? `${[...new Set(commission)].join('/')}% of captures` : 'no connected accounts'],
+    ];
+    $('kpis').innerHTML = kpis.map(([l, val, s]) => `<div class="card kpi"><div class="l">${l}</div><div class="v">${esc(val)}</div><div class="l">${esc(s)}</div></div>`).join('');
+
+    const steps = [['Searches', f.searches], ['Negotiations', f.negotiations], ['Offers', f.offers], ['Bookings', f.bookings]];
+    const top = Math.max(1, ...steps.map(s => num(s[1])));
+    $('funnel').innerHTML = steps.map(([l, n]) => `<div class="row"><span>${l}</span><div class="bar" style="width:${100 * num(n) / top}%"></div><span class="num">${num(n)}</span></div>`).join('');
+
+    const chips = o => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<span class="chip">${label(k)} <b>${n}</b></span>`).join('');
+    $('reasons').innerHTML = (Object.keys(v.reasons).length ? `<div class="chips">${chips(v.reasons)}</div>` : '<p class="empty">No lost negotiations yet.</p>') +
+      (Object.keys(v.turned).length ? `<p class="sub" style="margin:12px 0 6px">Turned away at search (no room could sell the terms)</p><div class="chips">${chips(v.turned)}</div>` : '');
+
+    const nmax = Math.max(1, ...v.nights.map(n => Math.max(n.requested, n.booked, n.lost)));
+    const h = n => `height:${100 * n / nmax}%`;
+    $('nights').innerHTML = v.nights.length ? v.nights.map(n => `<div class="night" title="${esc(n.night)}: ${n.requested} requested, ${n.booked} booked, ${n.lost} lost">
+        <div class="stack"><div class="req" style="${h(n.requested)}"></div><div class="bk" style="${h(n.booked)}"></div><div class="lo" style="${h(n.lost)}"></div></div>
+        <span class="d">${day(n.night)}</span></div>`).join('') : '<p class="empty">No searches yet.</p>';
+
+    $('lostValue').textContent = num(v.money.lost_value) ? `· ${money(v.money.lost_value, cur)} walked away` : '';
+    $('lost').innerHTML = table([
+      ...(multi ? [{ h: 'Hotel', f: r => esc(r.hotel) }] : []),
+      { h: 'Stay', f: r => r.check_in ? `${day(r.check_in)} – ${day(r.check_out)}` : '–' },
+      { h: 'Guests', r: 1, f: r => esc(r.guests ?? '–') },
+      { h: 'Asked for', f: r => [...(r.extras || []).map(label), label(r.cancellation)].filter(Boolean).join(', ') || '–' },
+      { h: 'Why lost', f: r => `<span class="${r.reason === 'price below floor' ? 'bad' : 'warn'}">${label(r.reason)}</span>` },
+      { h: 'Their price', r: 1, f: r => r.asked ? money(r.asked, cur) : r.offered ? `offered ${money(r.offered, cur)}` : '–' },
+      { h: 'Floor', r: 1, f: r => r.floor ? money(r.floor, cur) : '–' },
+      { h: 'Gap', r: 1, f: r => r.gap ? `<b>${money(r.gap, cur)}</b>` : '–' },
+    ], v.lost, 'Nothing lost yet: negotiations still open count once their offers expire (15 min).');
+
+    const extras = new Set([...Object.keys(data.requests.extras), ...Object.keys(v.extrasSold)]);
+    $('extras').innerHTML = extras.size ? table([
+      { h: 'Extra', f: r => label(r) },
+      { h: 'Requested', r: 1, f: r => (data.requests.extras[r] || 0) + (data.requests.searches ? ` <span class="sub">(${Math.round(100 * (data.requests.extras[r] || 0) / data.requests.searches)}%)</span>` : '') },
+      { h: 'Sold', r: 1, f: r => v.extrasSold[r] || 0 },
+    ], [...extras], '') : '<p class="empty">No requests yet.</p>';
+
+    $('payouts').innerHTML = table([
+      { h: 'Booking', f: r => `<code>${esc(r.booking_ref)}</code>` },
+      { h: 'Captured', r: 1, f: r => money(r.captured, cur) },
+      { h: 'Commission', r: 1, f: r => money(r.commission, cur) },
+      { h: 'To hotel', r: 1, f: r => r.funds_split_id ? `<span class="ok">${money(r.hotel_payout, cur)}</span>` : `<span class="bad" title="${esc(r.error)}">not sent</span>` },
+      { h: 'Split', f: r => r.funds_split_id ? `<code>${esc(r.funds_split_id)}</code>` : '–' },
+    ], v.payouts, 'Payouts appear when a card payment is captured: late cancellation, no-show or check-out.');
+
+    $('bookings').innerHTML = table([
+      { h: 'Booking', f: r => `<code>${esc(r.booking_ref)}</code>` },
+      ...(multi ? [{ h: 'Hotel', f: r => esc(r.hotel) }] : []),
+      { h: 'Room', f: r => esc(r.room) },
+      { h: 'Stay', f: r => `${day(r.check_in)} – ${day(r.check_out)}` },
+      { h: 'Terms', f: r => [...(r.extras || []).map(label), label(r.cancellation)].join(', ') },
+      { h: 'Total', r: 1, f: r => money(r.total, cur) },
+      { h: 'Paid by', f: r => esc(r.method) },
+      { h: 'Status', f: r => label(r.status) },
+    ], v.bookings, 'No bookings yet.');
+  }
+
+  async function load() {
+    try {
+      const r = await fetch(DATA_URL, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      data = await r.json();
+      $('error').textContent = '';
+      render();
+    } catch (e) {
+      $('error').textContent = 'Could not load the data: ' + e.message;
+    }
+  }
+  $('hotel').addEventListener('change', e => {
+    pick = e.target.value;
+    try { localStorage.setItem('hotel', pick); } catch {}
+    render();
+  });
+  load();
+  setInterval(load, 10000);
+</script>
+</body>
+</html>
