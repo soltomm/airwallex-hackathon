@@ -107,6 +107,8 @@ class Hotel:
     negotiation_style: str = ""                 # free-text guidance for the seller agent
     metal_payee: str = ""                       # address Metal deposits are paid to
     usdz_per_eur: Decimal = Decimal("0.001")    # demo testnet rate: faucet amounts are small
+    connected_account: str = ""                 # Airwallex connected account card payouts go to
+    commission_pct: Decimal = Decimal("0")      # platform's share of each captured card payment
 
     @classmethod
     def from_dict(cls, d: dict) -> "Hotel":
@@ -126,6 +128,11 @@ class Hotel:
             kw["metal_payee"] = metal["payee"]
         if "usdz_per_eur" in metal:
             kw["usdz_per_eur"] = Decimal(metal["usdz_per_eur"])
+        platform = d.get("platform", {})
+        if "connected_account" in platform:
+            kw["connected_account"] = platform["connected_account"]
+        if "commission_pct" in platform:
+            kw["commission_pct"] = Decimal(platform["commission_pct"])
         return cls(d["id"], d["name"], cur, rooms, booked, negotiation_style=style, **kw)
 
     def rules(self) -> dict:

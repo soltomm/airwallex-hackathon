@@ -64,6 +64,10 @@
     "metal": {
       "payee": "0xfE2386A250ACDe4D33C7CA89eA7896ECCC8edEf1",
       "usdz_per_eur": "0.001"
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_YRF6tnSiNn66EhAU_cIpXA"
     }
   },
   {
@@ -118,6 +122,10 @@
     "metal": {
       "payee": "0xECF3323528E7966C0004D46641ccE9D069c1CB0D",
       "usdz_per_eur": "0.001"
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_zzlzzv1tMlCAOy37vjYBZA"
     }
   }
 ]

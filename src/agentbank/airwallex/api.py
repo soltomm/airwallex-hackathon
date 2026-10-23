@@ -101,10 +101,15 @@ class AirwallexAPI:
         return self.c.get("/issuing/transactions", params=params).get("items", [])
 
     # ---- payments & disputes ------------------------------------------------
-    def create_payment_intent(self, request_id: str, amount: Money, merchant_order_id: str) -> dict:
-        return self.c.post("/pa/payment_intents/create", {
-            "request_id": request_id, "amount": amount.api(), "currency": amount.currency,
-            "merchant_order_id": merchant_order_id})
+    def create_payment_intent(self, request_id: str, amount: Money, merchant_order_id: str,
+                              connected_account_id: str | None = None) -> dict:
+        """With connected_account_id the platform still owns the payment ("collect payments
+        directly"); the connected account is the seller it is for, paid by a funds split."""
+        body = {"request_id": request_id, "amount": amount.api(), "currency": amount.currency,
+                "merchant_order_id": merchant_order_id}
+        if connected_account_id:
+            body["connected_account_id"] = connected_account_id
+        return self.c.post("/pa/payment_intents/create", body)
 
     def get_payment_intent(self, intent_id: str) -> dict:
         return self.c.get(f"/pa/payment_intents/{intent_id}")
@@ -122,6 +127,17 @@ class AirwallexAPI:
     def cancel_payment_intent(self, request_id: str, intent_id: str, reason: str) -> dict:
         return self.c.post(f"/pa/payment_intents/{intent_id}/cancel",
                            {"request_id": request_id, "cancellation_reason": reason})
+
+    # Platform payouts: after a capture, move the seller's share to its connected account. Only on a
+    # SUCCEEDED intent, before settlement; whatever is not split stays with the platform.
+    def create_funds_split(self, request_id: str, intent_id: str, amount: Money, destination: str,
+                           metadata: dict | None = None) -> dict:
+        return self.c.post("/pa/funds_splits/create", {
+            "request_id": request_id, "source_id": intent_id, "source_type": "PAYMENT_INTENT",
+            "amount": amount.api(), "destination": destination, "metadata": metadata or {}})
+
+    def funds_splits(self, intent_id: str) -> list[dict]:
+        return self.c.get("/pa/funds_splits", params={"source_id": intent_id}).get("items", [])
 
     def disputes(self, **params) -> list[dict]:
         return self.c.get("/pa/payment_disputes", params=params).get("items", [])
