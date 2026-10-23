@@ -108,6 +108,9 @@ class Hotel:
     metal_payee: str = ""                       # address Metal deposits are paid to
     usdz_per_eur: Decimal = Decimal("0.001")    # demo testnet rate: faucet amounts are small
     connected_account: str = ""                 # Airwallex connected account card payouts go to
+    # Per-night overrides set by revenue staff from the dashboard (rule_tuning.py): (room, night) -> rate
+    night_rates: dict[tuple[str, date], Decimal] = field(default_factory=dict)    # published rate
+    night_floors: dict[tuple[str, date], Decimal] = field(default_factory=dict)   # floor rate
     commission_pct: Decimal = Decimal("0")      # platform's share of each captured card payment
 
     @classmethod
@@ -147,7 +150,19 @@ class Hotel:
                 "min_deposit_hold": {c.value: str(v) for c, v in self.min_deposit.items()},
                 "rooms": {r.code: {"name": r.name, "max_guests": r.max_guests, "total_rooms": r.total_rooms,
                                    "published_rate": str(r.published_rate.amount),
-                                   "floor_rate": str(r.floor_rate.amount)} for r in self.rooms.values()}}
+                                   "floor_rate": str(r.floor_rate.amount)} for r in self.rooms.values()},
+                "night_rate_overrides": {f"{room} {night}": {"published_rate": str(v)}
+                                         for (room, night), v in sorted(self.night_rates.items())},
+                "night_floor_overrides": {f"{room} {night}": {"floor_rate": str(v)}
+                                          for (room, night), v in sorted(self.night_floors.items())}}
+
+    def rate(self, room_code: str, night: date) -> Decimal:
+        """Published rate for one night."""
+        return self.night_rates.get((room_code, night), self.rooms[room_code].published_rate.amount)
+
+    def floor_rate(self, room_code: str, night: date) -> Decimal:
+        """Floor for one night at normal demand (busy nights sell at the published rate)."""
+        return self.night_floors.get((room_code, night), self.rooms[room_code].floor_rate.amount)
 
     def occupancy(self, room_code: str, night: date) -> Decimal:
         room = self.rooms[room_code]
@@ -161,8 +176,7 @@ class Hotel:
 
     def published_total(self, offer: Offer) -> Money:
         """List price for these terms: the anchor the seller negotiates down from."""
-        room = self.rooms[offer.room_code]
-        amount = room.published_rate.amount * offer.nights
+        amount = sum(self.rate(offer.room_code, n) for n in self.nights(offer))
         if "breakfast" in offer.extras:
             amount += self.breakfast_price * offer.guests * offer.nights
         if "late_checkout" in offer.extras:
@@ -173,9 +187,8 @@ class Hotel:
     def floor_total(self, offer: Offer) -> Money:
         """Lowest total the hotel accepts. Busy nights are sold at the published rate;
         refundable terms carry a risk premium that a larger deposit hold reduces."""
-        room = self.rooms[offer.room_code]
-        rooms = sum(room.published_rate.amount if self.occupancy(offer.room_code, n) >= self.high_occupancy
-                    else room.floor_rate.amount for n in self.nights(offer))
+        rooms = sum(self.rate(offer.room_code, n) if self.occupancy(offer.room_code, n) >= self.high_occupancy
+                    else self.floor_rate(offer.room_code, n) for n in self.nights(offer))
         extras = self.breakfast_cost * offer.guests * offer.nights if "breakfast" in offer.extras else Decimal(0)
         premium = self.risk_premium[offer.cancellation] * (1 - offer.deposit_pct)
         if offer.cancellation is Cancellation.NON_REFUNDABLE:

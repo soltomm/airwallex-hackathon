@@ -144,6 +144,19 @@ def dashboard_page(data_url: str) -> bytes:
     return (ROOT / "web" / "hotel_dashboard.html").read_text().replace("__DATA_URL__", json.dumps(data_url)).encode()
 
 
+def dashboard_post(rest: str) -> tuple[int, dict]:
+    """Revenue staff's actions, `rest` being the path after /dashboard[/<token>]."""
+    if m := re.fullmatch(r"/suggestions/(sug_\w+)/apply", rest):
+        out = desk.apply_suggestion(m.group(1))
+    elif m := re.fullmatch(r"/changes/(sug_\w+)/revert", rest):
+        out = desk.revert_change(m.group(1))
+    elif m := re.fullmatch(r"/bookings/([\w-]+)/([a-z-]+)", rest):
+        out = desk.hotel_action(m.group(1), m.group(2))
+    else:
+        return 404, {"error": "not found"}
+    return (409 if "error" in out else 200), out
+
+
 def web_get(path: str) -> tuple[int, object, str]:
     """(status, body, content type) for the checkout page and booking lookups."""
     try:
@@ -205,6 +218,8 @@ class PayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if self.path.startswith("/dashboard/"):
+            return self._send(*dashboard_post(self.path.removeprefix("/dashboard")))
         self._send(*web_metal_paid(self.path, body))
 
     def log_message(self, *args):   # stdout carries the MCP protocol
@@ -242,6 +257,17 @@ def serve_http() -> None:
 
     server.custom_route("/dashboard/{token}", methods=["GET"])(dashboard)
     server.custom_route("/dashboard/{token}/data.json", methods=["GET"])(dashboard)
+
+    async def dashboard_action(request: Request) -> Response:
+        if len(admin) < 16 or not hmac.compare_digest(request.path_params["token"], admin):
+            return JSONResponse({"error": "not found"}, 404)
+        rest = request.url.path.removeprefix(f"/dashboard/{admin}")
+        status, body = await run_in_threadpool(dashboard_post, rest)
+        return JSONResponse(body, status)
+
+    for route in ("/dashboard/{token}/suggestions/{sid}/apply", "/dashboard/{token}/changes/{sid}/revert",
+                  "/dashboard/{token}/bookings/{ref}/{action}"):
+        server.custom_route(route, methods=["POST"])(dashboard_action)
     # The secret path is the access control. DNS-rebinding protection guards servers on a user's own
     # machine; this one is public by design, behind TLS at the host's proxy.
     app = server.streamable_http_app(streamable_http_path=f"/mcp/{token}", host="0.0.0.0",

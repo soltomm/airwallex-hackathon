@@ -52,6 +52,21 @@
     .empty { color: var(--muted); font-style: italic; }
     code { font-size: 12px; }
     .section { margin-bottom: 16px; }
+    .sugs { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .sug { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+    .sug .t { font-weight: 600; }
+    .sug .why, .sug .imp { color: var(--muted); font-size: 13px; }
+    .sug .imp { color: var(--ok); }
+    .sug .row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line);
+             background: var(--card); color: var(--fg); cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+    button:disabled { opacity: .5; cursor: default; }
+    td button { padding: 2px 8px; font-size: 12px; }
+    #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px));
+             background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none; }
+    .tag { align-self: flex-start; font-size: 11px; border-radius: 4px; padding: 1px 6px; border: 1px solid var(--line); color: var(--muted); }
   </style>
 </head>
 <body>
@@ -66,6 +81,7 @@
   <div id="error" class="bad"></div>
   <div class="headlines" id="headlines" hidden><ul></ul></div>
   <div class="grid kpis" id="kpis"></div>
+  <div class="card section"><h2>Suggested rule changes</h2><div id="suggestions"></div></div>
   <div class="grid two">
     <div class="card"><h2>Funnel</h2><div class="funnel" id="funnel"></div></div>
     <div class="card"><h2>Why deals were lost</h2><div id="reasons"></div></div>
@@ -79,9 +95,12 @@
     <div class="card"><h2>Payouts (Airwallex funds splits)</h2><div class="scroll" id="payouts"></div></div>
   </div>
   <div class="card section"><h2>Bookings</h2><div class="scroll" id="bookings"></div></div>
+  <div class="card section"><h2>Rule changes applied</h2><div class="scroll" id="changes"></div></div>
 </main>
+<div id="toast" role="status"></div>
 <script>
   const DATA_URL = __DATA_URL__;   // filled in by the server
+  const BASE = DATA_URL.replace(/\/data\.json$/, '');
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const num = v => Number(v || 0);
@@ -125,6 +144,45 @@
     return `<table><thead><tr>${cols.map(c => `<th class="${c.r ? 'r' : ''}">${c.h}</th>`).join('')}</tr></thead><tbody>` +
       rows.map(r => `<tr>${cols.map(c => `<td class="${c.r ? 'r' : ''}">${c.f(r)}</td>`).join('')}</tr>`).join('') + '</tbody></table>';
   }
+
+  function toast(text) {
+    const t = $('toast'); t.textContent = text; t.style.display = 'block';
+    clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.style.display = 'none'; }, 6000);
+  }
+
+  // Money-moving and rule-changing buttons ask for a second click instead of a browser dialog.
+  async function act(button, path, done) {
+    if (button.dataset.confirm && !button.classList.contains('armed')) {
+      button.classList.add('armed'); button.dataset.label = button.textContent; button.textContent = button.dataset.confirm;
+      setTimeout(() => { if (button.isConnected && button.classList.contains('armed')) { button.classList.remove('armed'); button.textContent = button.dataset.label; } }, 4000);
+      return;
+    }
+    button.disabled = true;
+    try {
+      const r = await fetch(BASE + path, { method: 'POST' });
+      const body = await r.json();
+      toast(body.error ? 'Not done: ' + body.error : done(body));
+    } catch (e) { toast('Request failed: ' + e.message); }
+    await load();
+  }
+
+  document.addEventListener('click', e => {
+    const b = e.target.closest('button[data-path]');
+    if (!b) return;
+    const kind = b.dataset.kind;
+    act(b, b.dataset.path, body =>
+      kind === 'apply' ? `Applied: ${body.applied.title}. Seller agents use it from their next step.` :
+      kind === 'revert' ? `Reverted: ${body.reverted.title}.` :
+      `${body.booking_ref}: ${String(body.status).replaceAll('_', ' ')}`);
+  });
+
+  const BOOKING_ACTIONS = {
+    awaiting_payment: [['refresh', 'Refresh'], ['cancel', 'Cancel', 'Cancel booking?']],
+    deposit_held: [['check-out', 'Check out', 'Capture & pay out?'], ['no-show', 'No-show', 'Charge deposit?'], ['cancel', 'Cancel', 'Cancel booking?']],
+    paid: [['check-out', 'Check out', 'Check out?'], ['no-show', 'No-show', 'Mark no-show?'], ['cancel', 'Cancel', 'Cancel booking?']],
+  };
+  const btn = (path, label, kind, confirm, cls = '') =>
+    `<button class="${cls}" data-path="${esc(path)}" data-kind="${kind}"${confirm ? ` data-confirm="${esc(confirm)}"` : ''}>${esc(label)}</button>`;
 
   function render() {
     const cur = data.currency, v = view(), multi = pick === 'all' && data.hotels.length > 1;
@@ -191,6 +249,24 @@
       { h: 'Split', f: r => r.funds_split_id ? `<code>${esc(r.funds_split_id)}</code>` : '–' },
     ], v.payouts, 'Payouts appear when a card payment is captured: late cancellation, no-show or check-out.');
 
+    const sugs = (data.suggestions || []).filter(s => pick === 'all' || s.hotel_id === pick);
+    $('suggestions').innerHTML = sugs.length ? `<div class="sugs">${sugs.map(s => `<div class="sug">
+        ${multi ? `<span class="tag">${esc(s.hotel)}</span>` : ''}
+        <div class="t">${esc(s.title)}</div><div class="why">${esc(s.why)}</div><div class="imp">${esc(s.impact)}</div>
+        <div class="row">${btn(`/suggestions/${s.id}/apply`, 'Apply', 'apply', 'Apply to live rules?', 'primary')}</div></div>`).join('')}</div>`
+      : '<p class="empty">No suggestions yet: they appear once at least two lost deals or requests point the same way.</p>';
+
+    const changes = (data.rule_changes || []).filter(c => pick === 'all' || c.hotel_id === pick);
+    const convPct = e => e.conversion_pct == null ? '–' : `${e.conversion_pct}% <span class="sub">of ${e.negotiations}</span>`;
+    $('changes').innerHTML = table([
+      ...(multi ? [{ h: 'Hotel', f: c => esc((data.hotels.find(h => h.hotel_id === c.hotel_id) || {}).name) }] : []),
+      { h: 'Change', f: c => esc(c.title) },
+      { h: 'Applied', f: c => new Date(c.applied_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) },
+      { h: 'Converted before', r: 1, f: c => convPct(c.effect.before) },
+      { h: 'After', r: 1, f: c => convPct(c.effect.after) },
+      { h: '', f: c => c.reverted_at ? '<span class="sub">reverted</span>' : btn(`/changes/${c.id}/revert`, 'Revert', 'revert', 'Revert?') },
+    ], changes, 'None yet. Applied suggestions show here with conversion before and after.');
+
     $('bookings').innerHTML = table([
       { h: 'Booking', f: r => `<code>${esc(r.booking_ref)}</code>` },
       ...(multi ? [{ h: 'Hotel', f: r => esc(r.hotel) }] : []),
@@ -200,6 +276,7 @@
       { h: 'Total', r: 1, f: r => money(r.total, cur) },
       { h: 'Paid by', f: r => esc(r.method) },
       { h: 'Status', f: r => label(r.status) },
+      { h: '', f: r => (BOOKING_ACTIONS[r.status] || []).map(([a, l, c]) => btn(`/bookings/${r.booking_ref}/${a}`, l, 'booking', c)).join(' ') },
     ], v.bookings, 'No bookings yet.');
   }
 
@@ -209,7 +286,7 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       data = await r.json();
       $('error').textContent = '';
-      render();
+      if (!document.querySelector('button.armed')) render();   // don't reset a button awaiting its second click
     } catch (e) {
       $('error').textContent = 'Could not load the data: ' + e.message;
     }

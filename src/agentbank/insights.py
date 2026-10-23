@@ -137,7 +137,7 @@ def report(entries: list[dict], hotels: dict[str, Hotel], bookings: dict[str, di
             made = [o for o in h_offers if o.get("negotiation_id") == nid]
             rejected = [c for c in checks_by_neg.get(nid, []) if c["verdict"] != "EXECUTE"]
             terms = (made or checks_by_neg.get(nid) or [{}])[-1]
-            row = {"negotiation_id": nid, "at": n["at"], "check_in": terms.get("check_in"),
+            row = {"negotiation_id": nid, "at": n["at"], "room": terms.get("room"), "check_in": terms.get("check_in"),
                    "check_out": terms.get("check_out"), "guests": terms.get("guests"),
                    "extras": terms.get("extras", []), "cancellation": terms.get("cancellation")}
             if made:

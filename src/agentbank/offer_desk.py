@@ -18,12 +18,13 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from .airwallex import AirwallexAPI
+from .airwallex import AirwallexAPI, AirwallexError
 from .approvals import ApprovalStore
 from .audit import AuditLog
 from .bookings import BookingError, BookingStore, HotelPayments, usdz
 from .guest_currency import GUEST_CURRENCIES, describe
 from .insights import DemandLog, report
+from .rule_tuning import RuleBook
 from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerDecision, SellerPolicy, load_hotels
@@ -49,7 +50,8 @@ class OfferDesk:
                  bookings: BookingStore, api: AirwallexAPI | None = None, client=None,
                  pay_base_url: str = "http://127.0.0.1:8009", metal_base_url: str = "http://127.0.0.1:4022",
                  payment_methods: tuple[str, ...] = PAYMENT_METHODS, limits: Limits | None = None,
-                 demand: DemandLog | None = None, now=lambda: datetime.now(timezone.utc)):
+                 demand: DemandLog | None = None, rulebook_path: Path | None = None,
+                 now=lambda: datetime.now(timezone.utc)):
         self.hotels = hotels
         self.audit = audit
         self.ledger = ledger
@@ -61,6 +63,7 @@ class OfferDesk:
         self.payment_methods = payment_methods
         self.limits = limits or Limits()
         self.demand = demand or DemandLog()       # hotel-side insights; holds floors, never shown to buyers
+        self.rulebook = RuleBook(hotels, rulebook_path)   # rule changes applied from the dashboard
         self.now = now
         self.approvals = ApprovalStore(ttl_seconds=int(OFFER_TTL.total_seconds()))
         self.sellers: dict[str, SellerAgent] = {}   # negotiation_id -> that hotel's seller agent
@@ -81,7 +84,7 @@ class OfferDesk:
     def from_files(cls, root: Path, api: AirwallexAPI | None = None, **kw) -> "OfferDesk":
         return cls(load_hotels(root / "data/hotels.json"), AuditLog(root / "var/audit.jsonl"),
                    OperationLedger(root / "var/ledger.sqlite3"), BookingStore(root / "var/bookings.json"), api,
-                   demand=DemandLog(root / "var/demand.jsonl"), **kw)
+                   demand=DemandLog(root / "var/demand.jsonl"), rulebook_path=root / "var/rule_changes.json", **kw)
 
     def _reserve(self, hotel_id: str, room_code: str, check_in: str, check_out: str, rooms: int = 1) -> None:
         h = self.hotels[hotel_id]
@@ -313,8 +316,52 @@ class OfferDesk:
         return self.booking_view(ref)
 
     def insights(self) -> dict:
-        """The hotels' revenue dashboard data (hotel staff only: it includes floors and lost demand)."""
-        return report(self.demand.entries(), self.hotels, self.bookings.all(), self.now())
+        """The hotels' revenue dashboard data (hotel staff only: it includes floors and lost demand),
+        with rule changes it suggests and those already applied."""
+        entries, bookings = self.demand.entries(), self.bookings.all()
+        r = report(entries, self.hotels, bookings, self.now())
+        r["suggestions"] = self.rulebook.suggestions(r)
+        r["rule_changes"] = self.rulebook.effects(entries, bookings)
+        return r
+
+    # ---- hotel staff (dashboard) ----------------------------------------------
+    def apply_suggestion(self, suggestion_id: str) -> dict:
+        s = next((s for s in self.insights()["suggestions"] if s["id"] == suggestion_id), None)
+        if s is None:
+            return {"error": "that suggestion is no longer current; reload the dashboard"}
+        try:
+            c = self.rulebook.apply(s, self.now())
+        except ValueError as e:
+            return {"error": str(e)}
+        self.audit.record("rule_change_applied", change=c)
+        return {"applied": c}
+
+    def revert_change(self, change_id: str) -> dict:
+        try:
+            c = self.rulebook.revert(change_id, self.now())
+        except ValueError as e:
+            return {"error": str(e)}
+        self.audit.record("rule_change_reverted", change=c)
+        return {"reverted": c}
+
+    HOTEL_ACTIONS = ("refresh", "check-out", "no-show", "cancel")
+
+    def hotel_action(self, ref: str, action: str) -> dict:
+        """Front-desk actions on a booking: captures here pay the hotel out (bookings.py)."""
+        if action not in self.HOTEL_ACTIONS:
+            return {"error": f"action must be one of {', '.join(self.HOTEL_ACTIONS)}"}
+        if action == "refresh":
+            return self.booking_status(ref, tenant=None)
+        if action == "cancel":
+            return self.cancel_booking(ref, tenant=None)
+        try:
+            (self.payments.check_out if action == "check-out" else self.payments.no_show)(ref)
+        except BookingError as e:
+            return {"error": str(e)}
+        except AirwallexError as e:
+            return {"error": f"Airwallex: {e}"}
+        self.note_booking(ref)
+        return self.booking_view(ref)
 
     # ---- live feed (the in-chat negotiation panel polls this) ---------------
     def _emit(self, kind: str, tenant: str, **data) -> None:
