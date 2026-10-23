@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Callable
 
 import os
+import sys
 
 import anthropic
 
@@ -172,6 +173,7 @@ class SellerAgent:
             except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
                 # Out of credit, rate limits after the SDK's retries, outages: tell the buyer plainly.
                 self.audit.record("seller_unavailable", hotel=self.hotel.id, error=str(e)[:300])
+                print(f"seller agent unavailable ({self.hotel.id}): {str(e)[:300]}", file=sys.stderr)   # host logs
                 if isinstance(self.messages[-1]["content"], str):   # failed before any step this turn:
                     self.messages.pop()                              # drop it so the buyer can resend
                     self.buyer_turns -= 1
