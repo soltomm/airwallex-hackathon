@@ -118,7 +118,11 @@ def book_offer(offer_id: str, traveller_confirmed: bool, payment_method: str, ct
     traveller on a checkout page) or "metal" (paid by the agent from the traveller's Metal wallet).
     currency (card only, optional): "USD" or "GBP" to hold the deposit in the traveller's currency;
     the price stays in EUR and the rate is locked now (shown in the booking's `fx`).
-    Offers expire 15 minutes after they are made."""
+    Offers expire 15 minutes after they are made. If the hotel can no longer sell these terms
+    (rooms sold elsewhere, offer expired) the result is "terms_changed" with the closest new_offer the
+    hotel commits to: show the traveller exactly what changed and book new_offer.offer_id only after
+    they approve it. A hotel may also cancel a stay it cannot honour; booking_status then shows the
+    refund or released hold."""
     return desk.book(offer_id, traveller_confirmed, payment_method, tenant=tenant_of(ctx), currency=currency)
 
 
@@ -152,6 +156,15 @@ def dashboard_post(rest: str) -> tuple[int, dict]:
         out = desk.revert_change(m.group(1))
     elif m := re.fullmatch(r"/bookings/([\w-]+)/([a-z-]+)", rest):
         out = desk.hotel_action(m.group(1), m.group(2))
+    elif rest == "/payout-cycle":
+        out = desk.run_payout_cycle()
+    elif m := re.fullmatch(r"/simulate/overbook/(\w+)/(\d{4}-\d{2}-\d{2})", rest):
+        out = desk.sim.overbook(m.group(1), m.group(2))
+    elif m := re.fullmatch(r"/simulate/sell/(\w+)/(\w+)/(\d{4}-\d{2}-\d{2})/(\d{1,2})", rest):
+        try:
+            out = desk.sim.sell_rooms(m.group(1), m.group(2), m.group(3), int(m.group(4)))
+        except KeyError as e:
+            out = {"error": f"unknown hotel or room {e}"}
     else:
         return 404, {"error": "not found"}
     return (409 if "error" in out else 200), out
@@ -266,7 +279,9 @@ def serve_http() -> None:
         return JSONResponse(body, status)
 
     for route in ("/dashboard/{token}/suggestions/{sid}/apply", "/dashboard/{token}/changes/{sid}/revert",
-                  "/dashboard/{token}/bookings/{ref}/{action}"):
+                  "/dashboard/{token}/bookings/{ref}/{action}", "/dashboard/{token}/payout-cycle",
+                  "/dashboard/{token}/simulate/overbook/{hotel}/{night}",
+                  "/dashboard/{token}/simulate/sell/{hotel}/{room}/{night}/{rooms}"):
         server.custom_route(route, methods=["POST"])(dashboard_action)
     # The secret path is the access control. DNS-rebinding protection guards servers on a user's own
     # machine; this one is public by design, behind TLS at the host's proxy.

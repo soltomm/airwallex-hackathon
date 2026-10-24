@@ -38,6 +38,9 @@ class BookingError(Exception):
     pass
 
 
+HOTEL_FAILED_STATUSES = ("cancelled_by_hotel", "refunded_by_hotel")
+
+
 class BookingStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -74,8 +77,9 @@ def usdz(amount: Money, rate: Decimal) -> str:
 
 class HotelPayments:
     def __init__(self, store: BookingStore, ledger: OperationLedger, audit: AuditLog,
-                 api: AirwallexAPI | None = None, now=lambda: datetime.now(timezone.utc)):
+                 api: AirwallexAPI | None = None, now=lambda: datetime.now(timezone.utc), reserve_for=None):
         self.store = store
+        self.reserve_for = reserve_for   # booking -> (reserve fraction, why); see reserves.py
         self.ledger = ledger
         self.audit = audit
         self.api = api
@@ -150,44 +154,144 @@ class HotelPayments:
 
     # ---- payouts --------------------------------------------------------------
     def settle(self, ref: str, field: str | None = None) -> dict:
-        """Pay the hotel its share of a captured card payment (`field`: "deposit" or "total") by funds
-        split, in the currency the card was charged; the commission stays with the platform. Called
-        after each capture; call again without `field` (hotel_ops.py settle) to retry."""
+        """Pay the hotel its share of a captured card payment (`field`: "deposit" or "total"), in the
+        currency the card was charged; the commission stays with the platform. The share goes out as two
+        funds splits: one released now and a reserve held (auto_release off) until the payout cycle.
+        Called after each capture; call again without `field` (hotel_ops.py settle) to finish or retry."""
         b = self.store.get(ref)
         payout = b.get("payout")
         done = b.get("settlement", {})
-        if not payout or b["method"] != "card" or done.get("funds_split_id"):
+        if not payout or b["method"] != "card":
             return b
         field = field or done.get("field")
         if field is None:
             return b   # nothing captured yet
-        pct = Decimal(payout["commission_pct"])
-
-        def split(m: Money) -> tuple[Money, Money]:
-            commission = Money.of((m.amount * pct).quantize(Decimal("0.01")), m.currency)
-            return commission, m - commission
-
-        commission, to_hotel = split(charged(b, field))      # what moves, in the card's currency
-        commission_h, to_hotel_h = split(self._money(b, field))   # the same in the hotel's currency
-        settlement = {"field": field, "captured": b[field], "commission": str(commission_h.amount),
-                      "hotel_payout": str(to_hotel_h.amount), "connected_account": payout["connected_account"],
-                      **({"charged": {"currency": to_hotel.currency, "captured": str(charged(b, field).amount),
-                                      "commission": str(commission.amount), "hotel_payout": str(to_hotel.amount)}}
-                         if to_hotel.currency != b["currency"] else {})}
-        attempt = done.get("attempts", 0)
-        key = f"split:{ref}" if attempt == 0 else f"split:{ref}:retry-{attempt}"   # a retry is a new operation
+        parts = done.get("parts") or self._plan(b, field)
+        settlement = {**done, **({} if done.get("parts") else parts["summary"]), "parts": parts}
+        settlement.pop("summary", None)
+        pending = [k for k in ("now", "reserve") if parts[k]["amount"] != "0.00" and not parts[k].get("id")]
+        if not pending:
+            return b
         try:
-            made = self.ledger.run(key, lambda rid: self._api().create_funds_split(
-                rid, b["payment_intent_id"], to_hotel, payout["connected_account"],
-                {"booking_ref": ref, "commission": str(commission)}))
-        except (AirwallexError, AmbiguousResult) as e:   # the capture stands; the payout can be retried
-            self._log(ref, "payout_failed", error=str(e))
-            return self.store.update(ref, f"payout to hotel not sent ({e})",
-                                     settlement={**settlement, "attempts": attempt + 1, "error": str(e)[:300]})
-        self._log(ref, "hotel_paid_out", funds_split_id=made["id"], **settlement)
-        return self.store.update(ref, f"{to_hotel} to the hotel, {commission} platform commission",
-                                 settlement={**settlement, "attempts": attempt + 1, "funds_split_id": made["id"],
-                                             "split_status": made.get("status")})
+            existing = self._existing_splits(b) if done.get("attempts") else {}
+        except (AirwallexError, AmbiguousResult):
+            existing = None
+        for part in pending:
+            p = parts[part]
+            if existing is None:   # can't tell whether an earlier ambiguous attempt landed: don't resend
+                settlement["error"] = "Airwallex unreachable; payout will be retried after checking for earlier splits"
+                break
+            if part in existing:   # an earlier attempt that looked ambiguous did go through
+                p.update(id=existing[part]["id"], status=existing[part].get("status"))
+                continue
+            attempt = done.get("attempts", 0)
+            key = f"split:{ref}:{part}" if attempt == 0 else f"split:{ref}:{part}:retry-{attempt}"
+            try:
+                made = self.ledger.run(key, lambda rid: self._api().create_funds_split(
+                    rid, b["payment_intent_id"], Money.of(p["amount"], p["currency"]), payout["connected_account"],
+                    {"booking_ref": ref, "part": part, "commission": f"{settlement['commission']} {b['currency']}"},
+                    auto_release=part == "now"))
+            except (AirwallexError, AmbiguousResult) as e:   # the capture stands; settle() again to finish
+                self._log(ref, "payout_failed", part=part, error=str(e))
+                settlement["error"] = str(e)[:300]
+                break
+            p.update(id=made["id"], status=made.get("status") or ("HELD" if part == "reserve" else "CREATED"))
+        else:
+            settlement.pop("error", None)
+        settlement["attempts"] = done.get("attempts", 0) + 1
+        settlement["funds_split_id"] = parts["now"].get("id")   # the dashboard's "paid out" marker
+        if settlement.get("error"):
+            return self.store.update(ref, f"payout to hotel not finished ({settlement['error']})", settlement=settlement)
+        self._log(ref, "hotel_paid_out", parts=parts)
+        return self.store.update(
+            ref, f"{parts['now']['amount']} {parts['now']['currency']} to the hotel now, "
+                 f"{parts['reserve']['amount']} held in reserve, {settlement['commission']} {b['currency']} commission",
+            settlement=settlement)
+
+    def _plan(self, b: dict, field: str) -> dict:
+        """Commission, reserve and payout-now amounts, in the card's currency and the hotel's."""
+        payout = b["payout"]
+        pct = Decimal(payout["commission_pct"])
+        reserve_pct, why = self.reserve_for(b) if self.reserve_for else (Decimal(0), "no reserve policy")
+        cents = lambda x: x.quantize(Decimal("0.01"))
+
+        def split(m: Money) -> tuple[Money, Money, Money]:
+            commission = Money.of(cents(m.amount * pct), m.currency)
+            share = m - commission
+            reserve = Money.of(cents(share.amount * reserve_pct), m.currency)
+            return commission, share - reserve, reserve
+
+        commission, now, reserve = split(charged(b, field))
+        commission_h, now_h, reserve_h = split(self._money(b, field))
+        return {"summary": {"field": field, "captured": b[field], "commission": str(commission_h.amount),
+                            "hotel_payout": str((now_h + reserve_h).amount), "paid_now": str(now_h.amount),
+                            "reserve": str(reserve_h.amount), "reserve_pct": str(reserve_pct), "reserve_why": why,
+                            "connected_account": payout["connected_account"],
+                            **({"charged": {"currency": now.currency, "captured": str(charged(b, field).amount),
+                                            "commission": str(commission.amount),
+                                            "hotel_payout": str((now + reserve).amount)}}
+                               if now.currency != b["currency"] else {})},
+                "now": {"amount": str(now.amount), "currency": now.currency},
+                "reserve": {"amount": str(reserve.amount), "currency": reserve.currency}}
+
+    def _existing_splits(self, b: dict) -> dict[str, dict]:
+        """Splits already on this payment for this booking, by part: an ambiguous create may have landed."""
+        found = {}
+        for sp in self._api().funds_splits(b["payment_intent_id"]):
+            meta = sp.get("metadata") or {}
+            if meta.get("booking_ref") == b["booking_ref"]:
+                found[meta.get("part", "now")] = sp
+        return found
+
+    def release_reserve(self, ref: str) -> dict:
+        """Payout cycle: hand the hotel its held reserve once the stay is delivered."""
+        b = self.store.get(ref)
+        r = b.get("settlement", {}).get("parts", {}).get("reserve", {})
+        if not r.get("id") or r.get("status") in ("RELEASED", "REVERSED"):
+            return b
+        out = self.ledger.run(f"release:{ref}", lambda rid: self._api().release_funds_split(rid, r["id"]))
+        r["status"] = out.get("status") or "RELEASED"
+        self._log(ref, "reserve_released", funds_split_id=r["id"], amount=r["amount"])
+        return self.store.update(ref, f"reserve {r['amount']} {r['currency']} released to the hotel",
+                                 settlement=b["settlement"])
+
+    def hotel_failed(self, ref: str, reason: str) -> dict:
+        """The hotel can't deliver the stay (overbooked, closed). Release any card hold, or refund the
+        guest in full and take the hotel's share back: its held reserve first, then the part paid out."""
+        b = self.refresh(ref)
+        if b["status"] not in ("awaiting_payment", "deposit_held", "paid"):   # stays not yet delivered
+            raise BookingError(f"booking {ref} is {b['status'].replace('_', ' ')}; the hotel cannot cancel it")
+        if b["method"] != "card":
+            return self.store.update(ref, f"hotel cancelled ({reason}): Metal deposit refund due",
+                                     status="cancelled_by_hotel")
+        if b["status"] in ("awaiting_payment", "deposit_held"):
+            if b.get("payment_intent_id"):
+                self.ledger.run(f"cancel:{ref}", lambda rid: self._api().cancel_payment_intent(
+                    rid, b["payment_intent_id"], f"Hotel cancelled: {reason}"))
+            self._log(ref, "hotel_cancelled", reason=reason)
+            return self.store.update(ref, f"hotel cancelled ({reason}): card hold released, nothing charged",
+                                     status="cancelled_by_hotel")
+        # Money was captured: refund the guest everything captured, then recover the hotel's share.
+        st = b.get("settlement", {})
+        captured = charged(b, st.get("field", "deposit"))
+        self.ledger.run(f"refund:{ref}", lambda rid: self._api().create_refund(
+            rid, b["payment_intent_id"], captured, f"Hotel could not deliver the stay: {reason}"))
+        recovered = []
+        for part in ("reserve", "now"):
+            p = st.get("parts", {}).get(part, {})
+            if not p.get("id") or p.get("status") == "REVERSED":
+                continue
+            if p.get("status") not in ("RELEASED", "SETTLED") and part == "reserve":
+                self.ledger.run(f"release:{ref}", lambda rid: self._api().release_funds_split(rid, p["id"]))
+            self.ledger.run(f"reverse:{ref}:{part}", lambda rid: self._api().reverse_funds_split(
+                rid, p["id"], Money.of(p["amount"], p["currency"]), f"Stay not delivered: {reason}"))
+            p["status"] = "REVERSED"
+            recovered.append(f"{p['amount']} {p['currency']} {'from reserve' if part == 'reserve' else 'clawed back'}")
+        self._log(ref, "hotel_refunded", reason=reason, refunded=str(captured), recovered=recovered)
+        return self.store.update(
+            ref, f"hotel could not deliver ({reason}): guest refunded {captured}; "
+                 f"hotel share recovered: {', '.join(recovered) or 'nothing paid out yet'}",
+            status="refunded_by_hotel", **({"settlement": st} if st else {}))
 
     # ---- Metal --------------------------------------------------------------
     def record_metal_payment(self, ref: str, transaction: str, payer: str, amount_usdz: str) -> dict:

@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
 from .airwallex import AirwallexAPI, AirwallexError
@@ -24,6 +24,8 @@ from .audit import AuditLog
 from .bookings import BookingError, BookingStore, HotelPayments, usdz
 from .guest_currency import GUEST_CURRENCIES, describe
 from .insights import DemandLog, report
+from .reserves import DELIVERED, ReservePolicy
+from .market_simulation import MarketSimulator
 from .rule_tuning import RuleBook
 from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
@@ -56,7 +58,9 @@ class OfferDesk:
         self.audit = audit
         self.ledger = ledger
         self.bookings = bookings
-        self.payments = HotelPayments(bookings, ledger, audit, api, now=now)
+        self.reserves = ReservePolicy()
+        self.payments = HotelPayments(bookings, ledger, audit, api, now=now,
+                                      reserve_for=lambda b: self.reserves.pct(b["hotel_id"], self.bookings.all()))
         self.client = client                     # Anthropic client for seller agents (lazy if None)
         self.pay_base_url = pay_base_url         # card checkout pages (scripts/hotel_mcp.py serves them)
         self.metal_base_url = metal_base_url     # x402 deposit endpoint (metal/hotel-pay.ts)
@@ -64,6 +68,7 @@ class OfferDesk:
         self.limits = limits or Limits()
         self.demand = demand or DemandLog()       # hotel-side insights; holds floors, never shown to buyers
         self.rulebook = RuleBook(hotels, rulebook_path)   # rule changes applied from the dashboard
+        self.sim = MarketSimulator(self)                  # sandbox-only market events
         self.now = now
         self.approvals = ApprovalStore(ttl_seconds=int(OFFER_TTL.total_seconds()))
         self.sellers: dict[str, SellerAgent] = {}   # negotiation_id -> that hotel's seller agent
@@ -77,7 +82,7 @@ class OfferDesk:
         self._feed_lock = threading.Lock()
         self._last_refresh = 0.0
         for b in bookings.all().values():           # rooms already sold survive restarts
-            if b["status"] not in ("cancelled", "cancelled_refund_due"):
+            if b["status"] not in ("cancelled", "cancelled_refund_due", "cancelled_by_hotel", "refunded_by_hotel"):
                 self._reserve(b["hotel_id"], b["room_code"], b["check_in"], b["check_out"])
 
     @classmethod
@@ -215,7 +220,7 @@ class OfferDesk:
         h = self.hotels[offer.hotel_id]
         d = self._policy(offer.hotel_id).evaluate(offer)   # inventory or the clock may have moved
         if d.verdict is not Verdict.EXECUTE:
-            return {"result": "not_booked", "reason": "; ".join(d.public)}
+            return self._terms_changed(offer_id, d.public, tenant)
         if payment_method == "metal" and not h.metal_payee:
             return {"result": "not_booked", "reason": f"{h.name} does not accept Metal payments"}
 
@@ -258,6 +263,39 @@ class OfferDesk:
                 return {"result": "booked_payment_unavailable", "reason": str(e), **self.booking_view(ref)}
         self.note_booking(ref)
         return {"result": "booked", **self.booking_view(ref)}
+
+    def _terms_changed(self, offer_id: str, reasons: tuple[str, ...], tenant: str) -> dict:
+        """The confirmed terms can no longer be sold (rooms sold elsewhere, the offer expired): the hotel
+        commits the closest terms it can, and the traveller must approve those before anything is booked."""
+        old = self.offers[offer_id]
+        policy = self._policy(old.hotel_id)
+        h = self.hotels[old.hotel_id]
+        fresh = replace(old, expires_at=self.now() + OFFER_TTL)
+        candidates = [fresh] + [replace(fresh, room_code=r.code) for r in h.rooms.values()
+                                if r.code != old.room_code and r.max_guests >= old.guests]
+        counter = next((c for c in map(policy.counter, candidates) if c is not None), None)
+        if counter is not None:   # whole euros, like every price the hotel quotes (cents would hint at the floor)
+            counter = replace(counter, total=Money.of(counter.total.amount.to_integral_value(ROUND_CEILING),
+                                                      counter.total.currency))
+        expired = old.expires_at <= self.now()
+        reason = ("the offer expired" if expired else "demand for these nights changed since the offer was made") + \
+            (f" ({'; '.join(reasons)})" if counter is None else "")
+        self.audit.record("terms_changed", offer_id=offer_id, reason=reason, counter=bool(counter))
+        if counter is None:
+            return {"result": "not_booked", "reason": reason, "next_step": "tell the traveller; search again"}
+        nid = self.offer_negotiation.get(offer_id)
+        new_id = self.commit(counter, tenant, nid)
+        before, after = self.view(offer_id), self.view(new_id)
+        changed = [k for k in ("room", "extras", "deposit_pct", "total") if before[k] != after[k]]
+        self._emit("seller", tenant, negotiation_id=nid, hotel_id=old.hotel_id, hotel=h.name,
+                   round=self.sellers[nid].buyer_turns if nid in self.sellers else 0,
+                   message=f"Those terms are no longer available ({reason}). The closest we can confirm: "
+                           f"{', '.join(f'{k.replace('_', ' ')} {after[k]}' for k in changed) or 'the same terms'}.",
+                   offers=[after])
+        return {"result": "terms_changed", "reason": reason, "previous_offer": before, "new_offer": after,
+                "changed": changed,
+                "next_step": "show the traveller exactly what changed and book new_offer.offer_id only after "
+                             "they approve these new terms"}
 
     def _booked_before(self, op) -> dict:
         if op.result:
@@ -319,7 +357,7 @@ class OfferDesk:
         """The hotels' revenue dashboard data (hotel staff only: it includes floors and lost demand),
         with rule changes it suggests and those already applied."""
         entries, bookings = self.demand.entries(), self.bookings.all()
-        r = report(entries, self.hotels, bookings, self.now())
+        r = report(entries, self.hotels, bookings, self.now(), self.reserves)
         r["suggestions"] = self.rulebook.suggestions(r)
         r["rule_changes"] = self.rulebook.effects(entries, bookings)
         return r
@@ -343,6 +381,61 @@ class OfferDesk:
             return {"error": str(e)}
         self.audit.record("rule_change_reverted", change=c)
         return {"reverted": c}
+
+    # ---- payout cycle and incidents (the platform's settlement side) ------------
+    def incidents(self) -> list[dict]:
+        return [e for e in self.demand.entries() if e["event"] == "incident"]
+
+    def run_payout_cycle(self) -> dict:
+        """Release held reserves for delivered stays, except at hotels with a recent incident."""
+        released, held = [], []
+        incidents = self.incidents()
+        for b in self.bookings.all().values():
+            r = b.get("settlement", {}).get("parts", {}).get("reserve", {})
+            if not r.get("id") or r.get("status") in ("RELEASED", "REVERSED"):
+                continue
+            frozen = self.reserves.frozen(b["hotel_id"], incidents, self.now())
+            if b["status"] not in DELIVERED:
+                held.append({"booking_ref": b["booking_ref"], "why": "stay not delivered yet"})
+            elif frozen:
+                held.append({"booking_ref": b["booking_ref"],
+                             "why": f"incident at the hotel on {frozen['at'][:10]}: {frozen['reason']}"})
+            else:
+                try:
+                    self.payments.release_reserve(b["booking_ref"])
+                    released.append({"booking_ref": b["booking_ref"], "amount": f"{r['amount']} {r['currency']}"})
+                except (AirwallexError, BookingError) as e:
+                    held.append({"booking_ref": b["booking_ref"], "why": f"release failed: {e}"})
+        self.audit.record("payout_cycle", released=released, held=held)
+        return {"released": released, "held": held}
+
+    def hotel_incident(self, hotel_id: str, night: str, reason: str) -> dict:
+        """A hotel can't honour stays covering `night`: guests get their holds released or their money
+        back, the hotel's share is recovered, its reserves freeze and its reserve rate is recomputed."""
+        if hotel_id not in self.hotels:
+            return {"error": f"unknown hotel {hotel_id}"}
+        before = self.reserves.pct(hotel_id, self.bookings.all())
+        n = date.fromisoformat(night)
+        affected = [b for b in self.bookings.all().values() if b["hotel_id"] == hotel_id
+                    and date.fromisoformat(b["check_in"]) <= n < date.fromisoformat(b["check_out"])
+                    and b["status"] in ("awaiting_payment", "deposit_held", "paid")]
+        outcomes = []
+        for b in affected:
+            try:
+                after = self.payments.hotel_failed(b["booking_ref"], reason)
+                self._reserve(b["hotel_id"], b["room_code"], b["check_in"], b["check_out"], rooms=-1)
+                self.note_booking(b["booking_ref"])
+                outcomes.append({"booking_ref": b["booking_ref"], "status": after["status"],
+                                 "outcome": after["history"][-1]["event"]})
+            except (AirwallexError, BookingError) as e:
+                outcomes.append({"booking_ref": b["booking_ref"], "error": str(e)})
+        self.demand.record("incident", self.now(), hotel_id=hotel_id, night=night, reason=reason,
+                           bookings=[o["booking_ref"] for o in outcomes])
+        after = self.reserves.pct(hotel_id, self.bookings.all())
+        self.audit.record("hotel_incident", hotel_id=hotel_id, night=night, reason=reason, outcomes=outcomes)
+        return {"hotel_id": hotel_id, "night": night, "reason": reason, "bookings": outcomes,
+                "reserve_before": {"pct": str(before[0]), "why": before[1]},
+                "reserve_after": {"pct": str(after[0]), "why": after[1]}}
 
     HOTEL_ACTIONS = ("refresh", "check-out", "no-show", "cancel")
 

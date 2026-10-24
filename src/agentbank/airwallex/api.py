@@ -143,13 +143,28 @@ class AirwallexAPI:
     # Platform payouts: after a capture, move the seller's share to its connected account. Only on a
     # SUCCEEDED intent, before settlement; whatever is not split stays with the platform.
     def create_funds_split(self, request_id: str, intent_id: str, amount: Money, destination: str,
-                           metadata: dict | None = None) -> dict:
+                           metadata: dict | None = None, auto_release: bool = True) -> dict:
+        """auto_release=False holds the split (a reserve) until release_funds_split."""
         return self.c.post("/pa/funds_splits/create", {
             "request_id": request_id, "source_id": intent_id, "source_type": "PAYMENT_INTENT",
-            "amount": amount.api(), "destination": destination, "metadata": metadata or {}})
+            "amount": amount.api(), "destination": destination, "metadata": metadata or {},
+            "auto_release": auto_release})
 
     def funds_splits(self, intent_id: str) -> list[dict]:
         return self.c.get("/pa/funds_splits", params={"source_id": intent_id}).get("items", [])
+
+    def release_funds_split(self, request_id: str, split_id: str) -> dict:
+        return self.c.post(f"/pa/funds_splits/{split_id}/release", {"request_id": request_id})
+
+    def reverse_funds_split(self, request_id: str, split_id: str, amount: Money, reason: str) -> dict:
+        """Take a released split back from the connected account (a held one must be released first)."""
+        return self.c.post("/pa/funds_split_reversals/create", {
+            "request_id": request_id, "funds_split_id": split_id, "amount": amount.api(),
+            "metadata": {"reason": reason}})
+
+    def create_refund(self, request_id: str, intent_id: str, amount: Money, reason: str) -> dict:
+        return self.c.post("/pa/refunds/create", {
+            "request_id": request_id, "payment_intent_id": intent_id, "amount": amount.api(), "reason": reason})
 
     def disputes(self, **params) -> list[dict]:
         return self.c.get("/pa/payment_disputes", params=params).get("items", [])

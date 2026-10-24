@@ -15,8 +15,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from .offers import OFFER_TTL, Hotel
+from .reserves import ReservePolicy
 
-CANCELLED = ("cancelled", "cancelled_refund_due")
+CANCELLED = ("cancelled", "cancelled_refund_due", "cancelled_by_hotel", "refunded_by_hotel")
 
 
 class DemandLog:
@@ -81,7 +82,47 @@ def _mean(xs: list[Decimal]) -> Decimal | None:
     return sum(xs) / len(xs) if xs else None
 
 
-def report(entries: list[dict], hotels: dict[str, Hotel], bookings: dict[str, dict], now: datetime) -> dict:
+def _settlement(hb: list[dict], incidents: list[dict], policy: ReservePolicy, hotel_id: str,
+                bookings: dict[str, dict], now: datetime) -> dict:
+    """Reserves and reconciliation for one hotel, in its currency: what it was owed must equal what
+    it was paid, what is held for it, and what was taken back for stays it did not deliver."""
+    pct, why = policy.pct(hotel_id, bookings)
+    frozen = policy.frozen(hotel_id, incidents, now)
+    sums = defaultdict(Decimal)
+    for b in hb:
+        st = b.get("settlement") or {}
+        parts = st.get("parts") or {}
+        if not parts:
+            continue
+        owed = _d(st["hotel_payout"])
+        reserve_h, now_h = _d(st.get("reserve", 0)), _d(st.get("paid_now", owed))
+        for part, amount in (("now", now_h), ("reserve", reserve_h)):
+            status = (parts.get(part) or {}).get("status")
+            if not (parts.get(part) or {}).get("id"):
+                sums["unpaid"] += amount
+            elif status == "REVERSED":
+                sums["recovered"] += amount
+            elif part == "reserve" and status != "RELEASED":
+                sums["reserve_held"] += amount
+            else:
+                sums["paid"] += amount
+                if part == "reserve":
+                    sums["reserve_released"] += amount
+        sums["owed"] += owed
+    sums["refunded"] = sum((_d((b.get("settlement") or {}).get("captured", b["deposit"])) for b in hb
+                            if b["status"] == "refunded_by_hotel"), Decimal(0))
+    balanced = sums["owed"] == sums["paid"] + sums["reserve_held"] + sums["recovered"] + sums["unpaid"]
+    return {"reserve_pct": _pct(pct), "reserve_why": why,
+            "frozen_by": {"at": frozen["at"], "night": frozen["night"], "reason": frozen["reason"]} if frozen else None,
+            **{k: str(sums[k]) for k in ("owed", "paid", "reserve_held", "reserve_released", "recovered",
+                                         "unpaid", "refunded")},
+            "reconciled": balanced}
+
+
+def report(entries: list[dict], hotels: dict[str, Hotel], bookings: dict[str, dict], now: datetime,
+           reserves: ReservePolicy | None = None) -> dict:
+    reserves = reserves or ReservePolicy()
+    incidents = [e for e in entries if e["event"] == "incident"]
     searches = [e for e in entries if e["event"] == "search"]
     offers = {e["offer_id"]: e for e in entries if e["event"] == "offer"}
     checks_by_neg: dict[str, list[dict]] = defaultdict(list)
@@ -180,6 +221,7 @@ def report(entries: list[dict], hotels: dict[str, Hotel], bookings: dict[str, di
 
         out_hotels.append({
             "hotel_id": h.id, "name": h.name, "currency": h.currency,
+            "rooms": [{"code": r.code, "name": r.name} for r in h.rooms.values()],
             "commission_pct": _pct(h.commission_pct), "connected_account": h.connected_account or None,
             "funnel": funnel,
             "conversion_pct": _pct(Decimal(len(hb)) / len(h_negs)) if h_negs else None,
@@ -192,8 +234,13 @@ def report(entries: list[dict], hotels: dict[str, Hotel], bookings: dict[str, di
             "lost": sorted(lost, key=lambda r: r["at"], reverse=True),
             "nights": [{"night": n, "requested": requested_nights[n], "booked": booked_nights[n],
                         "lost": lost_nights[n]} for n in nights],
-            "payouts": [{"booking_ref": b["booking_ref"], "status": b["status"], **b["settlement"]}
+            "payouts": [{"booking_ref": b["booking_ref"], "status": b["status"],
+                         **{k: v for k, v in b["settlement"].items() if k != "parts"},
+                         "reserve_status": ((b["settlement"].get("parts") or {}).get("reserve") or {}).get("status"),
+                         "now_status": ((b["settlement"].get("parts") or {}).get("now") or {}).get("status")}
                         for b in sorted(settled, key=lambda b: b["booked_at"], reverse=True)],
+            "settlement": _settlement(hb, incidents, reserves, h.id, bookings, now),
+            "incidents": [i for i in incidents if i["hotel_id"] == h.id],
             "bookings": [{k: b.get(k) for k in ("booking_ref", "room", "check_in", "check_out", "guests", "extras",
                                                 "cancellation", "total", "deposit", "method", "status", "booked_at")}
                          for b in sorted(hb, key=lambda b: b["booked_at"], reverse=True)],

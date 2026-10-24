@@ -79,8 +79,9 @@ class GuestCurrencyTests(unittest.TestCase):
         out = self.desk.payments.check_out(ref)
         api = self.desk.payments.api
         self.assertIsNone(api.intents[booked["payment_intent_id"]]["connected_account_id"])   # platform payments can't convert
-        self.assertEqual(api.calls[-3:-1], [("increment", "580.15 USD"), ("capture", "580.15 USD")])
-        self.assertEqual(api.calls[-1][:2], ("split", "510.53 USD"))   # the hotel's 88%, in the card's currency
+        self.assertEqual(api.calls[-4:-2], [("increment", "580.15 USD"), ("capture", "580.15 USD")])
+        # The hotel's 88%, in the card's currency: 80% of it now, 20% held while it is a new hotel.
+        self.assertEqual([c[:2] for c in api.calls[-2:]], [("split", "408.42 USD"), ("reserve", "102.11 USD")])
         self.assertEqual(out["history"][-2]["event"], "hold raised to 580.15 USD (500.00 EUR) and captured")
         s = out["settlement"]
         self.assertEqual((s["captured"], s["commission"], s["hotel_payout"]), ("500.00", "60.00", "440.00"))
@@ -92,7 +93,7 @@ class GuestCurrencyTests(unittest.TestCase):
         self.held(booked)
         self.desk.payments.now = lambda: datetime(2026, 11, 12, tzinfo=timezone.utc)
         self.assertEqual(self.desk.cancel_booking(booked["booking_ref"])["status"], "cancelled_fee_charged")
-        self.assertEqual(self.desk.payments.api.calls[-2], ("capture", "348.09 USD"))
+        self.assertEqual(self.desk.payments.api.calls[-3], ("capture", "348.09 USD"))
 
     def test_eur_or_no_currency_skips_conversion(self):
         for cur in (None, "EUR"):
@@ -110,7 +111,7 @@ class GuestCurrencyTests(unittest.TestCase):
         self.held(booked)
         self.desk.payments.now = lambda: datetime(2026, 11, 12, tzinfo=timezone.utc)
         self.desk.cancel_booking(booked["booking_ref"])
-        self.assertEqual(self.desk.payments.api.calls[-2], ("capture", "300.00 EUR"))
+        self.assertEqual(self.desk.payments.api.calls[-3], ("capture", "300.00 EUR"))
 
     def test_invalid_currency_or_metal_is_refused(self):
         self.assertEqual(self.book("JPY")["result"], "not_booked")

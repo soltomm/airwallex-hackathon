@@ -44,11 +44,33 @@ class FakeAirwallex:
         self.calls.append(("create", str(amount)))
         return self.intents[pid]
 
-    def create_funds_split(self, request_id, pid, amount, destination, metadata=None):
+    def create_funds_split(self, request_id, pid, amount, destination, metadata=None, auto_release=True):
         if self.intents[pid]["status"] != "SUCCEEDED":
             raise AirwallexError(400, "validation_error", "Invalid source status for PAYMENT_INTENT creation", {})
-        self.calls.append(("split", str(amount), destination))
-        return {"id": f"spt_{len(self.calls)}", "status": "CREATED"}
+        self.calls.append(("split" if auto_release else "reserve", str(amount), destination))
+        split = {"id": f"spt_{len(self.calls)}", "source_id": pid, "amount": amount.api(),
+                 "status": "RELEASED" if auto_release else "CREATED", "metadata": metadata or {}}
+        self.splits = getattr(self, "splits", {})
+        self.splits[split["id"]] = split
+        return split
+
+    def funds_splits(self, pid):
+        return [sp for sp in getattr(self, "splits", {}).values() if sp["source_id"] == pid]
+
+    def release_funds_split(self, request_id, split_id):
+        self.calls.append(("release", split_id))
+        self.splits[split_id]["status"] = "RELEASED"
+        return self.splits[split_id]
+
+    def reverse_funds_split(self, request_id, split_id, amount, reason):
+        if self.splits[split_id]["status"] != "RELEASED":
+            raise AirwallexError(400, "validation_error", "release the split before reversing it", {})
+        self.calls.append(("reverse", str(amount), split_id))
+        return {"id": f"rev_{len(self.calls)}", "status": "CREATED"}
+
+    def create_refund(self, request_id, pid, amount, reason):
+        self.calls.append(("refund", str(amount)))
+        return {"id": f"rfd_{len(self.calls)}", "status": "RECEIVED"}
 
     def get_payment_intent(self, pid):
         return self.intents[pid]
@@ -273,14 +295,16 @@ class OfferDeskTests(unittest.TestCase):
         ref = self.hold()
         self.desk.payments.now = lambda: datetime(2026, 11, 12, tzinfo=timezone.utc)
         self.assertEqual(self.desk.cancel_booking(ref)["status"], "cancelled_fee_charged")
-        self.assertEqual(self.desk.payments.api.calls[-2:], [("capture", "300.00 EUR"),
-                                                             ("split", "264.00 EUR", MARAIS_ACCOUNT)])
+        self.assertEqual(self.desk.payments.api.calls[-3:], [("capture", "300.00 EUR"),
+                                                             ("split", "211.20 EUR", MARAIS_ACCOUNT),
+                                                             ("reserve", "52.80 EUR", MARAIS_ACCOUNT)])
 
     def test_check_out_raises_hold_to_total_then_captures(self):
         ref = self.hold()
         self.assertEqual(self.desk.payments.check_out(ref)["status"], "checked_out")
-        self.assertEqual(self.desk.payments.api.calls[-3:], [("increment", "500.00 EUR"), ("capture", "500.00 EUR"),
-                                                             ("split", "440.00 EUR", MARAIS_ACCOUNT)])
+        self.assertEqual(self.desk.payments.api.calls[-4:], [("increment", "500.00 EUR"), ("capture", "500.00 EUR"),
+                                                             ("split", "352.00 EUR", MARAIS_ACCOUNT),
+                                                             ("reserve", "88.00 EUR", MARAIS_ACCOUNT)])
 
     def test_card_payments_pay_the_hotel_its_share(self):
         ref = self.hold()

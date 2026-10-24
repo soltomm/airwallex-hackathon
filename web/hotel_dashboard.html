@@ -66,6 +66,13 @@
     td button { padding: 2px 8px; font-size: 12px; }
     #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px));
              background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none; }
+    .sim { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .sim form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sim p { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
+    input[type=date], input[type=number] { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 6px;
+      border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+    input[type=number] { width: 56px; }
+    .frozen { color: var(--bad); font-size: 12px; }
     .tag { align-self: flex-start; font-size: 11px; border-radius: 4px; padding: 1px 6px; border: 1px solid var(--line); color: var(--muted); }
   </style>
 </head>
@@ -94,7 +101,18 @@
     <div class="card"><h2>Extras</h2><div id="extras"></div></div>
     <div class="card"><h2>Payouts (Airwallex funds splits)</h2><div class="scroll" id="payouts"></div></div>
   </div>
+  <div class="card section"><h2>Settlement &amp; reserves <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">· held in Airwallex funds splits until the stay is delivered</span></h2>
+    <div class="scroll settle" id="settlement"></div>
+    <div style="margin-top:10px"><button data-path="/payout-cycle" data-kind="cycle" data-confirm="Release delivered reserves?">Run payout cycle</button></div>
+  </div>
   <div class="card section"><h2>Bookings</h2><div class="scroll" id="bookings"></div></div>
+  <div class="card section"><h2>Sandbox simulations</h2><div class="sim">
+    <div><p>A hotel overbooks a night: its guests are refunded or released, its payouts clawed back, its reserve recomputed.</p>
+      <form id="simOverbook"><select name="hotel"></select><input type="date" name="night" value="2026-11-13" required><button>Overbook</button></form></div>
+    <div><p>Another channel sells rooms: terms already offered may no longer be available at booking.</p>
+      <form id="simSell"><select name="room"></select><input type="date" name="night" value="2026-11-14" required>
+        <input type="number" name="rooms" min="1" max="20" value="2" aria-label="Rooms"><button>Sell rooms</button></form></div>
+  </div></div>
   <div class="card section"><h2>Rule changes applied</h2><div class="scroll" id="changes"></div></div>
 </main>
 <div id="toast" role="status"></div>
@@ -173,6 +191,7 @@
     act(b, b.dataset.path, body =>
       kind === 'apply' ? `Applied: ${body.applied.title}. Seller agents use it from their next step.` :
       kind === 'revert' ? `Reverted: ${body.reverted.title}.` :
+      kind === 'cycle' ? `Payout cycle: ${body.released.length} reserve${body.released.length === 1 ? '' : 's'} released, ${body.held.length} held.` :
       `${body.booking_ref}: ${String(body.status).replaceAll('_', ' ')}`);
   });
 
@@ -183,6 +202,26 @@
   };
   const btn = (path, label, kind, confirm, cls = '') =>
     `<button class="${cls}" data-path="${esc(path)}" data-kind="${kind}"${confirm ? ` data-confirm="${esc(confirm)}"` : ''}>${esc(label)}</button>`;
+
+  async function simulate(path, describe) {
+    try {
+      const body = await (await fetch(BASE + path, { method: 'POST' })).json();
+      toast(body.error ? 'Not done: ' + body.error : describe(body));
+    } catch (e) { toast('Request failed: ' + e.message); }
+    await load();
+  }
+  $('simOverbook').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    simulate(`/simulate/overbook/${f.get('hotel')}/${f.get('night')}`, b =>
+      `${b.bookings.length} stay${b.bookings.length === 1 ? '' : 's'} affected. Reserve ${Math.round(b.reserve_before.pct * 100)}% → ${Math.round(b.reserve_after.pct * 100)}% (${b.reserve_after.why}).`);
+  });
+  $('simSell').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target), [hotel, room] = f.get('room').split('|');
+    simulate(`/simulate/sell/${hotel}/${room}/${f.get('night')}/${f.get('rooms')}`, b =>
+      `Sold ${b.sold}; ${b.left} left, ${Math.round(b.occupancy * 100)}% full.`);
+  });
 
   function render() {
     const cur = data.currency, v = view(), multi = pick === 'all' && data.hotels.length > 1;
@@ -245,7 +284,8 @@
       { h: 'Booking', f: r => `<code>${esc(r.booking_ref)}</code>` },
       { h: 'Captured', r: 1, f: r => money(r.captured, cur) },
       { h: 'Commission', r: 1, f: r => money(r.commission, cur) },
-      { h: 'To hotel', r: 1, f: r => r.funds_split_id ? `<span class="ok">${money(r.hotel_payout, cur)}</span>` : `<span class="bad" title="${esc(r.error)}">not sent</span>` },
+      { h: 'To hotel', r: 1, f: r => r.funds_split_id ? `<span class="ok">${money(r.paid_now ?? r.hotel_payout, cur)}</span>` : `<span class="bad" title="${esc(r.error)}">not sent</span>` },
+      { h: 'Reserve', r: 1, f: r => num(r.reserve) ? `${money(r.reserve, cur)} <span class="sub">${esc((r.reserve_status || '').toLowerCase())}</span>` : '–' },
       { h: 'Split', f: r => r.funds_split_id ? `<code>${esc(r.funds_split_id)}</code>` : '–' },
     ], v.payouts, 'Payouts appear when a card payment is captured: late cancellation, no-show or check-out.');
 
@@ -266,6 +306,23 @@
       { h: 'After', r: 1, f: c => convPct(c.effect.after) },
       { h: '', f: c => c.reverted_at ? '<span class="sub">reverted</span>' : btn(`/changes/${c.id}/revert`, 'Revert', 'revert', 'Revert?') },
     ], changes, 'None yet. Applied suggestions show here with conversion before and after.');
+
+    $('settlement').innerHTML = table([
+      { h: 'Hotel', f: h => esc(h.name) + (h.settlement.frozen_by ? `<div class="frozen">frozen: ${esc(h.settlement.frozen_by.reason)} on ${esc(h.settlement.frozen_by.night)}</div>` : '') },
+      { h: 'Reserve rate', f: h => `<b>${h.settlement.reserve_pct}%</b> <span class="sub">${esc(h.settlement.reserve_why)}</span>` },
+      { h: 'Owed', r: 1, f: h => money(h.settlement.owed, cur) },
+      { h: 'Paid', r: 1, f: h => money(h.settlement.paid, cur) },
+      { h: 'Held', r: 1, f: h => money(h.settlement.reserve_held, cur) },
+      { h: 'Clawed back', r: 1, f: h => money(h.settlement.recovered, cur) },
+      { h: 'Guests refunded', r: 1, f: h => money(h.settlement.refunded, cur) },
+      { h: 'Ledger', f: h => h.settlement.reconciled ? '<span class="ok" title="owed = paid + held + clawed back">✓ balanced</span>' : '<span class="bad">✗ check</span>' },
+    ], v.hs, '');
+
+    const hotelOpts = data.hotels.map(h => `<option value="${esc(h.hotel_id)}">${esc(h.name)}</option>`).join('');
+    const roomOpts = data.hotels.flatMap(h => h.rooms.map(r => `<option value="${esc(h.hotel_id)}|${esc(r.code)}">${esc(h.name)} · ${esc(r.name)}</option>`)).join('');
+    const keep = (sel, html) => { const v0 = sel.value; sel.innerHTML = html; if (v0) sel.value = v0; };
+    keep(document.querySelector('#simOverbook select'), hotelOpts);
+    keep(document.querySelector('#simSell select'), roomOpts);
 
     $('bookings').innerHTML = table([
       { h: 'Booking', f: r => `<code>${esc(r.booking_ref)}</code>` },
