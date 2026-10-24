@@ -1,90 +1,78 @@
-# agentbank: Airwallex Agentic Banking Hackathon starter
+# Hotel Negotiation Desk
 
-A kit-agnostic foundation for any of the ten starter kits. It implements the guide's
-"build around a financial decision" rules so your team only writes the decision logic:
+**Hotels sell rooms to AI agents, and they negotiate.** A traveller asks their Claude for a stay. Claude
+talks to each hotel's own seller agent, which builds a personalised offer (breakfast, late checkout,
+cancellation terms, deposit) inside the hotel's rules. The traveller approves the exact terms and pays the
+deposit through Airwallex. The hotel is paid out through Airwallex Payments for Platforms, minus our
+commission and a risk reserve. Every negotiation also tells the hotel what demand it is losing and why,
+and the revenue desk turns that into rule changes it can apply in one click.
 
-| Guide rule | Where it lives |
+The **financial decisions** sit in code, and the models only negotiate and explain:
+
+| Decision | Who decides | New information that changes it |
+|---|---|---|
+| Can the hotel commit to this price and these terms? | `SellerPolicy`: floors per night, occupancy, deposit vs cancellation risk, autonomy band | Rooms sell through another channel → booking returns `terms_changed` and the traveller re-approves |
+| How much of the hotel's share to hold back? | `ReservePolicy`: new hotel 20%, established 5%, at least 2× its failed-stay rate | The hotel overbooks a night → guests refunded, share clawed back, reserves frozen, rate raised |
+| When to pay the hotel? | Payout cycle: reserves of delivered stays only | An incident at the hotel → its reserves stay held |
+| Should the hotel change its prices? | `RuleBook` suggestions from lost-deal evidence; a person clicks Apply | Each lost deal below the floor, each request for a busy night |
+
+## Try it
+
+- **In Claude** (claude.ai, Desktop, or Claude Code), add the connector `https://hotel-negotiation.onrender.com/mcp/<token>` (ask us for the token) and say:
+  *"Find me a hotel in Paris for 2 people, 13–15 Nov 2026, with breakfast, late checkout and free cancellation, around EUR 500. Negotiate, then book by card with the deposit in GBP."*
+  A live panel shows both agents negotiating. Pay the hold with test card `4035 5010 0000 0008`.
+- **As the hotel**: the revenue desk at `/dashboard/<admin token>` shows demand, lost deals, suggestions, settlement and reserves, and runs check-out, the payout cycle and the sandbox simulations.
+- **The 3-minute demo script** is in [DEMO.md](DEMO.md).
+
+## Airwallex, Metal and Claude in it
+
+| Product | What we use it for | Where |
+|---|---|---|
+| Payments: PaymentIntents | Deposit as a pre-auth hold (Airwallex.js drop-in), released on free cancellation, captured late or on no-show, raised with `increment_authorization` and captured at check-out; refunds when a hotel can't deliver | `bookings.py`, `web/hotel_pay.html` |
+| Multi-Currency Pricing | Deposit held in the guest's currency (USD/GBP) at a rate locked at booking; the hotel prices and is paid in EUR | `guest_currency.py` |
+| Payments for Platforms | Hotels onboarded as connected accounts by API (store details, card capabilities); each capture split to the hotel as funds splits, one released and one held as a reserve; reserves released by the payout cycle or reversed when a stay isn't delivered | `onboard_hotels.py`, `bookings.py`, `reserves.py` |
+| Webhooks | HMAC-verified, deduped `payment_intent.*` events refresh bookings and live panels | `webhooks.py` |
+| Metal (testnet) | The traveller's agent pays the deposit over x402 under an on-chain mandate capped at the budget (local demo) | `metal/hotel-pay.ts`, `scripts/metal_*` |
+| Claude | Hotel seller agents (Sonnet 5.5, prompt caching, effort medium) with typed tools; MCP server and MCP App panel for the traveller's Claude | `seller_agent.py`, `scripts/hotel_mcp.py`, `ui/` |
+
+## How it follows the guide
+
+| Guide rule | Here |
 |---|---|
-| Keep amounts, limits, reserves and validation in code | `policy.py`, `money.py` (Decimal, never floats) |
-| Duplicate protection; reuse a `request_id` only to retry the same operation | `ledger.py` |
-| Treat non-success on money movement as ambiguous; look up before retrying | `airwallex/client.py` → `AmbiguousResult` |
-| Bind each approval to amount, currency, counterparty, terms and evidence | `approvals.py` (fingerprinted, single-use, expiring) |
-| Put sandbox-only simulation calls behind one interface | `simulation.py` |
-| Give the model typed tools, not credentials | `agent/tools.py` (strict schemas) |
-| Show what the agent did and why | `audit.py` → `var/audit.jsonl` |
+| Keep amounts, limits, reserves, validation and state in code | `SellerPolicy`, `ReservePolicy`, the payout cycle and the booking state machine are code; the seller agent can only commit what `make_offer` lets through |
+| Typed tools, not credentials | The seller has `get_inventory`, `price_check`, `make_offer`; the traveller's Claude has six MCP tools; no keys reach a model |
+| Bind each approval to amount, counterparty, terms and evidence | Booking takes only an `offer_id`; its approval fingerprint covers hotel, room, dates, extras, cancellation, deposit and total; changed terms need a new yes |
+| One request_id per operation; a non-success is ambiguous | `ledger.py` (at most once per business key); payout retries list existing splits first; payment retries use a new key only after a definite failure |
+| Keep customer funds separate | Each traveller's session is its own tenant; each hotel is paid only its own share, reconciled per hotel |
+| Sandbox-only simulations behind one interface | `simulation.py`, `market_simulation.py` |
+| Webhooks: HMAC on raw bytes, dedupe on event id, return 200 fast | `webhooks.py` |
+| Show what the agent did and why | Live negotiation panel (never the floors), audit log, demand log, dashboard |
 
-## Setup
+## Architecture
 
-```sh
-python3.13 -m venv .venv && source .venv/bin/activate   # Python 3.10+ (macOS system python3 is 3.9)
-pip install -e ".[agent]"
-cp .env.example .env                                  # bare values: no quotes or spaces
-python scripts/check_setup.py                         # login, Global Accounts, balances
+```mermaid
+flowchart LR
+  T[Traveller's Claude] -- MCP: search / negotiate / book --> D[Offer desk]
+  D -- per negotiation --> S[Hotel seller agent<br/>Claude Sonnet 5.5]
+  S -- price_check / make_offer --> P[SellerPolicy<br/>hotel rules in code]
+  D -- book: approval fingerprint, ledger --> B[Bookings & payments]
+  B -- PaymentIntent hold, MCP rate, capture, refund --> A[(Airwallex)]
+  B -- funds splits: now + held reserve --> A
+  R[ReservePolicy & payout cycle] --> B
+  A -- webhooks --> B
+  T -. x402 under mandate .-> M[(Metal)]
+  D -- demand events --> I[Revenue desk<br/>insights, suggestions, settlement]
+  I -- Apply rule change --> P
 ```
 
-Other scripts (run from the repo root):
+## Verified
 
-| Script | Does |
-|---|---|
-| `scripts/fund_sandbox.py 25000 USD` | Simulates a deposit into a Global Account in that currency, creating one only if needed |
-| `scripts/seed_beneficiaries.py` | Creates US (LOCAL), GB (LOCAL) and DE (SWIFT) synthetic suppliers from `data/beneficiaries.json` |
-| `scripts/run_agent.py <beneficiary_id>` | Example treasury agent: three invoices, scarce cash above a reserve floor, approvals in the console |
+- Live in the sandbox: pre-auth holds confirmed with the test card, cancelled and captured; a EUR deposit and a GBP deposit (Multi-Currency Pricing) captured and split to the hotel's connected account (EUR 457.60 and GBP 397.06, both RELEASED); hotels onboarded with card capabilities by API.
+- Hosted on Render and used by friends from claude.ai through the MCP connector.
+- Seller agent eval (`scripts/eval_seller.py`): 8 scenarios, including prompt injection, a fake "manager", competing quotes, hard haggling and impossible budgets, graded in code for outcome, no leaks, every quoted price backed by a committed offer, and staying in budget. Latest full run on Sonnet 5.5: 15/16 conversations passed every check; the one miss was a grader false positive (the agent repeated the guest's own budget), since fixed and re-run clean. About $0.03 per conversation.
+- 97 offline tests (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation and webhook signatures.
 
-Tests (offline, no network): `python -m unittest discover tests`
-
-## Layout
-
-```
-src/agentbank/
-  config.py           .env loading; rejects quoted or padded credentials (the HTML-403 trap)
-  money.py            Money(amount: Decimal, currency) in major units
-  airwallex/
-    client.py         auth + token cache, retries (GET on 5xx/429; POST only on 429), x-on-behalf-of
-    api.py            thin wrappers: balances, Global Accounts, FX, beneficiaries, transfers,
-                      issuing, payments/disputes, connected-account transfers, charges
-    states.py         normalised transfer and card-transaction outcomes
-    errors.py         AirwallexError (definite) vs AmbiguousResult (unknown outcome)
-  simulation.py       deposits, transfer transitions, card authorizations, disputes
-  ledger.py           one request_id per business operation, at-most-once execution
-  approvals.py        ApprovalRequest fingerprinting, ApprovalStore, ConsoleApprover
-  policy.py           PaymentPolicy example: reserve floor, autonomous limit, confidence, SWIFT fee
-  audit.py            append-only JSONL with secrets redacted
-  agent/
-    tools.py          tool schemas + handlers (policy -> approval -> ledger -> API)
-    loop.py           manual tool-use loop on claude-opus-5-5, refusal fallbacks on
-```
-
-## Adapting it to your kit
-
-1. **Write the policy first** (`policy.py`). The decision your demo turns on (reserve
-   floor, forecast confidence, dispute economics, tenant isolation) belongs in code that
-   returns `EXECUTE`, `NEEDS_APPROVAL` or `REJECT`, with reasons.
-2. **Add tools** in `agent/tools.py`, copying `pay_beneficiary`: validate input, then policy,
-   then approval if needed, then `ledger.run(key, call)`, then audit. Read-only tools can skip the ledger.
-3. **Pick ledger keys from business identity**, not attempts: `transfer:INV-1001`,
-   `fx:payroll-2026-w43:EUR`. A deliberate replacement after a bounced transfer is a
-   *new* operation, so give it a new key (e.g. `transfer:INV-1001:replacement-1`).
-4. **Drive the scenario's "new information" through `simulation.py`** (a late deposit,
-   a transfer moved to FAILED, a declined authorization) and let the agent re-plan.
-
-## Sandbox behaviour verified on 2026-10-19
-
-These came from running kits 1–3 against a real sandbox account. Some contradict the guide.
-
-- **Declined card transactions also have `transaction_type: CLEARING`.** Use
-  `states.card_outcome()`, which decides on `status`/`failure_reason`.
-- **A failed transfer reads back as `CANCELLED`** with `failure: {code, message, details.type}`.
-  The simulator recorded `INCORRECT_ROUTING` when asked for `BENEFICIARY_BANK_RETURNED`, so
-  key decisions on what Airwallex returns, not on what you simulated.
-- **Deposits post within a few seconds, not always instantly.** Re-read balances before re-planning.
-- **Kit 4 card payments:** confirming a PaymentIntent with raw card details returns
-  *"account is not enabled for native API access"*. Ask devhelp@airwallex.com to enable it,
-  or pay through the hosted payment page / a payment link with test card `4035501000000008`.
-- Per-transaction card limits are inclusive ($100.00 clears on a $100 limit; $100.01 fails).
-- FX conversions settle immediately; quotes are single-use; leave `x-api-version` off FX calls.
-- Sandbox rate limits: 10 req/s per endpoint. The client backs off on 429; don't fire parallel bursts in a demo.
-
-## Hotel offer negotiation (our project)
+## Details
 
 Hotels run their own seller agents (Claude, `seller_agent.py`) that negotiate personalised offers
 with the traveller's Claude, within per-hotel rules in `data/hotels.json`. `SellerPolicy`
@@ -126,7 +114,7 @@ Try it locally first: `HOTELS_ACCESS_TOKEN=<16+ chars> PORT=8765 python scripts/
 scripted buyers against the real seller agent from fresh inventory and grades each conversation in
 code: the expected outcome (closes a feasible deal, declines honestly, holds the line), no leaks of
 floors, costs or occupancy, every quoted price backed by a committed offer, and deals within budget.
-About $0.15 per conversation on Claude Opus 5.5; transcripts go to `var/evals/`.
+About $0.03 per conversation on Sonnet 5.5 (the default; `SELLER_MODEL` to change); transcripts go to `var/evals/`.
 
 Offline: `python scripts/negotiation_demo.py` (scripted negotiation, no LLM) and
 `python scripts/payments_smoke.py card|metal` (booking and payment, no LLM).
@@ -176,8 +164,113 @@ or change rules ask for a second click.
 - A mandate's budget never resets: after test payments, bind a fresh one with `metal-agent mandate renew`.
 - Metal refunds for free cancellations are recorded as due, not sent.
 
-## Not covered yet
+**Reserves, the payout cycle and incidents (Kit 8).** Each hotel's share goes out as two funds splits:
+one released at once and a reserve held (`auto_release: false`) at a rate `ReservePolicy`
+(`reserves.py`) sets in code from that hotel's own record: 20% while it has delivered fewer than five
+stays, 5% after, and never less than twice its failed-stay rate (capped at 50%). Every retry first lists
+the payment's splits, so an ambiguous split is never sent twice. The payout cycle (dashboard button)
+releases reserves of delivered stays, except at a hotel with an incident in the last 30 days. An incident
+(a hotel can't honour a night) releases affected guests' holds or refunds them in full, claws the
+hotel's share back by funds split reversal (reserve first), freezes its reserves and raises its rate.
+The dashboard reconciles each hotel: owed = paid + held + clawed back.
 
-- Evidence file uploads for kit 4 (multipart to `files.sandbox.airwallex.com`, JPG/PDF only).
-- Connected-account onboarding for kits 5–8 (see the guide's platform setup table).
-- Webhooks: verify HMAC-SHA256 on the raw bytes, dedupe on event id, return 200 fast.
+**Changed terms at booking (Kit 10).** Booking re-checks the hotel's policy. If rooms sold through
+another channel or the offer expired, `book_offer` returns `terms_changed` with the closest offer the
+hotel can commit (whole euros, other room types if needed) and nothing is charged until the traveller
+approves it. The live panel shows the new offer with its Book button.
+
+**Webhooks.** With `AWX_WEBHOOK_SECRET` set, `POST /webhooks/airwallex` checks the HMAC-SHA256 of
+`x-timestamp` + raw body (5-minute window), dedupes on event id, answers at once, then re-reads the
+PaymentIntent from the API and moves the booking from that (`webhooks.py`). Register the URL in the
+Airwallex web app (Settings > Developer > Webhooks) for `payment_intent.*` events.
+
+**Sandbox simulations** (`market_simulation.py`, one interface as the guide asks): rooms sold through
+another channel, and a hotel overbooking a night. Both are on the dashboard.
+
+
+## Foundation: agentbank (kit-agnostic starter)
+
+A kit-agnostic foundation for any of the ten starter kits. It implements the guide's
+"build around a financial decision" rules so your team only writes the decision logic:
+
+| Guide rule | Where it lives |
+|---|---|
+| Keep amounts, limits, reserves and validation in code | `policy.py`, `money.py` (Decimal, never floats) |
+| Duplicate protection; reuse a `request_id` only to retry the same operation | `ledger.py` |
+| Treat non-success on money movement as ambiguous; look up before retrying | `airwallex/client.py` → `AmbiguousResult` |
+| Bind each approval to amount, currency, counterparty, terms and evidence | `approvals.py` (fingerprinted, single-use, expiring) |
+| Put sandbox-only simulation calls behind one interface | `simulation.py` |
+| Give the model typed tools, not credentials | `agent/tools.py` (strict schemas) |
+| Show what the agent did and why | `audit.py` → `var/audit.jsonl` |
+
+### Setup
+
+```sh
+python3.13 -m venv .venv && source .venv/bin/activate   # Python 3.10+ (macOS system python3 is 3.9)
+pip install -e ".[agent]"
+cp .env.example .env                                  # bare values: no quotes or spaces
+python scripts/check_setup.py                         # login, Global Accounts, balances
+```
+
+Other scripts (run from the repo root):
+
+| Script | Does |
+|---|---|
+| `scripts/fund_sandbox.py 25000 USD` | Simulates a deposit into a Global Account in that currency, creating one only if needed |
+| `scripts/seed_beneficiaries.py` | Creates US (LOCAL), GB (LOCAL) and DE (SWIFT) synthetic suppliers from `data/beneficiaries.json` |
+| `scripts/run_agent.py <beneficiary_id>` | Example treasury agent: three invoices, scarce cash above a reserve floor, approvals in the console |
+
+Tests (offline, no network): `python -m unittest discover tests`
+
+### Layout
+
+```
+src/agentbank/
+  config.py           .env loading; rejects quoted or padded credentials (the HTML-403 trap)
+  money.py            Money(amount: Decimal, currency) in major units
+  airwallex/
+    client.py         auth + token cache, retries (GET on 5xx/429; POST only on 429), x-on-behalf-of
+    api.py            thin wrappers: balances, Global Accounts, FX, beneficiaries, transfers,
+                      issuing, payments/disputes, connected-account transfers, charges
+    states.py         normalised transfer and card-transaction outcomes
+    errors.py         AirwallexError (definite) vs AmbiguousResult (unknown outcome)
+  simulation.py       deposits, transfer transitions, card authorizations, disputes
+  ledger.py           one request_id per business operation, at-most-once execution
+  approvals.py        ApprovalRequest fingerprinting, ApprovalStore, ConsoleApprover
+  policy.py           PaymentPolicy example: reserve floor, autonomous limit, confidence, SWIFT fee
+  audit.py            append-only JSONL with secrets redacted
+  agent/
+    tools.py          tool schemas + handlers (policy -> approval -> ledger -> API)
+    loop.py           manual tool-use loop on claude-opus-5-5, refusal fallbacks on
+```
+
+### Adapting it to your kit
+
+1. **Write the policy first** (`policy.py`). The decision your demo turns on (reserve
+   floor, forecast confidence, dispute economics, tenant isolation) belongs in code that
+   returns `EXECUTE`, `NEEDS_APPROVAL` or `REJECT`, with reasons.
+2. **Add tools** in `agent/tools.py`, copying `pay_beneficiary`: validate input, then policy,
+   then approval if needed, then `ledger.run(key, call)`, then audit. Read-only tools can skip the ledger.
+3. **Pick ledger keys from business identity**, not attempts: `transfer:INV-1001`,
+   `fx:payroll-2026-w43:EUR`. A deliberate replacement after a bounced transfer is a
+   *new* operation, so give it a new key (e.g. `transfer:INV-1001:replacement-1`).
+4. **Drive the scenario's "new information" through `simulation.py`** (a late deposit,
+   a transfer moved to FAILED, a declined authorization) and let the agent re-plan.
+
+### Sandbox behaviour verified on 2026-10-19
+
+These came from running kits 1–3 against a real sandbox account. Some contradict the guide.
+
+- **Declined card transactions also have `transaction_type: CLEARING`.** Use
+  `states.card_outcome()`, which decides on `status`/`failure_reason`.
+- **A failed transfer reads back as `CANCELLED`** with `failure: {code, message, details.type}`.
+  The simulator recorded `INCORRECT_ROUTING` when asked for `BENEFICIARY_BANK_RETURNED`, so
+  key decisions on what Airwallex returns, not on what you simulated.
+- **Deposits post within a few seconds, not always instantly.** Re-read balances before re-planning.
+- **Kit 4 card payments:** confirming a PaymentIntent with raw card details returns
+  *"account is not enabled for native API access"*. Ask devhelp@airwallex.com to enable it,
+  or pay through the hosted payment page / a payment link with test card `4035501000000008`.
+- Per-transaction card limits are inclusive ($100.00 clears on a $100 limit; $100.01 fails).
+- FX conversions settle immediately; quotes are single-use; leave `x-api-version` off FX calls.
+- Sandbox rate limits: 10 req/s per endpoint. The client backs off on 429; don't fire parallel bursts in a demo.
+

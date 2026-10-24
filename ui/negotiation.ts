@@ -160,6 +160,8 @@ const STATUS: Record<string, [string, string]> = {
   awaiting_payment: ["awaiting payment", "warn"], deposit_held: ["deposit held", "ok"], paid: ["paid", "ok"],
   checked_out: ["checked out", "ok"], cancelled: ["cancelled", "bad"], cancelled_refund_due: ["cancelled · refund due", "bad"],
   cancelled_fee_charged: ["cancelled · deposit kept", "bad"], no_show: ["no-show", "bad"],
+  cancelled_by_hotel: ["cancelled by the hotel · hold released", "bad"],
+  refunded_by_hotel: ["cancelled by the hotel · refunded in full", "bad"],
 };
 
 function onBooking(ev: Event) {
