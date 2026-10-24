@@ -54,6 +54,22 @@ class SettlementTests(unittest.TestCase):
         self.assertEqual([c[0] for c in self.api.calls].count("reserve"), 1)
         self.assertTrue(st["parts"]["now"]["id"] and st["parts"]["reserve"]["id"])
 
+    def test_concurrent_refreshes_pay_the_hotel_once(self):
+        import threading
+        ref = self.desk.book(self.offer(cancellation="non_refundable", deposit_pct="1"), True, "card")["booking_ref"]
+        self.api.intents[self.desk.bookings.get(ref)["payment_intent_id"]]["status"] = "SUCCEEDED"
+        threads = [threading.Thread(target=self.desk.booking_status, args=(ref,), kwargs={"tenant": None})
+                   for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        b = self.desk.bookings.get(ref)
+        self.assertEqual(b["status"], "paid")
+        self.assertTrue(b["settlement"]["parts"]["now"]["id"])
+        self.assertNotIn("summary", b["settlement"]["parts"])
+        self.assertEqual([c[0] for c in self.api.calls].count("split"), 1)
+
     def test_payout_cycle_releases_reserves_of_delivered_stays_only(self):
         delivered, pending = self.hold(), self.charged_now(check_in="2026-11-20", check_out="2026-11-22")
         self.desk.payments.check_out(delivered)

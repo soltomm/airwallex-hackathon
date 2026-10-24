@@ -17,7 +17,9 @@ The store is a JSON file so the MCP server and the hotel's ops script share it.
 """
 from __future__ import annotations
 
+import functools
 import json
+import threading
 import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from decimal import Decimal
@@ -44,6 +46,7 @@ HOTEL_FAILED_STATUSES = ("cancelled_by_hotel", "refunded_by_hotel")
 class BookingStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
+        self._lock = threading.RLock()   # read-modify-write of one file, from several request threads
 
     def all(self) -> dict[str, dict]:
         return json.loads(self.path.read_text()) if self.path.exists() else {}
@@ -55,6 +58,10 @@ class BookingStore:
             raise BookingError(f"unknown booking {ref}") from None
 
     def put(self, booking: dict) -> dict:
+        with self._lock:
+            return self._put(booking)
+
+    def _put(self, booking: dict) -> dict:
         rows = self.all()
         rows[booking["booking_ref"]] = booking
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,10 +71,11 @@ class BookingStore:
         return booking
 
     def update(self, ref: str, event: str, **fields) -> dict:
-        b = self.get(ref)
-        b.update(fields)
-        b.setdefault("history", []).append({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": event})
-        return self.put(b)
+        with self._lock:
+            b = self.get(ref)
+            b.update(fields)
+            b.setdefault("history", []).append({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": event})
+            return self._put(b)
 
 
 def usdz(amount: Money, rate: Decimal) -> str:
@@ -75,11 +83,23 @@ def usdz(amount: Money, rate: Decimal) -> str:
     return str((amount.amount * rate).quantize(Decimal("0.01")))
 
 
+def _serialised(method):
+    """One payment operation at a time: the checkout page, the live panel's polling, webhooks and hotel
+    staff can all touch the same booking at once, and each step reads the booking, calls Airwallex and
+    writes back."""
+    @functools.wraps(method)
+    def run(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return run
+
+
 class HotelPayments:
     def __init__(self, store: BookingStore, ledger: OperationLedger, audit: AuditLog,
                  api: AirwallexAPI | None = None, now=lambda: datetime.now(timezone.utc), reserve_for=None):
         self.store = store
         self.reserve_for = reserve_for   # booking -> (reserve fraction, why); see reserves.py
+        self._lock = threading.RLock()
         self.ledger = ledger
         self.audit = audit
         self.api = api
@@ -98,6 +118,7 @@ class HotelPayments:
         self.audit.record(event, booking_ref=ref, **data)
 
     # ---- card (Airwallex) ---------------------------------------------------
+    @_serialised
     def open_card_payment(self, ref: str) -> dict:
         """Create the PaymentIntent the traveller confirms on the checkout page. A definite
         Airwallex failure leaves the booking without one; the next call tries again."""
@@ -137,6 +158,7 @@ class HotelPayments:
         self._log(ref, "guest_currency_locked", **fx)
         return self.store.update(ref, f"rate locked: 1 {b['currency']} = {fx['rate']} {fx['currency']}", fx=fx)
 
+    @_serialised
     def refresh(self, ref: str) -> dict:
         """Read the card payment's state from Airwallex and record what changed."""
         b = self.store.get(ref)
@@ -153,6 +175,7 @@ class HotelPayments:
         return b
 
     # ---- payouts --------------------------------------------------------------
+    @_serialised
     def settle(self, ref: str, field: str | None = None) -> dict:
         """Pay the hotel its share of a captured card payment (`field`: "deposit" or "total"), in the
         currency the card was charged; the commission stays with the platform. The share goes out as two
@@ -166,9 +189,11 @@ class HotelPayments:
         field = field or done.get("field")
         if field is None:
             return b   # nothing captured yet
-        parts = done.get("parts") or self._plan(b, field)
-        settlement = {**done, **({} if done.get("parts") else parts["summary"]), "parts": parts}
-        settlement.pop("summary", None)
+        if done.get("parts"):
+            parts, settlement = done["parts"], dict(done)
+        else:
+            parts = self._plan(b, field)
+            settlement = {**done, **parts.pop("summary"), "parts": parts}
         pending = [k for k in ("now", "reserve") if parts[k]["amount"] != "0.00" and not parts[k].get("id")]
         if not pending:
             return b
@@ -243,6 +268,7 @@ class HotelPayments:
                 found[meta.get("part", "now")] = sp
         return found
 
+    @_serialised
     def release_reserve(self, ref: str) -> dict:
         """Payout cycle: hand the hotel its held reserve once the stay is delivered."""
         b = self.store.get(ref)
@@ -255,6 +281,7 @@ class HotelPayments:
         return self.store.update(ref, f"reserve {r['amount']} {r['currency']} released to the hotel",
                                  settlement=b["settlement"])
 
+    @_serialised
     def hotel_failed(self, ref: str, reason: str) -> dict:
         """The hotel can't deliver the stay (overbooked, closed). Release any card hold, or refund the
         guest in full and take the hotel's share back: its held reserve first, then the part paid out."""
@@ -294,6 +321,7 @@ class HotelPayments:
             status="refunded_by_hotel", **({"settlement": st} if st else {}))
 
     # ---- Metal --------------------------------------------------------------
+    @_serialised
     def record_metal_payment(self, ref: str, transaction: str, payer: str, amount_usdz: str) -> dict:
         b = self.store.get(ref)
         if b["method"] != "metal" or b["status"] != "awaiting_payment":
@@ -311,6 +339,7 @@ class HotelPayments:
             return None
         return datetime.combine(date.fromisoformat(b["check_in"]), CHECK_IN_HOUR) - timedelta(hours=hours)
 
+    @_serialised
     def cancel(self, ref: str) -> dict:
         b = self.refresh(ref)
         if b["status"] not in ("awaiting_payment", "deposit_held", "paid"):
@@ -342,6 +371,7 @@ class HotelPayments:
         self.store.update(ref, outcome, status=status)
         return self.settle(ref, captured) if captured else self.store.get(ref)
 
+    @_serialised
     def check_out(self, ref: str) -> dict:
         b = self.refresh(ref)
         total = charged(b, "total")
@@ -365,6 +395,7 @@ class HotelPayments:
         self.store.update(ref, outcome, status="checked_out")
         return self.settle(ref, captured) if captured else self.store.get(ref)
 
+    @_serialised
     def no_show(self, ref: str) -> dict:
         b = self.refresh(ref)
         captured = None
