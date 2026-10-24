@@ -22,6 +22,8 @@ services:
         sync: false
       - key: AWX_API_KEY
         sync: false
+      - key: AWX_WEBHOOK_SECRET         # optional: secret of the webhook URL <service URL>/webhooks/airwallex
+        sync: false
       - key: HOTELS_PAYMENT_METHODS     # Metal needs the traveller's own wallet: local demo only
         value: card
       - key: HOTELS_MAX_NEGOTIATIONS    # per chat session
