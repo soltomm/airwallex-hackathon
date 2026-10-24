@@ -27,6 +27,7 @@ from .insights import DemandLog, report
 from .reserves import DELIVERED, ReservePolicy
 from .market_simulation import MarketSimulator
 from .rule_tuning import RuleBook
+from .webhooks import payment_intent_id
 from .ledger import DuplicateOperation, OperationLedger
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer, SellerDecision, SellerPolicy, load_hotels
@@ -436,6 +437,15 @@ class OfferDesk:
         return {"hotel_id": hotel_id, "night": night, "reason": reason, "bookings": outcomes,
                 "reserve_before": {"pct": str(before[0]), "why": before[1]},
                 "reserve_after": {"pct": str(after[0]), "why": after[1]}}
+
+    def on_airwallex_event(self, event: dict) -> str | None:
+        """A verified webhook: refresh the booking whose PaymentIntent it names, from the API."""
+        pid = payment_intent_id(event)
+        ref = next((r for r, b in self.bookings.all().items() if b.get("payment_intent_id") == pid), None) if pid else None
+        if ref:
+            self.booking_status(ref, tenant=None)   # re-reads Airwallex; notes the change for live panels
+        self.audit.record("airwallex_event", event_id=event.get("id"), name=event.get("name"), booking_ref=ref)
+        return ref
 
     HOTEL_ACTIONS = ("refresh", "check-out", "no-show", "cancel")
 

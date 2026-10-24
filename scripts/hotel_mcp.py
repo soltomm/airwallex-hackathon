@@ -15,6 +15,7 @@ Environment (all optional locally):
   PUBLIC_BASE_URL / RENDER_EXTERNAL_URL  where travellers' browsers reach the checkout pages
   HOTELS_PAYMENT_METHODS                 "card,metal" (default) or "card"
   HOTELS_MAX_NEGOTIATIONS, HOTELS_MAX_TURNS, HOTELS_DAILY_USD   caps for a shared deployment
+  AWX_WEBHOOK_SECRET                     verifies Airwallex webhooks at <PUBLIC_BASE_URL>/webhooks/airwallex
   HOTELS_ADMIN_TOKEN                     hosted revenue dashboard at <PUBLIC_BASE_URL>/dashboard/<token>
                                          (locally: http://127.0.0.1:8009/dashboard)
 """
@@ -36,6 +37,7 @@ from _bootstrap import ROOT, connect
 from agentbank.bookings import BookingError
 from agentbank.config import ConfigError, load_dotenv
 from agentbank.offer_desk import LOCAL, PAYMENT_METHODS, Limits, OfferDesk
+from agentbank.webhooks import WebhookInbox
 
 PAY_PORT = 8009
 load_dotenv(ROOT / ".env")
@@ -52,6 +54,10 @@ desk = OfferDesk.from_files(
     limits=Limits(negotiations_per_tenant=int(env("HOTELS_MAX_NEGOTIATIONS")) if env("HOTELS_MAX_NEGOTIATIONS") else None,
                   turns_per_tenant=int(env("HOTELS_MAX_TURNS")) if env("HOTELS_MAX_TURNS") else None,
                   daily_usd=Decimal(env("HOTELS_DAILY_USD")) if env("HOTELS_DAILY_USD") else None))
+
+
+inbox = WebhookInbox(env("AWX_WEBHOOK_SECRET", ""), desk.on_airwallex_event, ROOT / "var/webhooks.jsonl") \
+    if env("AWX_WEBHOOK_SECRET") else None
 
 
 def tenant_of(ctx: Context) -> str:
@@ -230,7 +236,10 @@ class PayHandler(BaseHTTPRequestHandler):
         self._send(*web_get(self.path))
 
     def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path == "/webhooks/airwallex":
+            return self._send(*(inbox.receive(dict(self.headers), raw) if inbox else (404, {"error": "not found"})))
+        body = json.loads(raw or b"{}")
         if self.path.startswith("/dashboard/"):
             return self._send(*dashboard_post(self.path.removeprefix("/dashboard")))
         self._send(*web_metal_paid(self.path, body))
@@ -257,6 +266,13 @@ def serve_http() -> None:
 
     for route in ("/pay/{ref}", "/api/bookings/{ref}", "/healthz"):
         server.custom_route(route, methods=["GET"])(page)
+
+    @server.custom_route("/webhooks/airwallex", methods=["POST"])
+    async def webhook(request: Request) -> Response:
+        if inbox is None:
+            return JSONResponse({"error": "not found"}, 404)
+        status, body = inbox.receive(dict(request.headers), await request.body())   # raw bytes, as signed
+        return JSONResponse(body, status)
 
     admin = env("HOTELS_ADMIN_TOKEN", "")
 
