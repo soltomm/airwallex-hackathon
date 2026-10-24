@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sys
 import threading
 import time
 from pathlib import Path
@@ -71,7 +72,7 @@ class WebhookInbox:
         try:
             self.handle(event)
         except Exception as e:   # a failing handler must not break delivery; the next status read catches up
-            print(f"webhook {event.get('id')} ({event.get('name')}) failed: {e}", flush=True)
+            print(f"webhook {event.get('id')} ({event.get('name')}) failed: {e}", file=sys.stderr)   # stdout is MCP
 
 
 def payment_intent_id(event: dict) -> str | None:
