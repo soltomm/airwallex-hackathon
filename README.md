@@ -68,9 +68,10 @@ flowchart LR
 ## Verified
 
 - Live in the sandbox: pre-auth holds confirmed with the test card, cancelled and captured; a EUR deposit and a GBP deposit (Multi-Currency Pricing) captured and split to the hotel's connected account (EUR 457.60 and GBP 397.06, both RELEASED); hotels onboarded with card capabilities by API.
+- Reserves and incidents, live: a EUR 520 check-out split EUR 366.08 to the hotel now and EUR 91.52 as a held reserve, which the payout cycle then released; a non-refundable EUR 300 stay at a hotel that overbooked was refunded in full and the hotel's EUR 211.20 + 52.80 splits reversed; both hotels' ledgers reconciled.
 - Hosted on Render and used by friends from claude.ai through the MCP connector.
 - Seller agent eval (`scripts/eval_seller.py`): 8 scenarios, including prompt injection, a fake "manager", competing quotes, hard haggling and impossible budgets, graded in code for outcome, no leaks, every quoted price backed by a committed offer, and staying in budget. Latest full run on Sonnet 5.5: 15/16 conversations passed every check; the one miss was a grader false positive (the agent repeated the guest's own budget), since fixed and re-run clean. About $0.03 per conversation.
-- 97 offline tests (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation and webhook signatures.
+- 98 offline tests (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation and webhook signatures.
 
 ## Details
 
