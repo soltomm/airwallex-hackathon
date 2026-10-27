@@ -12,7 +12,6 @@ embedded onboarding component (or the hosted flow) instead.
 """
 from __future__ import annotations
 
-import json
 import re
 import threading
 import time
@@ -25,6 +24,7 @@ from typing import Callable
 
 from .airwallex import AirwallexError
 from .offers import Hotel
+from .storage import doc
 
 INDUSTRY = "ICCV3_1102XX"   # Travel and lodging / Hotels, inns, and motels
 CARD_CAPABILITIES = ("payments_visa", "payments_mastercard")
@@ -250,18 +250,16 @@ class HotelOnboarding:
         self.now = now
         self._lock = threading.RLock()
         self.records: dict[str, dict] = {}
-        if self.path and self.path.exists():
-            for rec in json.loads(self.path.read_text()):
+        self.doc = doc(self.path) if self.path else None   # the file, or Postgres when DATABASE_URL is set
+        if self.doc:
+            for rec in self.doc.read([]):
                 self.records[rec["id"]] = rec
                 if rec["id"] not in hotels:
                     hotels[rec["id"]] = Hotel.from_dict(rec)
 
     def _save(self) -> None:
-        if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(list(self.records.values()), indent=2, ensure_ascii=False))
-            tmp.replace(self.path)
+        if self.doc:
+            self.doc.write(list(self.records.values()))
 
     def _record(self, event: str, **data) -> None:
         if self.audit:

@@ -2,9 +2,10 @@
 Doubles as the source for your demo's "what the agent did and why" timeline."""
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
+
+from .storage import stream
 
 _SECRET_KEYS = {"api_key", "x-api-key", "token", "authorization", "card_number", "cvc", "number", "client_secret"}
 
@@ -20,14 +21,10 @@ def _redact(value):
 class AuditLog:
     def __init__(self, path: str | Path = "var/audit.jsonl"):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.stream = stream(self.path)   # the file, or Postgres when DATABASE_URL is set
 
     def record(self, event: str, **data) -> None:
-        entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": event, **_redact(data)}
-        with self.path.open("a") as f:
-            f.write(json.dumps(entry, default=str) + "\n")
+        self.stream.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": event, **_redact(data)})
 
     def entries(self) -> list[dict]:
-        if not self.path.exists():
-            return []
-        return [json.loads(line) for line in self.path.read_text().splitlines() if line]
+        return self.stream.entries()

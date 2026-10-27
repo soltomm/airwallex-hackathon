@@ -18,7 +18,6 @@ The store is a JSON file so the MCP server and the hotel's ops script share it.
 from __future__ import annotations
 
 import functools
-import json
 import threading
 import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
@@ -31,6 +30,7 @@ from .guest_currency import charged, describe, lock_rate
 from .ledger import OperationLedger
 from .money import Money
 from .offers import Cancellation
+from .storage import doc
 
 CHECK_IN_HOUR = dtime(15, 0, tzinfo=timezone.utc)   # free-cancellation windows count back from here
 FREE_HOURS = {Cancellation.FREE_48H: 48, Cancellation.FREE_24H: 24}
@@ -46,10 +46,11 @@ HOTEL_FAILED_STATUSES = ("cancelled_by_hotel", "refunded_by_hotel")
 class BookingStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self._lock = threading.RLock()   # read-modify-write of one file, from several request threads
+        self.doc = doc(self.path)        # the file, or Postgres when DATABASE_URL is set
+        self._lock = threading.RLock()   # read-modify-write of one document, from several request threads
 
     def all(self) -> dict[str, dict]:
-        return json.loads(self.path.read_text()) if self.path.exists() else {}
+        return self.doc.read({})
 
     def get(self, ref: str) -> dict:
         try:
@@ -64,10 +65,7 @@ class BookingStore:
     def _put(self, booking: dict) -> dict:
         rows = self.all()
         rows[booking["booking_ref"]] = booking
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rows, indent=2))
-        tmp.replace(self.path)
+        self.doc.write(rows)
         return booking
 
     def update(self, ref: str, event: str, **fields) -> dict:

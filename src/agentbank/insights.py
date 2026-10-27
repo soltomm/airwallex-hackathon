@@ -7,7 +7,6 @@ demand by night and by extra, and card payouts split between hotel and platform.
 """
 from __future__ import annotations
 
-import json
 import threading
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
@@ -16,36 +15,31 @@ from pathlib import Path
 
 from .offers import OFFER_TTL, Hotel
 from .reserves import ReservePolicy
+from .storage import stream
 
 CANCELLED = ("cancelled", "cancelled_refund_due", "cancelled_by_hotel", "refunded_by_hotel")
 
 
 class DemandLog:
-    """Append-only JSONL (or in memory when path is None)."""
+    """Append-only JSONL or Postgres (storage.py), or in memory when path is None."""
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else None
+        self.stream = stream(self.path) if self.path else None
         self._mem: list[dict] = []
         self._lock = threading.Lock()
-        if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def record(self, event: str, at: datetime, **data) -> None:
         entry = {"at": at.isoformat(), "event": event, **data}
         with self._lock:
-            if self.path:
-                with self.path.open("a") as f:
-                    f.write(json.dumps(entry, default=str) + "\n")
+            if self.stream:
+                self.stream.append(entry)
             else:
                 self._mem.append(entry)
 
     def entries(self) -> list[dict]:
         with self._lock:
-            if not self.path:
-                return list(self._mem)
-            if not self.path.exists():
-                return []
-            return [json.loads(line) for line in self.path.read_text().splitlines() if line]
+            return self.stream.entries() if self.stream else list(self._mem)
 
 
 def reason_category(reason: str) -> str:

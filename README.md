@@ -73,7 +73,7 @@ flowchart LR
 - Self-serve onboarding, live (2026-10-27): a hotel signed up on the join page was listed immediately, found by a buyer agent over MCP in a Barcelona search and negotiated by its own seller agent (EUR 574 published, EUR 450 committed with breakfast, late checkout and free cancellation) while Airwallex onboarded it; its connected account reached ACTIVE with card capabilities 2.5 minutes later. The five newer seed hotels were onboarded the same way.
 - Hosted on Render and used by friends from claude.ai through the MCP connector.
 - Seller agent eval (`scripts/eval_seller.py`): 12 scenarios across 7 hotels in two cities (boutique, business, budget and luxury), including prompt injection, a fake "manager", competing quotes, hard haggling and impossible budgets, graded in code for outcome, no leaks, every quoted price backed by a committed offer, and staying in budget. Latest full run on Sonnet 5.5 (2026-10-27): 23/24 conversations passed every check; the one miss was a grader false positive (the seller offered more flexible cancellation than asked), since fixed and that scenario re-run clean 3/3. About $0.03 per conversation.
-- 108 offline tests (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation, webhook signatures and hotel sign-ups (validation, listing, onboarding, retries, restarts).
+- 113 offline tests (plus 7 against Postgres) (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation, webhook signatures and hotel sign-ups (validation, listing, onboarding, retries, restarts).
 
 ## Details
 
@@ -110,8 +110,18 @@ The MCP URL is `https://<service>.onrender.com/mcp/<HOTELS_ACCESS_TOKEN>` (the t
 find it under the service's Environment). Friends add it in Claude (Settings > Connectors > Add custom
 connector) or ChatGPT (developer mode connectors). Each chat session gets its own negotiations, offers,
 bookings and panel; hotel inventory is shared. Hosted is card-only, capped per session and per day
-(`HOTELS_MAX_*`, `HOTELS_DAILY_USD`), and resets on every deploy or restart (no persistent disk).
-Try it locally first: `HOTELS_ACCESS_TOKEN=<16+ chars> PORT=8765 python scripts/hotel_mcp.py --http`.
+(`HOTELS_MAX_*`, `HOTELS_DAILY_USD`). Try it locally first:
+`HOTELS_ACCESS_TOKEN=<16+ chars> PORT=8765 python scripts/hotel_mcp.py --http`.
+
+**Keeping state on a free host (Postgres).** Render's free instances lose their disk on every deploy and
+every idle spin-down. With `DATABASE_URL` set (`pip install -e ".[agent,postgres]"`), `storage.py` keeps
+bookings, the operation ledger, the demand, audit and webhook logs, rule changes and hotel sign-ups in
+Postgres instead of `var/`. Supabase's free tier works: use the **transaction pooler** URL (the direct
+`db.<project>.supabase.co` host is IPv6-only, which Render can't reach). Tables live in the `agentbank`
+schema, outside what Supabase's REST API exposes, and rows are namespaced (`STORAGE_NAMESPACE`: `hosted` on
+Render, `local` elsewhere), so a laptop with the same URL never touches the hosted data. Each store loads once
+and writes through, which assumes a single instance. Negotiations still open in memory are lost on restart;
+everything booked or logged is not. Postgres tests: `TEST_DATABASE_URL=... python -m unittest tests.test_storage`.
 
 **Evaluating the seller agent.** `python scripts/eval_seller.py [--runs 3] [--only name,...]` plays
 scripted buyers against the real seller agent from fresh inventory and grades each conversation in
@@ -155,7 +165,7 @@ agents find it with `search_hotels(city=...)` and its seller agent negotiates fr
 the Accounts API creates its connected account (store details, card capabilities), the sandbox simulates
 verification, and once it accepts cards its captured deposits split to it like any other hotel's; until then cards
 are collected without a payout split. Progress shows on the sign-up page and in the revenue desk's *Hotels on the
-marketplace* (with Retry if Airwallex refused). Sign-ups persist in `var/hotels_onboarded.json`. In production the
+marketplace* (with Retry if Airwallex refused). Sign-ups persist in `var/hotels_onboarded.json` (or Postgres, below). In production the
 hotel would complete KYC in Airwallex's embedded onboarding component or hosted flow instead of synthetic details.
 
 **Revenue desk (hotel dashboard).** The offer desk logs every search, negotiation, policy check, committed

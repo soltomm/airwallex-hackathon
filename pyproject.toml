@@ -7,6 +7,7 @@ dependencies = []
 
 [project.optional-dependencies]
 agent = ["anthropic>=1.15", "mcp>=2.3"]
+postgres = ["psycopg[binary]>=3.2"]   # only when DATABASE_URL is set (agentbank/storage.py)
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -8,7 +8,6 @@ stable key. The ledger hands out one request_id per key and records what happene
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import time
 import uuid
@@ -19,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from .airwallex.errors import AirwallexError, AmbiguousResult
+from .storage import ledger_db
 
 
 class OpStatus(str, Enum):
@@ -44,27 +44,24 @@ class DuplicateOperation(Exception):
 
 class OperationLedger:
     def __init__(self, path: str | Path = "var/ledger.sqlite3"):
-        if str(path) != ":memory:":
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-        # Tool calls arrive on worker threads (the MCP SDK runs sync tools off the event loop).
-        self.db = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
+        self.db, self.table = ledger_db(path)   # sqlite file, or Postgres when DATABASE_URL is set (storage.py)
         self._lock = threading.RLock()
         self._inflight: set[str] = set()   # keys being executed right now, in this process
         self.db.execute(
-            "CREATE TABLE IF NOT EXISTS ops (key TEXT PRIMARY KEY, request_id TEXT NOT NULL,"
-            " status TEXT NOT NULL, result TEXT, updated REAL NOT NULL)"
+            f"CREATE TABLE IF NOT EXISTS {self.table} (key TEXT PRIMARY KEY, request_id TEXT NOT NULL,"
+            " status TEXT NOT NULL, result TEXT, updated DOUBLE PRECISION NOT NULL)"
         )
 
     def get(self, key: str) -> Operation | None:
         with self._lock:   # one connection is shared by every thread: serialise all use of it
-            row = self.db.execute("SELECT key, request_id, status, result FROM ops WHERE key=?", (key,)).fetchone()
+            row = self.db.execute(f"SELECT key, request_id, status, result FROM {self.table} WHERE key=?", (key,)).fetchone()
         if not row:
             return None
         return Operation(row[0], row[1], OpStatus(row[2]), json.loads(row[3]) if row[3] else None)
 
     def _set(self, key: str, status: OpStatus, result: dict | None = None) -> None:
         with self._lock:
-            self.db.execute("UPDATE ops SET status=?, result=?, updated=? WHERE key=?",
+            self.db.execute(f"UPDATE {self.table} SET status=?, result=?, updated=? WHERE key=?",
                             (status.value, json.dumps(result) if result is not None else None, time.time(), key))
 
     def begin(self, key: str) -> Operation:
@@ -76,7 +73,7 @@ class OperationLedger:
                 raise DuplicateOperation(op)
             if op is None:
                 op = Operation(key, str(uuid.uuid4()), OpStatus.STARTED, None)
-                self.db.execute("INSERT INTO ops VALUES (?, ?, ?, NULL, ?)",
+                self.db.execute(f"INSERT INTO {self.table} VALUES (?, ?, ?, NULL, ?) ON CONFLICT (key) DO NOTHING",
                                 (key, op.request_id, OpStatus.STARTED.value, time.time()))
             self._inflight.add(key)
             return op
@@ -109,6 +106,6 @@ class OperationLedger:
 
     def unresolved(self) -> list[Operation]:
         with self._lock:
-            rows = self.db.execute("SELECT key FROM ops WHERE status IN (?, ?)",
+            rows = self.db.execute(f"SELECT key FROM {self.table} WHERE status IN (?, ?)",
                                    (OpStatus.STARTED.value, OpStatus.UNKNOWN.value)).fetchall()
             return [self.get(r[0]) for r in rows]

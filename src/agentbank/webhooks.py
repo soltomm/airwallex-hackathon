@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .storage import stream
+
 MAX_SKEW_MS = 5 * 60 * 1000   # refuse events signed more than 5 minutes away from now
 
 
@@ -39,10 +41,9 @@ class WebhookInbox:
         self.background = background   # answer first, handle after (tests handle inline)
         self.handle = handle
         self.path = Path(path) if path else None
+        self.stream = stream(self.path) if self.path else None   # the file, or Postgres (storage.py)
         self._lock = threading.Lock()
-        self.seen: set[str] = set()
-        if self.path and self.path.exists():
-            self.seen = {json.loads(line)["id"] for line in self.path.read_text().splitlines() if line}
+        self.seen: set[str] = {e["id"] for e in self.stream.entries()} if self.stream else set()
 
     def receive(self, headers: dict, raw: bytes, now_ms: int | None = None) -> tuple[int, dict]:
         """(status, body) to answer with. Processing happens after the answer, on a thread."""
@@ -58,10 +59,8 @@ class WebhookInbox:
             if event_id in self.seen:
                 return 200, {"duplicate": True}
             self.seen.add(event_id)
-            if self.path:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a") as f:
-                    f.write(json.dumps({"id": event_id, "name": event.get("name"), "at": time.time()}) + "\n")
+            if self.stream:
+                self.stream.append({"id": event_id, "name": event.get("name"), "at": time.time()})
         if self.background:
             threading.Thread(target=self._safe_handle, args=(event,), daemon=True).start()
         else:

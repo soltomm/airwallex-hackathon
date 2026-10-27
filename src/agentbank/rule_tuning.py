@@ -18,6 +18,7 @@ from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
 from .offers import Hotel
+from .storage import doc
 
 MIN_EVIDENCE = 2                 # lost deals or requests before suggesting anything
 MAX_FLOOR_CUT = Decimal("0.15")  # never suggest more than 15% off a night's floor
@@ -53,15 +54,14 @@ class RuleBook:
         self.hotels = hotels
         self.path = Path(path) if path else None
         self._lock = threading.Lock()
-        self.changes: list[dict] = json.loads(self.path.read_text()) if self.path and self.path.exists() else []
+        self.changes: list[dict] = doc(self.path).read([]) if self.path else []   # file or Postgres
         for c in self.changes:
             if not c.get("reverted_at") and c["hotel_id"] in hotels:
                 self._set(c, "after")
 
     def _save(self) -> None:
         if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self.changes, indent=2))
+            doc(self.path).write(self.changes)
 
     # ---- applying -------------------------------------------------------------
     def _set(self, c: dict, which: str) -> None:

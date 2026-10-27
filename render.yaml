@@ -6,7 +6,7 @@ services:
     name: hotel-negotiation
     runtime: python
     plan: free            # sleeps after 15 min idle (first call then takes ~1 min); "starter" stays up
-    buildCommand: pip install -e ".[agent]"
+    buildCommand: pip install -e ".[agent,postgres]"
     startCommand: python scripts/hotel_mcp.py --http
     healthCheckPath: /healthz
     envVars:
@@ -20,6 +20,8 @@ services:
         generateValue: true
       - key: HOTELS_MAX_NEW_HOTELS      # hotels that may sign themselves up on this deployment
         value: "6"
+      - key: DATABASE_URL               # Postgres (Supabase transaction pooler URL): bookings, ledger, logs and
+        sync: false                     # sign-ups survive deploys and spin-downs; unset = files that reset
       - key: ANTHROPIC_API_KEY          # pays for the hotels' seller agents
         sync: false
       - key: AWX_CLIENT_ID              # Airwallex sandbox, for card deposits
