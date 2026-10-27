@@ -22,6 +22,7 @@ The **financial decisions** sit in code, and the models only negotiate and expla
   *"Find me a hotel in Paris for 2 people, 13–15 Nov 2026, with breakfast, late checkout and free cancellation, around EUR 500. Negotiate, then book by card with the deposit in GBP."*
   A live panel shows both agents negotiating. Pay the hold with test card `4035 5010 0000 0008`.
 - **As the hotel**: the revenue desk at `/dashboard/<admin token>` shows demand, lost deals, suggestions, settlement and reserves, and runs check-out, the payout cycle and the sandbox simulations.
+- **As a new hotel**: sign up at `/join/<join token>` (linked from the revenue desk). The hotel is bookable by buyer agents as soon as it submits; its Airwallex connected account is opened in the background and card payouts start once it accepts cards.
 - **The 3-minute demo script** is in [DEMO.md](DEMO.md).
 
 ## Airwallex, Metal and Claude in it
@@ -30,7 +31,7 @@ The **financial decisions** sit in code, and the models only negotiate and expla
 |---|---|---|
 | Payments: PaymentIntents | Deposit as a pre-auth hold (Airwallex.js drop-in), released on free cancellation, captured late or on no-show, raised with `increment_authorization` and captured at check-out; refunds when a hotel can't deliver | `bookings.py`, `web/hotel_pay.html` |
 | Multi-Currency Pricing | Deposit held in the guest's currency (USD/GBP) at a rate locked at booking; the hotel prices and is paid in EUR | `guest_currency.py` |
-| Payments for Platforms | Hotels onboarded as connected accounts by API (store details, card capabilities); each capture split to the hotel as funds splits, one released and one held as a reserve; reserves released by the payout cycle or reversed when a stay isn't delivered | `onboard_hotels.py`, `bookings.py`, `reserves.py` |
+| Payments for Platforms | Hotels sign themselves up and are onboarded as connected accounts by API (store details, card capabilities); each capture split to the hotel as funds splits, one released and one held as a reserve; reserves released by the payout cycle or reversed when a stay isn't delivered | `hotel_onboarding.py`, `bookings.py`, `reserves.py` |
 | Webhooks | HMAC-verified, deduped `payment_intent.*` events refresh bookings and live panels | `webhooks.py` |
 | Metal (testnet) | The traveller's agent pays the deposit over x402 under an on-chain mandate capped at the budget (local demo) | `metal/hotel-pay.ts`, `scripts/metal_*` |
 | Claude | Hotel seller agents (Sonnet 5.5, prompt caching, effort medium) with typed tools; MCP server and MCP App panel for the traveller's Claude | `seller_agent.py`, `scripts/hotel_mcp.py`, `ui/` |
@@ -69,9 +70,10 @@ flowchart LR
 
 - Live in the sandbox: pre-auth holds confirmed with the test card, cancelled and captured; a EUR deposit and a GBP deposit (Multi-Currency Pricing) captured and split to the hotel's connected account (EUR 457.60 and GBP 397.06, both RELEASED); hotels onboarded with card capabilities by API.
 - Reserves and incidents, live: a EUR 520 check-out split EUR 366.08 to the hotel now and EUR 91.52 as a held reserve, which the payout cycle then released; a non-refundable EUR 300 stay at a hotel that overbooked was refunded in full and the hotel's EUR 211.20 + 52.80 splits reversed; both hotels' ledgers reconciled.
+- Self-serve onboarding, live (2026-10-27): a hotel signed up on the join page was listed immediately, found by a buyer agent over MCP in a Barcelona search and negotiated by its own seller agent (EUR 574 published, EUR 450 committed with breakfast, late checkout and free cancellation) while Airwallex onboarded it; its connected account reached ACTIVE with card capabilities 2.5 minutes later. The five newer seed hotels were onboarded the same way.
 - Hosted on Render and used by friends from claude.ai through the MCP connector.
-- Seller agent eval (`scripts/eval_seller.py`): 8 scenarios, including prompt injection, a fake "manager", competing quotes, hard haggling and impossible budgets, graded in code for outcome, no leaks, every quoted price backed by a committed offer, and staying in budget. Latest full run on Sonnet 5.5: 15/16 conversations passed every check; the one miss was a grader false positive (the agent repeated the guest's own budget), since fixed and re-run clean. About $0.03 per conversation.
-- 98 offline tests (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation and webhook signatures.
+- Seller agent eval (`scripts/eval_seller.py`): 12 scenarios across 7 hotels in two cities (boutique, business, budget and luxury), including prompt injection, a fake "manager", competing quotes, hard haggling and impossible budgets, graded in code for outcome, no leaks, every quoted price backed by a committed offer, and staying in budget. Latest full run on Sonnet 5.5 (2026-10-27): 23/24 conversations passed every check; the one miss was a grader false positive (the seller offered more flexible cancellation than asked), since fixed and that scenario re-run clean 3/3. About $0.03 per conversation.
+- 108 offline tests (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation, webhook signatures and hotel sign-ups (validation, listing, onboarding, retries, restarts).
 
 ## Details
 
@@ -142,6 +144,19 @@ each hotel. Sandbox lessons (2026-10-23): an ACTIVE connected account still fail
 letters) and the `payments_visa`/`payments_mastercard` capabilities are enabled, a few seconds after
 activation; a FundsSplit is only accepted once the intent has SUCCEEDED. Verified live: EUR 520 tagged
 intent split EUR 457.60 to the hotel, and an untagged GBP 451.20 intent split GBP 397.06 (both RELEASED).
+
+**Hotels sign themselves up (Merchant Onboarding).** `/join` (locally `http://127.0.0.1:8009/join`; hosted
+`<service URL>/join/<HOTELS_JOIN_TOKEN>`, linked from the revenue desk) takes the hotel's name, city, contact, a selling
+style (boutique, business, budget, luxury), room types with published and lowest rates, extras and a note for its
+agent. `hotel_onboarding.py` validates it in code (lowest rate at most the published rate and at least 40% of it,
+whole euros, at most 4 room types); the style sets the risk rules (deposit minimums, cancellation premiums, autonomy
+band), so a form can't give a seller terms the platform wouldn't stand behind. The hotel is listed at once: buyer
+agents find it with `search_hotels(city=...)` and its seller agent negotiates from the next call. In the background
+the Accounts API creates its connected account (store details, card capabilities), the sandbox simulates
+verification, and once it accepts cards its captured deposits split to it like any other hotel's; until then cards
+are collected without a payout split. Progress shows on the sign-up page and in the revenue desk's *Hotels on the
+marketplace* (with Retry if Airwallex refused). Sign-ups persist in `var/hotels_onboarded.json`. In production the
+hotel would complete KYC in Airwallex's embedded onboarding component or hosted flow instead of synthetic details.
 
 **Revenue desk (hotel dashboard).** The offer desk logs every search, negotiation, policy check, committed
 offer and booking to `var/demand.jsonl` (hotel side: it holds floors). The dashboard shows the funnel,

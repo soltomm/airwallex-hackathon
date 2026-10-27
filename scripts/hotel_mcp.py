@@ -18,6 +18,9 @@ Environment (all optional locally):
   AWX_WEBHOOK_SECRET                     verifies Airwallex webhooks at <PUBLIC_BASE_URL>/webhooks/airwallex
   HOTELS_ADMIN_TOKEN                     hosted revenue dashboard at <PUBLIC_BASE_URL>/dashboard/<token>
                                          (locally: http://127.0.0.1:8009/dashboard)
+  HOTELS_JOIN_TOKEN                      hosted hotel sign-up at <PUBLIC_BASE_URL>/join/<token>
+                                         (locally: http://127.0.0.1:8009/join)
+  HOTELS_MAX_NEW_HOTELS                  cap on hotels that sign up themselves
 """
 import hashlib
 import hmac
@@ -36,6 +39,7 @@ from _bootstrap import ROOT, connect
 
 from agentbank.bookings import BookingError
 from agentbank.config import ConfigError, load_dotenv
+from agentbank.hotel_onboarding import STYLES, SignupError
 from agentbank.offer_desk import LOCAL, PAYMENT_METHODS, Limits, OfferDesk
 from agentbank.webhooks import WebhookInbox
 
@@ -53,7 +57,8 @@ desk = OfferDesk.from_files(
     payment_methods=tuple(m for m in env("HOTELS_PAYMENT_METHODS", ",".join(PAYMENT_METHODS)).split(",") if m),
     limits=Limits(negotiations_per_tenant=int(env("HOTELS_MAX_NEGOTIATIONS")) if env("HOTELS_MAX_NEGOTIATIONS") else None,
                   turns_per_tenant=int(env("HOTELS_MAX_TURNS")) if env("HOTELS_MAX_TURNS") else None,
-                  daily_usd=Decimal(env("HOTELS_DAILY_USD")) if env("HOTELS_DAILY_USD") else None))
+                  daily_usd=Decimal(env("HOTELS_DAILY_USD")) if env("HOTELS_DAILY_USD") else None),
+    max_new_hotels=int(env("HOTELS_MAX_NEW_HOTELS")) if env("HOTELS_MAX_NEW_HOTELS") else None)
 
 
 inbox = WebhookInbox(env("AWX_WEBHOOK_SECRET", ""), desk.on_airwallex_event, ROOT / "var/webhooks.jsonl") \
@@ -77,12 +82,17 @@ apps.add_html_resource(PANEL, (ROOT / "web" / "negotiation_app.html").read_text(
 
 @apps.tool(resource_uri=PANEL)
 def search_hotels(check_in: str, check_out: str, guests: int, extras: list[str], cancellation: str,
-                  ctx: Context) -> dict:
+                  ctx: Context, city: str = "") -> dict:
     """Published prices for a stay. Dates are ISO (2026-11-13). extras: any of "breakfast",
     "late_checkout". cancellation: "non_refundable", "free_until_48h" or "free_until_24h".
+    city: e.g. "Paris" or "Barcelona"; empty searches every city. New hotels can join at any time.
     Opens the live negotiation room in clients that show apps."""
     tenant = tenant_of(ctx)
-    return {"room": tenant, "results": desk.search(check_in, check_out, guests, extras, cancellation, tenant)}
+    results = desk.search(check_in, check_out, guests, extras, cancellation, tenant, city=city)
+    out = {"room": tenant, "results": results}
+    if city and not results:
+        out["cities"] = sorted({h.city for h in list(desk.hotels.values()) if h.city})
+    return out
 
 
 @apps.tool(resource_uri=PANEL, visibility=["app"])
@@ -94,7 +104,7 @@ def negotiation_feed(ctx: Context, room: str = "", since: int = 0) -> dict:
 
 
 server = MCPServer("hotels", extensions=[apps], instructions="""Hotel marketplace for AI travel agents (simulated inventory).
-1. search_hotels shows published prices; they are a starting point, not final.
+1. search_hotels shows published prices (pass the city); they are a starting point, not final.
 2. negotiate sends your message to a hotel's own sales agent. State the traveller's dates, guests,
    must-haves and budget. Keep the negotiation_id to continue. Hotels can trade price against
    extras, cancellation terms and the deposit hold.
@@ -150,8 +160,25 @@ PAGE_FIELDS = ("booking_ref", "hotel", "room", "guests", "check_in", "check_out"
                "total", "deposit", "currency", "status", "payment_intent_id", "client_secret", "fx")
 
 
-def dashboard_page(data_url: str) -> bytes:
-    return (ROOT / "web" / "hotel_dashboard.html").read_text().replace("__DATA_URL__", json.dumps(data_url)).encode()
+def dashboard_page(data_url: str, join_url: str | None) -> bytes:
+    return (ROOT / "web" / "hotel_dashboard.html").read_text().replace("__DATA_URL__", json.dumps(data_url)) \
+        .replace("__JOIN_URL__", json.dumps(join_url)).encode()
+
+
+def join_page(post_url: str) -> bytes:
+    """Hotel sign-up form; it posts JSON to post_url and polls post_url/status/<hotel_id>."""
+    styles = {k: v["label"] for k, v in STYLES.items()}
+    return (ROOT / "web" / "hotel_join.html").read_text().replace("__POST_URL__", json.dumps(post_url)) \
+        .replace("__STYLES__", json.dumps(styles)).encode()
+
+
+def join_post(form: dict) -> tuple[int, dict]:
+    if not isinstance(form, dict):
+        return 400, {"error": "send the sign-up form as a JSON object"}
+    try:
+        return 200, desk.onboarding.join(form)
+    except SignupError as e:
+        return 422, {"error": str(e)}
 
 
 def dashboard_post(rest: str) -> tuple[int, dict]:
@@ -162,6 +189,8 @@ def dashboard_post(rest: str) -> tuple[int, dict]:
         out = desk.revert_change(m.group(1))
     elif m := re.fullmatch(r"/bookings/([\w-]+)/([a-z-]+)", rest):
         out = desk.hotel_action(m.group(1), m.group(2))
+    elif m := re.fullmatch(r"/onboarding/(htl_\w+)/retry", rest):
+        out = desk.onboarding.retry(m.group(1))
     elif rest == "/payout-cycle":
         out = desk.run_payout_cycle()
     elif m := re.fullmatch(r"/simulate/overbook/(\w+)/(\d{4}-\d{2}-\d{2})", rest):
@@ -230,7 +259,12 @@ class PayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/dashboard":
-            return self._send(200, dashboard_page("/dashboard/data.json"), "text/html; charset=utf-8")
+            return self._send(200, dashboard_page("/dashboard/data.json", "/join"), "text/html; charset=utf-8")
+        if self.path == "/join":
+            return self._send(200, join_page("/join"), "text/html; charset=utf-8")
+        if m := re.fullmatch(r"/join/status/(htl_\w+)", self.path):
+            st = desk.onboarding.status(m.group(1))
+            return self._send(404 if "error" in st else 200, st)
         if self.path == "/dashboard/data.json":
             return self._send(200, desk.insights())
         self._send(*web_get(self.path))
@@ -239,7 +273,12 @@ class PayHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path == "/webhooks/airwallex":
             return self._send(*(inbox.receive(dict(self.headers), raw) if inbox else (404, {"error": "not found"})))
-        body = json.loads(raw or b"{}")
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            return self._send(400, {"error": "invalid JSON"})
+        if self.path == "/join":
+            return self._send(*join_post(body))
         if self.path.startswith("/dashboard/"):
             return self._send(*dashboard_post(self.path.removeprefix("/dashboard")))
         self._send(*web_metal_paid(self.path, body))
@@ -275,6 +314,32 @@ def serve_http() -> None:
         return JSONResponse(body, status)
 
     admin = env("HOTELS_ADMIN_TOKEN", "")
+    join = env("HOTELS_JOIN_TOKEN", "")
+
+    def join_allowed(request: Request) -> bool:
+        return len(join) >= 16 and hmac.compare_digest(request.path_params["token"], join)
+
+    async def join_form(request: Request) -> Response:
+        """Hotels sign themselves up: listed at once, Airwallex account opened in the background."""
+        if not join_allowed(request):
+            return JSONResponse({"error": "not found"}, 404)
+        if request.method == "GET":
+            return Response(join_page(f"/join/{join}"), media_type="text/html; charset=utf-8")
+        try:
+            form = await request.json()
+        except ValueError:
+            return JSONResponse({"error": "invalid JSON"}, 400)
+        status, body = await run_in_threadpool(join_post, form)
+        return JSONResponse(body, status)
+
+    async def join_status(request: Request) -> Response:
+        if not join_allowed(request) or not re.fullmatch(r"htl_\w+", request.path_params["hotel"]):
+            return JSONResponse({"error": "not found"}, 404)
+        st = desk.onboarding.status(request.path_params["hotel"])
+        return JSONResponse(st, 404 if "error" in st else 200)
+
+    server.custom_route("/join/{token}", methods=["GET", "POST"])(join_form)
+    server.custom_route("/join/{token}/status/{hotel}", methods=["GET"])(join_status)
 
     async def dashboard(request: Request) -> Response:
         """Hotel staff only: floors and lost demand. Off unless HOTELS_ADMIN_TOKEN is set."""
@@ -282,7 +347,8 @@ def serve_http() -> None:
             return JSONResponse({"error": "not found"}, 404)
         if request.url.path.endswith("/data.json"):
             return JSONResponse(await run_in_threadpool(desk.insights))
-        return Response(dashboard_page(f"/dashboard/{admin}/data.json"), media_type="text/html; charset=utf-8")
+        return Response(dashboard_page(f"/dashboard/{admin}/data.json", f"/join/{join}" if len(join) >= 16 else None),
+                        media_type="text/html; charset=utf-8")
 
     server.custom_route("/dashboard/{token}", methods=["GET"])(dashboard)
     server.custom_route("/dashboard/{token}/data.json", methods=["GET"])(dashboard)
@@ -296,6 +362,7 @@ def serve_http() -> None:
 
     for route in ("/dashboard/{token}/suggestions/{sid}/apply", "/dashboard/{token}/changes/{sid}/revert",
                   "/dashboard/{token}/bookings/{ref}/{action}", "/dashboard/{token}/payout-cycle",
+                  "/dashboard/{token}/onboarding/{hotel}/retry",
                   "/dashboard/{token}/simulate/overbook/{hotel}/{night}",
                   "/dashboard/{token}/simulate/sell/{hotel}/{room}/{night}/{rooms}"):
         server.custom_route(route, methods=["POST"])(dashboard_action)

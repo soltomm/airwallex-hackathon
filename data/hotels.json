@@ -68,7 +68,8 @@
     "platform": {
       "commission_pct": "0.12",
       "connected_account": "acct_S02Wp_fCMnCHf9x1SvPDqg"
-    }
+    },
+    "city": "Paris"
   },
   {
     "id": "htl_paris_opera",
@@ -126,6 +127,374 @@
     "platform": {
       "commission_pct": "0.12",
       "connected_account": "acct_xii4dx0iPd-ZXNdoI7vtGg"
+    },
+    "city": "Paris"
+  },
+  {
+    "id": "htl_paris_montmartre",
+    "name": "Butte Montmartre (simulated)",
+    "city": "Paris",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DBL",
+        "name": "Cosy Double",
+        "max_guests": 2,
+        "total_rooms": 26,
+        "published_rate": "145",
+        "floor_rate": "110"
+      },
+      {
+        "code": "TRP",
+        "name": "Triple Room",
+        "max_guests": 3,
+        "total_rooms": 6,
+        "published_rate": "185",
+        "floor_rate": "145"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DBL",
+        "night": "2026-11-13",
+        "sold": 14
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-14",
+        "sold": 18
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-15",
+        "sold": 10
+      },
+      {
+        "room": "TRP",
+        "night": "2026-11-13",
+        "sold": 2
+      },
+      {
+        "room": "TRP",
+        "night": "2026-11-14",
+        "sold": 4
+      },
+      {
+        "room": "TRP",
+        "night": "2026-11-15",
+        "sold": 1
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "6",
+      "breakfast_price": "14",
+      "late_checkout_price": "20",
+      "high_occupancy": "0.90",
+      "approval_band": "0.03",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.08",
+        "free_until_24h": "0.12"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.30",
+        "free_until_24h": "0.40"
+      },
+      "negotiation_style": "Budget hotel up the hill in Montmartre. Fill rooms: discount readily on quiet nights, keep extras simple, and ask for a bigger deposit hold in exchange for flexible cancellation."
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_FaZRjkY6MnCsPbj0kY9_JA"
+    }
+  },
+  {
+    "id": "htl_paris_rivegauche",
+    "name": "Rive Gauche Palace (simulated)",
+    "city": "Paris",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DLX",
+        "name": "Deluxe King",
+        "max_guests": 2,
+        "total_rooms": 18,
+        "published_rate": "520",
+        "floor_rate": "440"
+      },
+      {
+        "code": "STE",
+        "name": "Seine Suite",
+        "max_guests": 3,
+        "total_rooms": 5,
+        "published_rate": "980",
+        "floor_rate": "820"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DLX",
+        "night": "2026-11-13",
+        "sold": 10
+      },
+      {
+        "room": "DLX",
+        "night": "2026-11-14",
+        "sold": 14
+      },
+      {
+        "room": "DLX",
+        "night": "2026-11-15",
+        "sold": 7
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-13",
+        "sold": 2
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-14",
+        "sold": 3
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-15",
+        "sold": 1
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "18",
+      "breakfast_price": "42",
+      "late_checkout_price": "60",
+      "high_occupancy": "0.80",
+      "approval_band": "0.08",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.10",
+        "free_until_24h": "0.15"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.20",
+        "free_until_24h": "0.30"
+      },
+      "negotiation_style": "Luxury palace hotel on the Left Bank. Rarely discount the room; win the guest with breakfast, late checkout and flexible terms instead. Keep the tone warm and discreet."
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_l8cYWfU0Ny6IXgADKUqHQQ"
+    }
+  },
+  {
+    "id": "htl_bcn_gotic",
+    "name": "Casa Gòtica (simulated)",
+    "city": "Barcelona",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DBL",
+        "name": "Patio Double",
+        "max_guests": 2,
+        "total_rooms": 16,
+        "published_rate": "230",
+        "floor_rate": "180"
+      },
+      {
+        "code": "STE",
+        "name": "Terrace Suite",
+        "max_guests": 3,
+        "total_rooms": 4,
+        "published_rate": "360",
+        "floor_rate": "290"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DBL",
+        "night": "2026-11-13",
+        "sold": 9
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-14",
+        "sold": 12
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-15",
+        "sold": 6
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-13",
+        "sold": 1
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-14",
+        "sold": 2
+      },
+      {
+        "room": "STE",
+        "night": "2026-11-15",
+        "sold": 0
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "8",
+      "breakfast_price": "20",
+      "late_checkout_price": "35",
+      "high_occupancy": "0.85",
+      "approval_band": "0.05",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.10",
+        "free_until_24h": "0.15"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.20",
+        "free_until_24h": "0.30"
+      },
+      "negotiation_style": "Boutique hotel in the Gothic Quarter. Protect the room rate: prefer adding breakfast or late checkout over cutting price. Flexible on cancellation if the guest accepts a larger deposit hold."
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_8xClHEqmMS2JEeG-ZU4cjQ"
+    }
+  },
+  {
+    "id": "htl_bcn_barceloneta",
+    "name": "Barceloneta Bay (simulated)",
+    "city": "Barcelona",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DBL",
+        "name": "Sea View Double",
+        "max_guests": 2,
+        "total_rooms": 40,
+        "published_rate": "210",
+        "floor_rate": "170"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DBL",
+        "night": "2026-11-13",
+        "sold": 30
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-14",
+        "sold": 36
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-15",
+        "sold": 35
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "9",
+      "breakfast_price": "22",
+      "late_checkout_price": "45",
+      "high_occupancy": "0.85",
+      "approval_band": "0.05",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.12",
+        "free_until_24h": "0.18"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.25",
+        "free_until_24h": "0.35"
+      },
+      "negotiation_style": "Busy seafront business hotel, nearly full this weekend. Little room to discount on busy nights; never give late checkout on full days. Reward guests who take non-refundable terms."
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_xOQfgrDOPMmJ1u1NcNPiAg"
+    }
+  },
+  {
+    "id": "htl_bcn_eixample",
+    "name": "Eixample Rooms (simulated)",
+    "city": "Barcelona",
+    "currency": "EUR",
+    "rooms": [
+      {
+        "code": "DBL",
+        "name": "Standard Double",
+        "max_guests": 2,
+        "total_rooms": 30,
+        "published_rate": "120",
+        "floor_rate": "90"
+      },
+      {
+        "code": "FAM",
+        "name": "Family Room",
+        "max_guests": 4,
+        "total_rooms": 6,
+        "published_rate": "190",
+        "floor_rate": "150"
+      }
+    ],
+    "booked": [
+      {
+        "room": "DBL",
+        "night": "2026-11-13",
+        "sold": 8
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-14",
+        "sold": 12
+      },
+      {
+        "room": "DBL",
+        "night": "2026-11-15",
+        "sold": 5
+      },
+      {
+        "room": "FAM",
+        "night": "2026-11-13",
+        "sold": 1
+      },
+      {
+        "room": "FAM",
+        "night": "2026-11-14",
+        "sold": 2
+      },
+      {
+        "room": "FAM",
+        "night": "2026-11-15",
+        "sold": 1
+      }
+    ],
+    "rules": {
+      "breakfast_cost": "5",
+      "breakfast_price": "12",
+      "late_checkout_price": "15",
+      "high_occupancy": "0.90",
+      "approval_band": "0.03",
+      "risk_premium": {
+        "non_refundable": "0",
+        "free_until_48h": "0.08",
+        "free_until_24h": "0.12"
+      },
+      "min_deposit": {
+        "non_refundable": "1",
+        "free_until_48h": "0.30",
+        "free_until_24h": "0.40"
+      },
+      "negotiation_style": "Budget hotel in the Eixample. Fill rooms: discount readily on quiet nights, keep extras simple, and ask for a bigger deposit hold in exchange for flexible cancellation."
+    },
+    "platform": {
+      "commission_pct": "0.12",
+      "connected_account": "acct_4OVzhoerNpS0S2T7YlwVGw"
     }
   }
 ]

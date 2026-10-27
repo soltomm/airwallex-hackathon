@@ -105,6 +105,7 @@
     <div class="scroll settle" id="settlement"></div>
     <div style="margin-top:10px"><button data-path="/payout-cycle" data-kind="cycle" data-confirm="Release delivered reserves?">Run payout cycle</button></div>
   </div>
+  <div class="card section"><h2>Hotels on the marketplace <span id="joinLink"></span></h2><div class="scroll" id="marketplace"></div></div>
   <div class="card section"><h2>Bookings</h2><div class="scroll" id="bookings"></div></div>
   <div class="card section"><h2>Sandbox simulations</h2><div class="sim">
     <div><p>A hotel overbooks a night: its guests are refunded or released, its payouts clawed back, its reserve recomputed.</p>
@@ -118,6 +119,7 @@
 <div id="toast" role="status"></div>
 <script>
   const DATA_URL = __DATA_URL__;   // filled in by the server
+  const JOIN_URL = __JOIN_URL__;   // hotel sign-up page, or null when sign-ups are off
   const BASE = DATA_URL.replace(/\/data\.json$/, '');
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -191,6 +193,7 @@
     act(b, b.dataset.path, body =>
       kind === 'apply' ? `Applied: ${body.applied.title}. Seller agents use it from their next step.` :
       kind === 'revert' ? `Reverted: ${body.reverted.title}.` :
+      kind === 'retry' ? `${body.name}: ${String(body.status).replaceAll('_', ' ')}` :
       kind === 'cycle' ? `Payout cycle: ${body.released.length} reserve${body.released.length === 1 ? '' : 's'} released, ${body.held.length} held.` :
       `${body.booking_ref}: ${String(body.status).replaceAll('_', ' ')}`);
   });
@@ -323,6 +326,23 @@
     const keep = (sel, html) => { const v0 = sel.value; sel.innerHTML = html; if (v0) sel.value = v0; };
     keep(document.querySelector('#simOverbook select'), hotelOpts);
     keep(document.querySelector('#simSell select'), roomOpts);
+
+    const ONBOARDING = { listed: 'listed, opening account', opening_account: 'opening Airwallex account',
+      account_created: 'account created', submitted: 'verifying', active: 'enabling cards',
+      capabilities_requested: 'enabling cards', accepting_cards: 'payouts on', capabilities_pending: 'cards pending review',
+      failed: 'onboarding failed', no_airwallex: 'no payouts (Airwallex off)', no_payouts: 'no payouts' };
+    $('joinLink').innerHTML = JOIN_URL ? `<a href="${esc(JOIN_URL)}" target="_blank" rel="noopener" style="text-transform:none;letter-spacing:0;font-weight:400">· invite a hotel ↗</a>` : '';
+    $('marketplace').innerHTML = table([
+      { h: 'Hotel', f: m => esc(m.name) },
+      { h: 'City', f: m => esc(m.city) },
+      { h: 'Joined', f: m => m.joined_at ? new Date(m.joined_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '<span class="sub">seeded</span>' },
+      { h: 'Payouts', f: m => {
+          const t = label(ONBOARDING[m.status] || m.status);
+          const cls = m.status === 'accepting_cards' ? 'ok' : ['failed', 'capabilities_pending', 'no_airwallex', 'no_payouts'].includes(m.status) ? 'bad' : 'warn';
+          return `<span class="${cls}" title="${esc(m.error || '')}">${t}</span>`; } },
+      { h: 'Connected account', f: m => m.connected_account ? `<code>${esc(m.connected_account)}</code>` : '–' },
+      { h: '', f: m => ['failed', 'capabilities_pending'].includes(m.status) && m.joined_at ? btn(`/onboarding/${m.hotel_id}/retry`, 'Retry', 'retry', 'Retry onboarding?') : '' },
+    ], (data.marketplace || []).filter(m => pick === 'all' || m.hotel_id === pick), 'No hotels yet.');
 
     $('bookings').innerHTML = table([
       { h: 'Booking', f: r => `<code>${esc(r.booking_ref)}</code>` },

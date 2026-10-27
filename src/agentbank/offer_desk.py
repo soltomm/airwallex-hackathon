@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -23,6 +24,7 @@ from .approvals import ApprovalStore
 from .audit import AuditLog
 from .bookings import BookingError, BookingStore, HotelPayments, usdz
 from .guest_currency import GUEST_CURRENCIES, describe
+from .hotel_onboarding import HotelOnboarding
 from .insights import DemandLog, report
 from .reserves import DELIVERED, ReservePolicy
 from .market_simulation import MarketSimulator
@@ -40,6 +42,11 @@ _PRIVATE = ("client_secret", "approval_fingerprint", "history", "tenant", "payou
             "negotiation_id")   # kept out of buyer-facing views
 
 
+def _fold(text: str) -> str:
+    """City names compared without case or accents ("Zürich" == "zurich")."""
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold().strip()
+
+
 @dataclass
 class Limits:
     """Caps for a shared deployment; None means unlimited (the local default)."""
@@ -54,11 +61,15 @@ class OfferDesk:
                  pay_base_url: str = "http://127.0.0.1:8009", metal_base_url: str = "http://127.0.0.1:4022",
                  payment_methods: tuple[str, ...] = PAYMENT_METHODS, limits: Limits | None = None,
                  demand: DemandLog | None = None, rulebook_path: Path | None = None,
+                 onboarding_path: Path | None = None, max_new_hotels: int | None = None,
                  now=lambda: datetime.now(timezone.utc)):
         self.hotels = hotels
         self.audit = audit
         self.ledger = ledger
         self.bookings = bookings
+        # Hotels that signed up themselves join the live inventory (before rules and bookings load)
+        self.onboarding = HotelOnboarding(hotels, onboarding_path, getattr(api, "c", None), audit,
+                                          max_hotels=max_new_hotels, now=now)
         self.reserves = ReservePolicy()
         self.payments = HotelPayments(bookings, ledger, audit, api, now=now,
                                       reserve_for=lambda b: self.reserves.pct(b["hotel_id"], self.bookings.all()))
@@ -90,7 +101,8 @@ class OfferDesk:
     def from_files(cls, root: Path, api: AirwallexAPI | None = None, **kw) -> "OfferDesk":
         return cls(load_hotels(root / "data/hotels.json"), AuditLog(root / "var/audit.jsonl"),
                    OperationLedger(root / "var/ledger.sqlite3"), BookingStore(root / "var/bookings.json"), api,
-                   demand=DemandLog(root / "var/demand.jsonl"), rulebook_path=root / "var/rule_changes.json", **kw)
+                   demand=DemandLog(root / "var/demand.jsonl"), rulebook_path=root / "var/rule_changes.json",
+                   onboarding_path=root / "var/hotels_onboarded.json", **kw)
 
     def _reserve(self, hotel_id: str, room_code: str, check_in: str, check_out: str, rooms: int = 1) -> None:
         h = self.hotels[hotel_id]
@@ -128,28 +140,34 @@ class OfferDesk:
                            reason="; ".join(d.public), **self._economics(offer))
 
     def search(self, check_in: str, check_out: str, guests: int, extras: list[str],
-               cancellation: str, tenant: str = LOCAL) -> list[dict]:
-        """Published prices for the requested terms. Everything is negotiable via negotiate()."""
+               cancellation: str, tenant: str = LOCAL, city: str = "") -> list[dict]:
+        """Published prices for the requested terms, in `city` if given (any city otherwise).
+        Everything is negotiable via negotiate()."""
         cancel = Cancellation(cancellation)
+        want = _fold(city)
         results = []
-        for h in self.hotels.values():
+        for h in list(self.hotels.values()):   # hotels may join while we search
+            if want and _fold(h.city) != want:
+                continue
             for room in h.rooms.values():
                 o = Offer(h.id, room.code, date.fromisoformat(check_in), date.fromisoformat(check_out), guests,
                           tuple(extras), cancel, h.min_deposit[cancel], Money.of(0, h.currency),
                           self.now() + OFFER_TTL)
                 o = replace(o, total=h.published_total(o))
                 d = self._policy(h.id).evaluate(o)
-                results.append({"hotel_id": h.id, "hotel": h.name, "room_code": room.code, "room": room.name,
+                results.append({"hotel_id": h.id, "hotel": h.name, "city": h.city, "room_code": room.code,
+                                "room": room.name,
                                 "max_guests": room.max_guests, "published_total": str(o.total),
                                 "bookable_as_requested": d.allowed, "notes": [] if d.allowed else list(d.public)})
         self.audit.record("search", tenant=tenant, check_in=check_in, check_out=check_out, guests=guests,
-                          extras=extras, cancellation=cancellation, results=len(results))
+                          extras=extras, cancellation=cancellation, city=city, results=len(results))
         self.demand.record("search", self.now(), tenant=tenant, check_in=check_in, check_out=check_out,
-                           guests=guests, extras=extras, cancellation=cancellation,
+                           guests=guests, extras=extras, cancellation=cancellation, city=city,
                            results=[{"hotel_id": r["hotel_id"], "room_code": r["room_code"],
                                      "bookable": r["bookable_as_requested"], "notes": r["notes"]} for r in results])
         self._emit("search", tenant, request={"check_in": check_in, "check_out": check_out, "guests": guests,
-                                              "extras": extras, "cancellation": cancellation}, results=results)
+                                              "extras": extras, "cancellation": cancellation, "city": city},
+                   results=results)
         return results
 
     def _over_limit(self, tenant: str, new: bool) -> str | None:
@@ -358,9 +376,10 @@ class OfferDesk:
         """The hotels' revenue dashboard data (hotel staff only: it includes floors and lost demand),
         with rule changes it suggests and those already applied."""
         entries, bookings = self.demand.entries(), self.bookings.all()
-        r = report(entries, self.hotels, bookings, self.now(), self.reserves)
+        r = report(entries, dict(self.hotels), bookings, self.now(), self.reserves)
         r["suggestions"] = self.rulebook.suggestions(r)
         r["rule_changes"] = self.rulebook.effects(entries, bookings)
+        r["marketplace"] = self.onboarding.summary()
         return r
 
     # ---- hotel staff (dashboard) ----------------------------------------------

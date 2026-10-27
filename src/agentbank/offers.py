@@ -112,6 +112,7 @@ class Hotel:
     night_rates: dict[tuple[str, date], Decimal] = field(default_factory=dict)    # published rate
     night_floors: dict[tuple[str, date], Decimal] = field(default_factory=dict)   # floor rate
     commission_pct: Decimal = Decimal("0")      # platform's share of each captured card payment
+    city: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Hotel":
@@ -136,7 +137,7 @@ class Hotel:
             kw["connected_account"] = platform["connected_account"]
         if "commission_pct" in platform:
             kw["commission_pct"] = Decimal(platform["commission_pct"])
-        return cls(d["id"], d["name"], cur, rooms, booked, negotiation_style=style, **kw)
+        return cls(d["id"], d["name"], cur, rooms, booked, negotiation_style=style, city=d.get("city", ""), **kw)
 
     def rules(self) -> dict:
         """The commercial rules as the seller agent sees them."""

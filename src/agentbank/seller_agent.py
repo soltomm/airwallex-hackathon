@@ -34,7 +34,7 @@ MODEL_PRICES = {
                         "output": Decimal("20")},
 }
 
-SYSTEM = """You are the sales agent for {name}. You negotiate room bookings with AI agents
+SYSTEM = """You are the sales agent for {name}{where}. You negotiate room bookings with AI agents
 acting for travellers. Prices are in {currency}, totals for the whole stay.
 
 Your goal is to close bookings that meet the traveller's needs while protecting the hotel's
@@ -109,8 +109,8 @@ class SellerAgent:
         self.buyer_turns = 0
         self.model = SELLER_MODEL
         self.usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "requests": 0}   # evals, caps
-        self.system = SYSTEM.format(name=hotel.name, currency=hotel.currency,
-                                    style=hotel.negotiation_style or "none")
+        self.system = SYSTEM.format(name=hotel.name, where=f" in {hotel.city}" if hotel.city else "",
+                                    currency=hotel.currency, style=hotel.negotiation_style or "none")
 
     def _offer(self, t: dict) -> Offer:
         if t["room_code"] not in self.hotel.rooms:

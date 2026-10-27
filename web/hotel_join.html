@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>List Your Hotel</title>
+  <style>
+    :root { --bg: #fafaf9; --card: #ffffff; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #612fff;
+            --accent-soft: #ece6ff; --ok: #15803d; --bad: #b91c1c; --warn: #b45309; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1c1917; --card: #262220; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #9b7bff;
+              --accent-soft: #2e2547; --ok: #4ade80; --bad: #f87171; --warn: #fbbf24; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .fields { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+    input, textarea { font: inherit; font-size: 14px; color: var(--fg); background: var(--card); padding: 6px 8px;
+                      border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+    textarea { resize: vertical; min-height: 64px; }
+    input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    .styles { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .style { flex-direction: row; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px;
+             padding: 10px 12px; color: var(--fg); cursor: pointer; }
+    .style:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+    .room { display: grid; gap: 8px; grid-template-columns: 2fr repeat(4, 1fr) auto; align-items: end;
+            padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .room:last-of-type { border-bottom: 0; }
+    @media (max-width: 640px) { .room { grid-template-columns: 1fr 1fr; } .room .name { grid-column: 1 / -1; } }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    .spacer { flex: 1; }
+    button { font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+             background: var(--card); color: var(--fg); cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-size: 14px; padding: 8px 18px; }
+    button:disabled { opacity: .5; cursor: default; }
+    .hint { color: var(--muted); font-size: 12px; }
+    .error { color: var(--bad); margin: 8px 0 0; }
+    ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .steps li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; color: var(--muted); }
+    .steps li .dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); margin-top: 1px; }
+    .steps li.done { color: var(--fg); } .steps li.done .dot { background: var(--ok); border-color: var(--ok); }
+    .steps li.now { color: var(--fg); } .steps li.now .dot { border-color: var(--accent); border-top-color: transparent; animation: spin 1s linear infinite; }
+    .steps li.fail .dot { background: var(--bad); border-color: var(--bad); }
+    .steps small { display: block; color: var(--muted); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .steps li.now .dot { animation: none; } }
+    .try { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 12px 14px; }
+    .try p { margin: 0 0 8px; }
+    code { font-size: 12px; }
+    blockquote { margin: 0 0 8px; font-style: italic; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>List your hotel</h1>
+  <p class="sub">Your own sales agent negotiates with travellers' AI assistants inside the rates you set here.
+    You're bookable as soon as you submit; Airwallex opens your payout account in the background.</p>
+
+  <form id="form" novalidate>
+    <div class="card">
+      <h2>Your hotel</h2>
+      <div class="fields">
+        <label>Hotel name <input name="name" required maxlength="60" autocomplete="organization"></label>
+        <label>City <input name="city" required maxlength="40" autocomplete="address-level2"></label>
+        <label>Contact email <input name="email" type="email" required maxlength="120" autocomplete="email"></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>How your agent sells</h2>
+      <div class="styles" id="styles"></div>
+      <label style="margin-top:12px">Anything else your agent should know (optional)
+        <textarea name="guidance" maxlength="300" placeholder="e.g. Rooftop bar included; we love long stays."></textarea></label>
+    </div>
+
+    <div class="card">
+      <h2>Rooms <span class="hint" style="text-transform:none;letter-spacing:0">· EUR per night. Your agent never goes below the lowest rate, and never shows it.</span></h2>
+      <div id="rooms"></div>
+      <div class="row"><button type="button" id="addRoom">Add a room type</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Extras</h2>
+      <div class="fields">
+        <label>Breakfast, per guest per night (EUR) <input name="breakfast_price" type="number" min="5" max="100" step="1" required></label>
+        <label>Late checkout, per stay (EUR) <input name="late_checkout_price" type="number" min="0" max="200" step="1" required></label>
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" id="example">Fill in an example</button>
+      <span class="spacer"></span>
+      <button type="submit" class="primary" id="submit">List my hotel</button>
+    </div>
+    <p class="error" id="error" role="alert"></p>
+  </form>
+
+  <div id="done" hidden>
+    <div class="card">
+      <h2 id="doneTitle">Onboarding</h2>
+      <ol class="steps" id="steps"></ol>
+      <p class="error" id="obError"></p>
+    </div>
+    <div class="card try">
+      <p><b>Try it now.</b> Ask Claude, with the hotels connector added:</p>
+      <blockquote id="prompt"></blockquote>
+      <button type="button" id="copy">Copy</button>
+    </div>
+  </div>
+</main>
+<script>
+  const POST_URL = __POST_URL__;   // filled in by the server
+  const STYLES = __STYLES__;
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  $('styles').innerHTML = Object.entries(STYLES).map(([k, label], i) =>
+    `<label class="style"><input type="radio" name="style" value="${esc(k)}" ${i === 0 ? 'checked' : ''}> ${esc(label)}</label>`).join('');
+
+  function addRoom(r = {}) {
+    if ($('rooms').children.length >= 4) return;
+    const div = document.createElement('div');
+    div.className = 'room';
+    div.innerHTML = `
+      <label class="name">Room type <input data-k="name" maxlength="40" value="${esc(r.name || '')}" placeholder="Classic Double"></label>
+      <label>Sleeps <input data-k="max_guests" type="number" min="1" max="6" value="${esc(r.max_guests || 2)}"></label>
+      <label>Rooms <input data-k="total_rooms" type="number" min="1" max="500" value="${esc(r.total_rooms || '')}"></label>
+      <label>Published <input data-k="published_rate" type="number" min="30" max="5000" value="${esc(r.published_rate || '')}"></label>
+      <label>Lowest <input data-k="floor_rate" type="number" min="20" max="5000" value="${esc(r.floor_rate || '')}"></label>
+      <button type="button" aria-label="Remove room type">✕</button>`;
+    div.querySelector('button').onclick = () => { if ($('rooms').children.length > 1) div.remove(); };
+    $('rooms').appendChild(div);
+    $('addRoom').disabled = $('rooms').children.length >= 4;
+  }
+  addRoom();
+  $('addRoom').onclick = () => addRoom();
+
+  $('example').onclick = () => {
+    const f = $('form');
+    f.name.value = 'Casa Lumbre'; f.city.value = 'Barcelona'; f.email.value = 'revenue@casalumbre.example';
+    f.querySelector('input[name=style][value=boutique]').checked = true;
+    f.guidance.value = 'Rooftop terrace with sea views; happy to add a welcome drink.';
+    f.breakfast_price.value = 18; f.late_checkout_price.value = 30;
+    $('rooms').innerHTML = '';
+    addRoom({ name: 'Terrace Double', max_guests: 2, total_rooms: 14, published_rate: 210, floor_rate: 165 });
+    addRoom({ name: 'Family Suite', max_guests: 4, total_rooms: 4, published_rate: 340, floor_rate: 270 });
+  };
+
+  function formData() {
+    const f = $('form');
+    return {
+      name: f.name.value, city: f.city.value, email: f.email.value,
+      style: (f.querySelector('input[name=style]:checked') || {}).value, guidance: f.guidance.value,
+      breakfast_price: f.breakfast_price.value, late_checkout_price: f.late_checkout_price.value,
+      rooms: [...$('rooms').children].map(div =>
+        Object.fromEntries([...div.querySelectorAll('input')].map(i => [i.dataset.k, i.value]))),
+    };
+  }
+
+  $('form').onsubmit = async e => {
+    e.preventDefault();
+    $('error').textContent = '';
+    $('submit').disabled = true;
+    try {
+      const res = await fetch(POST_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData()) });
+      const body = await res.json();
+      if (!res.ok || body.error) throw new Error(body.error || `HTTP ${res.status}`);
+      $('form').hidden = true; $('done').hidden = false;
+      $('doneTitle').textContent = `${body.name}, ${body.city}`;
+      $('prompt').textContent = `Find me a hotel in ${body.city} for 2 people, 13–15 Nov 2026, with breakfast, late checkout and free cancellation. Negotiate with ${body.name}, then book by card.`;
+      show(body);
+      poll(body.hotel_id);
+    } catch (err) {
+      $('error').textContent = err.message;
+      $('submit').disabled = false;
+    }
+  };
+  $('copy').onclick = () => navigator.clipboard?.writeText($('prompt').textContent).then(() => { $('copy').textContent = 'Copied'; });
+
+  // Onboarding statuses (hotel_onboarding.py) in the order they happen.
+  const ORDER = ['listed', 'opening_account', 'account_created', 'submitted', 'active', 'capabilities_requested', 'accepting_cards'];
+  const STEPS = [
+    { at: 'listed', t: 'Listed on the marketplace', s: 'Travellers’ AI assistants can find you and talk to your agent now.' },
+    { at: 'account_created', t: 'Airwallex connected account created', s: 'Through the Accounts API, under the platform.' },
+    { at: 'active', t: 'Account verified and active', s: 'Sandbox: verification is simulated.' },
+    { at: 'accepting_cards', t: 'Card payouts on', s: 'Each captured deposit is split to your account, minus 12% commission.' },
+  ];
+
+  function show(st) {
+    const pos = ORDER.indexOf(st.status);
+    const failed = st.status === 'failed' || st.status === 'capabilities_pending', off = st.status === 'no_airwallex';
+    let current = false;
+    $('steps').innerHTML = STEPS.map((step, i) => {
+      const done = i === 0 || (pos >= ORDER.indexOf(step.at) && !off);
+      let cls = done ? 'done' : '';
+      if (!done && !current && !off) { cls = failed ? 'fail' : 'now'; current = true; }
+      const extra = step.at === 'account_created' && st.connected_account ? ` <code>${esc(st.connected_account)}</code>` : '';
+      return `<li class="${cls}"><span class="dot"></span><span>${esc(step.t)}${extra}<small>${esc(step.s)}</small></span></li>`;
+    }).join('');
+    $('obError').textContent = off ? 'Airwallex isn’t configured on this server: you’re listed, but payouts are off.' : (st.error || '');
+    return st.status === 'accepting_cards' || failed || off;
+  }
+
+  async function poll(id) {
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 2500));
+      try {
+        const res = await fetch(`${POST_URL}/status/${encodeURIComponent(id)}`);
+        if (res.ok && show(await res.json())) return;
+      } catch { /* keep polling */ }
+    }
+  }
+</script>
+</body>
+</html>

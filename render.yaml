@@ -16,6 +16,10 @@ services:
         generateValue: true
       - key: HOTELS_ADMIN_TOKEN         # hotels' revenue dashboard: <service URL>/dashboard/<token>
         generateValue: true
+      - key: HOTELS_JOIN_TOKEN          # hotel sign-up page: <service URL>/join/<token> (linked from the dashboard)
+        generateValue: true
+      - key: HOTELS_MAX_NEW_HOTELS      # hotels that may sign themselves up on this deployment
+        value: "6"
       - key: ANTHROPIC_API_KEY          # pays for the hotels' seller agents
         sync: false
       - key: AWX_CLIENT_ID              # Airwallex sandbox, for card deposits

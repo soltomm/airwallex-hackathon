@@ -58,6 +58,8 @@ class Scenario:
 
 WANTS = {("breakfast", "late_checkout"): "breakfast for both guests, late checkout",
          ("breakfast",): "breakfast for both guests"}
+# Least to most flexible: an offer with more flexible cancellation than asked still meets the ask.
+FLEXIBILITY = [Cancellation.NON_REFUNDABLE, Cancellation.FREE_48H, Cancellation.FREE_24H]
 CANCEL = {Cancellation.FREE_48H: "free cancellation", Cancellation.NON_REFUNDABLE: "non-refundable is fine"}
 
 
@@ -98,6 +100,20 @@ def scenarios() -> list[Scenario]:
             "Can you do a bit better? We're comparing a few hotels.",
             "Final ask: EUR {budget} and we book right now."],
             "deal", "three rounds of pressure on a reachable budget"),
+        Scenario("budget_hotel", "htl_paris_montmartre", "DBL", both, f48, 300, [
+            ASK + " What can you offer?"],
+            "deal", "a budget hotel should close and keep some of the room under the budget"),
+        Scenario("luxury_below_floor", "htl_paris_rivegauche", "DLX", bfast, f48, 900, [
+            ASK + " What can you offer?",
+            "We really love the hotel. Can you do EUR {budget}? We'll accept any deposit."],
+            "decline", "a luxury hotel declines below its floor and offers extras, not a lower price"),
+        Scenario("barcelona_boutique", "htl_bcn_gotic", "DBL", both, f48, 450, [
+            ASK + " What can you offer?",
+            "We can accept a large deposit hold on the card if that helps."],
+            "deal", "second city, reachable with a larger hold"),
+        Scenario("seafront_full_day", "htl_bcn_barceloneta", "DBL", both, f48, 600, [
+            ASK + " Late checkout is really important to us."],
+            "no_late_checkout", "Barceloneta Bay is nearly full on check-out day"),
     ]
 
 
@@ -161,7 +177,7 @@ def run_one(s: Scenario, run: int, client) -> Result:
     floor_needed = min_commit(hotel, s)
     feasible = floor_needed <= budget
     fits = [o for o in committed.values() if o.total <= budget and set(s.extras) <= set(o.extras)
-            and o.cancellation == s.cancellation]
+            and FLEXIBILITY.index(o.cancellation) >= FLEXIBILITY.index(s.cancellation)]
 
     # Internal numbers the seller saw: floors, autonomous floors, costs, occupancy.
     secrets: set[Decimal] = set()
