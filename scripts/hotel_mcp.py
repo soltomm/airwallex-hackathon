@@ -21,6 +21,8 @@ Environment (all optional locally):
   HOTELS_JOIN_TOKEN                      hosted hotel sign-up at <PUBLIC_BASE_URL>/join/<token>
                                          (locally: http://127.0.0.1:8009/join)
   HOTELS_MAX_NEW_HOTELS                  cap on hotels that sign up themselves
+  AC_CHECKOUT_SECRET                     Kit 10: verifies Airwallex Agentic Commerce calls to
+                                         <PUBLIC_BASE_URL>/agentic-commerce/checkout (scripts/agentic_commerce.py)
 """
 import hashlib
 import hmac
@@ -37,6 +39,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from _bootstrap import ROOT, connect
 
+from agentbank.agentic_commerce import CheckoutError, MerchantCheckout, Plan, image, product
 from agentbank.bookings import BookingError
 from agentbank.config import ConfigError, load_dotenv
 from agentbank.hotel_onboarding import STYLES, SignupError
@@ -63,6 +66,7 @@ desk = OfferDesk.from_files(
 
 inbox = WebhookInbox(env("AWX_WEBHOOK_SECRET", ""), desk.on_airwallex_event, ROOT / "var/webhooks.jsonl") \
     if env("AWX_WEBHOOK_SECRET") else None
+merchant = MerchantCheckout(desk, env("AC_CHECKOUT_SECRET", ""))   # Kit 10 create_checkout; 404 without a secret
 
 
 def tenant_of(ctx: Context) -> str:
@@ -226,8 +230,18 @@ def web_get(path: str) -> tuple[int, object, str]:
             if b["method"] != "metal":
                 return 409, {"error": "not a Metal booking"}, "application/json"
             return 200, {"status": b["status"], **b["metal"]}, "application/json"
+        if m := re.fullmatch(r"/catalogue/(htl_\w+)\.svg", path):   # catalogue product images (Kit 10)
+            if m.group(1) in desk.hotels:
+                return 200, image(desk.hotels[m.group(1)]), "image/svg+xml"
+        elif m := re.fullmatch(r"/catalogue/([\w.]+)", path):          # catalogue product links (Kit 10)
+            p = Plan.parse(m.group(1))
+            h = desk.hotels.get(p.hotel_id)
+            if h and p.room_code in h.rooms and p.breakfast_guests <= h.rooms[p.room_code].max_guests:
+                return 200, product(h, p, PUBLIC), "application/json"
         if path == "/healthz":
             return 200, {"ok": True}, "application/json"
+    except CheckoutError:
+        pass
     except BookingError as e:
         return 404, {"error": str(e)}, "application/json"
     return 404, {"error": "not found"}, "application/json"
@@ -273,6 +287,8 @@ class PayHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path == "/webhooks/airwallex":
             return self._send(*(inbox.receive(dict(self.headers), raw) if inbox else (404, {"error": "not found"})))
+        if self.path == "/agentic-commerce/checkout":
+            return self._send(*merchant.receive(dict(self.headers), raw))
         try:
             body = json.loads(raw or b"{}")
         except ValueError:
@@ -303,7 +319,7 @@ def serve_http() -> None:
         status, body, ctype = await run_in_threadpool(web_get, request.url.path)
         return Response(body, status, media_type=ctype) if isinstance(body, bytes) else JSONResponse(body, status)
 
-    for route in ("/pay/{ref}", "/api/bookings/{ref}", "/healthz"):
+    for route in ("/pay/{ref}", "/api/bookings/{ref}", "/catalogue/{item}", "/healthz"):
         server.custom_route(route, methods=["GET"])(page)
 
     @server.custom_route("/webhooks/airwallex", methods=["POST"])
@@ -311,6 +327,13 @@ def serve_http() -> None:
         if inbox is None:
             return JSONResponse({"error": "not found"}, 404)
         status, body = inbox.receive(dict(request.headers), await request.body())   # raw bytes, as signed
+        return JSONResponse(body, status)
+
+    @server.custom_route("/agentic-commerce/checkout", methods=["POST"])
+    async def agentic_checkout(request: Request) -> Response:
+        """Airwallex's merchant MCP creating an order (Kit 10); signed like the webhooks."""
+        raw = await request.body()
+        status, body = await run_in_threadpool(merchant.receive, dict(request.headers), raw)
         return JSONResponse(body, status)
 
     admin = env("HOTELS_ADMIN_TOKEN", "")
