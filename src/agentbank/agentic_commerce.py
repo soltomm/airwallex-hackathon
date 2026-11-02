@@ -16,6 +16,8 @@ booking. A payment that cannot be booked (sold out meanwhile, wrong amount) is r
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import uuid
@@ -43,7 +45,21 @@ GMC_FIELDS = ("id", "title", "description", "link", "image_link", "availability"
               "brand", "condition", "product_type", "identifier_exists")
 _PLAN = r"(htl_\w+)\.(\w+)\.(ro|bb[1-9])\.(nr|f48|f24)"
 _ID = re.compile(_PLAN + r"\.(\d{8})")
-_CHECKOUT = re.compile(r"stay_(chk_[0-9a-f]{16})")
+_CHECKOUT = re.compile(r"(?:stay|confirmation)_(chk_[0-9a-f]{16})")
+_B64 = re.compile(r"[A-Za-z0-9_-]{16,}")
+
+
+def checkout_id_in(fulfillment) -> str | None:
+    """Our checkout id in the paid webhook's fulfillment echo. Airwallex hands our method and option
+    ids back base64url-encoded (dot-joined), so look in the decoded pieces as well as the plain text."""
+    text = json.dumps(fulfillment or {})
+    pieces = [text]
+    for token in _B64.findall(text):
+        try:
+            pieces.append(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("ascii"))
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            pass
+    return next((m.group(1) for piece in pieces if (m := _CHECKOUT.search(piece))), None)
 
 
 class CheckoutError(ValueError):
@@ -256,14 +272,14 @@ class MerchantCheckout:
         obj = (event.get("data") or {}).get("object") or {}
         if event.get("name") != "payment_intent.succeeded" or not obj.get("agentic_payment_data"):
             return None
-        m = _CHECKOUT.search(json.dumps(obj["agentic_payment_data"].get("fulfillment") or {}))
-        quote = self.desk.ledger.get(f"agentic_checkout:{m.group(1)}") if m else None
+        checkout_id = checkout_id_in(obj["agentic_payment_data"].get("fulfillment"))
+        quote = self.desk.ledger.get(f"agentic_checkout:{checkout_id}") if checkout_id else None
         if quote is None or not quote.result:
             self.desk.audit.record("agentic_payment_unmatched", payment_intent_id=obj.get("id"))
             return None
         try:
             done = self.desk.ledger.run(f"agentic_paid:{obj['id']}",
-                                        lambda _rid: self._book(m.group(1), quote.result, obj))
+                                        lambda _rid: self._book(checkout_id, quote.result, obj))
         except DuplicateOperation as e:
             done = e.op.result or {}
         return done.get("booking_ref")

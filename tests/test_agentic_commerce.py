@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from agentbank.agentic_commerce import (DAYS, GMC_FIELDS, MerchantCheckout, Night, batches, catalogue, night_price,
-                                        plans, tsv)
+from agentbank.agentic_commerce import (DAYS, GMC_FIELDS, MerchantCheckout, Night, batches, catalogue, checkout_id_in,
+                                        night_price, plans, tsv)
 from agentbank.audit import AuditLog
 from agentbank.bookings import BookingStore
 from agentbank.ledger import OperationLedger
@@ -166,6 +166,13 @@ class CheckoutTests(unittest.TestCase):
         self.assertIsNone(self.checkout.on_payment(self.paid(quote, amount="341.00", pid="int_2")))
         self.assertEqual(self.api.calls[-1], ("refund", "341.00 EUR"))
         self.assertEqual(self.desk.bookings.all(), {})
+
+    def test_checkout_id_is_found_in_base64_encoded_fulfillment_ids(self):
+        # as seen live: Airwallex echoes our option id base64url-encoded, then ".", then the method id
+        option = "Y29uZmlybWF0aW9uX2Noa183ZTVkMGFkYjBmMGU0MTY0.c3RheV9jaGtfN2U1ZDBhZGIwZjBlNDE2NA."
+        self.assertEqual(checkout_id_in({"option_id": option}), "chk_7e5d0adb0f0e4164")
+        self.assertEqual(checkout_id_in({"method_id": "stay_chk_7e5d0adb0f0e4164"}), "chk_7e5d0adb0f0e4164")
+        self.assertIsNone(checkout_id_in({"option_id": "c29tZXRoaW5nX2Vsc2VfZW50aXJlbHk"}))
 
     def test_other_events_are_left_to_the_desk(self):
         self.assertIsNone(self.checkout.on_payment({"id": "evt_x", "name": "payment_intent.succeeded",
