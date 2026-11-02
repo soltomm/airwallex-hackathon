@@ -37,6 +37,7 @@ from .policy import Verdict
 from .seller_agent import SellerAgent, usage_cost
 
 PAYMENT_METHODS = ("card", "metal")
+AGENTIC = "agentic"   # paid through Airwallex Agentic Commerce before booking (agentic_commerce.py)
 LOCAL = "local"
 _PRIVATE = ("client_secret", "approval_fingerprint", "history", "tenant", "payout", "settlement",
             "negotiation_id")   # kept out of buyer-facing views
@@ -222,7 +223,7 @@ class OfferDesk:
              tenant: str = LOCAL, currency: str | None = None) -> dict:
         if not traveller_confirmed:
             return {"result": "not_booked", "reason": "show the traveller the exact terms and get a yes first"}
-        if payment_method not in self.payment_methods:
+        if payment_method not in self.payment_methods and payment_method != AGENTIC:
             return {"result": "not_booked",
                     "reason": f"payment_method must be one of {', '.join(self.payment_methods)} on this server"}
         currency = (currency or "").upper() or None
@@ -262,7 +263,7 @@ class OfferDesk:
                 **({"metal": {"usdz": usdz(offer.deposit, h.usdz_per_eur), "pay_to": h.metal_payee}}
                    if payment_method == "metal" else {}),
                 **({"payout": {"connected_account": h.connected_account, "commission_pct": str(h.commission_pct)}}
-                   if payment_method == "card" and h.connected_account else {})})
+                   if payment_method in ("card", AGENTIC) and h.connected_account else {})})
             return {"booking_ref": ref}
 
         try:
@@ -334,6 +335,8 @@ class OfferDesk:
         if b["status"] == "awaiting_payment":
             if b["method"] == "card" and not b.get("payment_intent_id"):
                 view["next_step"] = "card payment not open yet: call booking_status to retry"
+            elif b["method"] == AGENTIC:
+                view["next_step"] = "paid through Airwallex; confirming the booking"
             elif b["method"] == "card":
                 hold = b["cancellation"] != Cancellation.NON_REFUNDABLE.value
                 view["next_step"] = (f"traveller opens {self.pay_base_url}/pay/{ref} and "

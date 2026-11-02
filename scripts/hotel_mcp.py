@@ -23,6 +23,8 @@ Environment (all optional locally):
   HOTELS_MAX_NEW_HOTELS                  cap on hotels that sign up themselves
   AC_CHECKOUT_SECRET                     Kit 10: verifies Airwallex Agentic Commerce calls to
                                          <PUBLIC_BASE_URL>/agentic-commerce/checkout (scripts/agentic_commerce.py)
+  SUPABASE_URL, SUPABASE_ANON_KEY        Kit 10: shoppers sign in at <PUBLIC_BASE_URL>/oauth/consent, the
+                                         Authorization Path of the Supabase OAuth server Claude connects through
 """
 import hashlib
 import hmac
@@ -39,7 +41,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from _bootstrap import ROOT, connect
 
-from agentbank.agentic_commerce import CheckoutError, MerchantCheckout, Plan, image, product
+from agentbank.agentic_commerce import CheckoutError, MerchantCheckout, Night, image, product
 from agentbank.bookings import BookingError
 from agentbank.config import ConfigError, load_dotenv
 from agentbank.hotel_onboarding import STYLES, SignupError
@@ -64,9 +66,9 @@ desk = OfferDesk.from_files(
     max_new_hotels=int(env("HOTELS_MAX_NEW_HOTELS")) if env("HOTELS_MAX_NEW_HOTELS") else None)
 
 
-inbox = WebhookInbox(env("AWX_WEBHOOK_SECRET", ""), desk.on_airwallex_event, ROOT / "var/webhooks.jsonl") \
-    if env("AWX_WEBHOOK_SECRET") else None
 merchant = MerchantCheckout(desk, env("AC_CHECKOUT_SECRET", ""))   # Kit 10 create_checkout; 404 without a secret
+inbox = WebhookInbox(env("AWX_WEBHOOK_SECRET", ""), lambda e: merchant.on_payment(e) or desk.on_airwallex_event(e),
+                     ROOT / "var/webhooks.jsonl") if env("AWX_WEBHOOK_SECRET") else None
 
 
 def tenant_of(ctx: Context) -> str:
@@ -221,6 +223,10 @@ def web_get(path: str) -> tuple[int, object, str]:
             data = json.dumps({k: b.get(k) for k in PAGE_FIELDS}).replace("</", "<\\/")
             page = (ROOT / "web" / "hotel_pay.html").read_text().replace("__BOOKING__", data)
             return 200, page.encode(), "text/html; charset=utf-8"
+        if path.split("?")[0] == "/oauth/consent":   # the local server passes the query string too
+            data = json.dumps({"url": env("SUPABASE_URL", ""), "key": env("SUPABASE_ANON_KEY", "")}).replace("</", "<\\/")
+            page = (ROOT / "web" / "oauth_consent.html").read_text().replace("__CONFIG__", data)
+            return 200, page.encode(), "text/html; charset=utf-8"
         if m := re.fullmatch(r"/api/bookings/([\w-]+)", path):
             b = desk.booking_status(m.group(1), tenant=None)
             return 200, {"booking_ref": b.get("booking_ref"), "status": b.get("status"), "error": b.get("error")}, \
@@ -234,10 +240,10 @@ def web_get(path: str) -> tuple[int, object, str]:
             if m.group(1) in desk.hotels:
                 return 200, image(desk.hotels[m.group(1)]), "image/svg+xml"
         elif m := re.fullmatch(r"/catalogue/([\w.]+)", path):          # catalogue product links (Kit 10)
-            p = Plan.parse(m.group(1))
-            h = desk.hotels.get(p.hotel_id)
-            if h and p.room_code in h.rooms and p.breakfast_guests <= h.rooms[p.room_code].max_guests:
-                return 200, product(h, p, PUBLIC), "application/json"
+            n = Night.parse(m.group(1))
+            h = desk.hotels.get(n.plan.hotel_id)
+            if h and n.plan.room_code in h.rooms and n.plan.breakfast_guests <= h.rooms[n.plan.room_code].max_guests:
+                return 200, product(h, n, PUBLIC), "application/json"
         if path == "/healthz":
             return 200, {"ok": True}, "application/json"
     except CheckoutError:
@@ -319,7 +325,7 @@ def serve_http() -> None:
         status, body, ctype = await run_in_threadpool(web_get, request.url.path)
         return Response(body, status, media_type=ctype) if isinstance(body, bytes) else JSONResponse(body, status)
 
-    for route in ("/pay/{ref}", "/api/bookings/{ref}", "/catalogue/{item}", "/healthz"):
+    for route in ("/pay/{ref}", "/api/bookings/{ref}", "/catalogue/{item}", "/oauth/consent", "/healthz"):
         server.custom_route(route, methods=["GET"])(page)
 
     @server.custom_route("/webhooks/airwallex", methods=["POST"])
@@ -331,7 +337,7 @@ def serve_http() -> None:
 
     @server.custom_route("/agentic-commerce/checkout", methods=["POST"])
     async def agentic_checkout(request: Request) -> Response:
-        """Airwallex's merchant MCP creating an order (Kit 10); signed like the webhooks."""
+        """Airwallex's merchant MCP pricing a cart (Kit 10); signed like the webhooks."""
         raw = await request.body()
         status, body = await run_in_threadpool(merchant.receive, dict(request.headers), raw)
         return JSONResponse(body, status)

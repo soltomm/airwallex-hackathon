@@ -1,37 +1,39 @@
 """Kit 10: the hotels as an Airwallex Agentic Commerce merchant.
 
 Airwallex hosts the shopping agents' MCP (product search, checkout) from a catalogue we upload,
-and calls our create_checkout URL when an agent buys. This module builds that catalogue from the
-live inventory, as Google Merchant Center rows, and answers create_checkout through the offer
-desk, so a catalogue checkout gets the same re-check, ledger and card deposit as a negotiated one.
+calls our create_checkout URL to price a cart, takes the payment itself (managed payment), and
+tells us on the payment_intent.succeeded webhook. Contract: airwallexdev.com/agentic-commerce.
 
-One product per room, rate plan and cancellation term: room only, or breakfast for 1..max guests
-(breakfast is priced per guest), each non-refundable or free to cancel until 48h / 24h. `price`
-is the published rate per night; the total for the shopper's dates comes back from checkout.
-A checkout may instead carry an `offer_id` a hotel's seller agent committed to, and is then
-booked at that negotiated price.
+A cart carries no dates, so a product is one room-night: a room, rate plan (room only, or
+breakfast for 1..max guests, priced per guest) and cancellation term on one date, grouped by
+plan as GMC variants. A stay is the consecutive nights of one plan in one cart.
 
-Airwallex has published the onboarding and catalogue API but not the create_checkout request,
-response or signature. Their assumed shape lives in parse_checkout() and checkout_response(), and
-the signature reuses the webhook convention (webhooks.signature_ok: x-timestamp + x-signature, hex
-HMAC-SHA256 of timestamp + raw body). Replace those when the spec is shared.
+create_checkout prices the cart and books nothing: it records the quote under our checkout id
+and offers one DIGITAL fulfillment method whose id carries that checkout id. The paid webhook
+echoes that id back (agentic_payment_data.fulfillment), and only then is the room booked through
+the offer desk, at the quoted price, with the same policy re-check, ledger and payouts as any
+booking. A payment that cannot be booked (sold out meanwhile, wrong amount) is refunded.
 """
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, replace
-from datetime import date
+import uuid
+from dataclasses import dataclass
+from datetime import date, timedelta
+from decimal import Decimal
 
-from .ledger import DuplicateOperation, OpStatus
+from .ledger import DuplicateOperation
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer
+from .policy import Verdict
 from .webhooks import signature_ok
 
 API = "/pa/agentic_commerce"     # under the Airwallex API base (/api/v1)
 BATCH = 300                      # most products one direct upsert takes
 TENANT = "agentic_commerce"      # bookings made through Airwallex's merchant MCP
 MAX_NIGHTS = 30
+DAYS = 60                        # nights on sale, from today
 
 CANCEL_CODES = {Cancellation.NON_REFUNDABLE: "nr", Cancellation.FREE_48H: "f48", Cancellation.FREE_24H: "f24"}
 CANCEL_LABELS = {Cancellation.NON_REFUNDABLE: "non-refundable",
@@ -39,7 +41,9 @@ CANCEL_LABELS = {Cancellation.NON_REFUNDABLE: "non-refundable",
                  Cancellation.FREE_24H: "free cancellation until 24h before arrival"}
 GMC_FIELDS = ("id", "item_group_id", "title", "description", "link", "image_link", "availability", "price",
               "brand", "condition", "product_type", "identifier_exists")
-_ID = re.compile(r"(htl_\w+)\.(\w+)\.(ro|bb[1-9])\.(nr|f48|f24)")
+_PLAN = r"(htl_\w+)\.(\w+)\.(ro|bb[1-9])\.(nr|f48|f24)"
+_ID = re.compile(_PLAN + r"\.(\d{8})")
+_CHECKOUT = re.compile(r"stay_(chk_[0-9a-f]{16})")
 
 
 class CheckoutError(ValueError):
@@ -50,7 +54,7 @@ class CheckoutError(ValueError):
 
 @dataclass(frozen=True)
 class Plan:
-    """What one catalogue product sells."""
+    """A room, rate plan and cancellation term: one GMC item group."""
     hotel_id: str
     room_code: str
     breakfast_guests: int          # 0: room only
@@ -61,13 +65,28 @@ class Plan:
         board = f"bb{self.breakfast_guests}" if self.breakfast_guests else "ro"
         return f"{self.hotel_id}.{self.room_code}.{board}.{CANCEL_CODES[self.cancellation]}"
 
+
+@dataclass(frozen=True)
+class Night:
+    """What one catalogue product sells: a plan on one date."""
+    plan: Plan
+    night: date
+
+    @property
+    def product_id(self) -> str:
+        return f"{self.plan.product_id}.{self.night:%Y%m%d}"
+
     @classmethod
-    def parse(cls, product_id: str) -> "Plan":
+    def parse(cls, product_id: str) -> "Night":
         m = _ID.fullmatch(product_id or "")
         if not m:
             raise CheckoutError(422, f"unknown product {product_id!r}")
         cancel = next(c for c, code in CANCEL_CODES.items() if code == m.group(4))
-        return cls(m.group(1), m.group(2), 0 if m.group(3) == "ro" else int(m.group(3)[2:]), cancel)
+        try:
+            night = date(int(m.group(5)[:4]), int(m.group(5)[4:6]), int(m.group(5)[6:]))
+        except ValueError:
+            raise CheckoutError(422, f"unknown product {product_id!r}") from None
+        return cls(Plan(m.group(1), m.group(2), 0 if m.group(3) == "ro" else int(m.group(3)[2:]), cancel), night)
 
 
 def plans(h: Hotel) -> list[Plan]:
@@ -75,34 +94,38 @@ def plans(h: Hotel) -> list[Plan]:
             for n in range(room.max_guests + 1) for cancel in Cancellation]
 
 
-def nightly_price(h: Hotel, p: Plan) -> Money:
-    """Published price per night: the room, breakfast per guest, and the refundable-terms premium."""
-    amount = h.rooms[p.room_code].published_rate.amount + h.breakfast_price * p.breakfast_guests
+def night_price(h: Hotel, p: Plan, night: date) -> Money:
+    """Published price of one night: the room, breakfast per guest, and the refundable-terms premium."""
+    amount = h.rate(p.room_code, night) + h.breakfast_price * p.breakfast_guests
     return Money.of(amount * (1 + h.risk_premium[p.cancellation]), h.currency)
 
 
-def product(h: Hotel, p: Plan, base_url: str) -> dict:
+def product(h: Hotel, n: Night, base_url: str) -> dict:
+    p = n.plan
     room = h.rooms[p.room_code]
     board = f"breakfast for {p.breakfast_guests}" if p.breakfast_guests else "room only"
     guests = f"{p.breakfast_guests} guest{'s' * (p.breakfast_guests > 1)}" if p.breakfast_guests \
         else f"up to {room.max_guests} guests"
-    price = nightly_price(h, p)
+    price = night_price(h, p, n.night)
     return {
-        "id": p.product_id, "item_group_id": f"{h.id}.{room.code}",
-        "title": f"{h.name}, {room.name}, {board}, {CANCEL_LABELS[p.cancellation].split(' until')[0]}",
+        "id": n.product_id, "item_group_id": p.product_id,
+        "title": f"{h.name}, {room.name}, {board}, {CANCEL_LABELS[p.cancellation].split(' until')[0]}, "
+                 f"night of {n.night:%a %d %b %Y}",
         "description": f"{room.name} at {h.name}{f', {h.city}' if h.city else ''}: {board}, {guests}, "
-                       f"{CANCEL_LABELS[p.cancellation]}. Price per night; checkout returns the total for your "
-                       f"dates and the deposit held on your card. Rates are negotiable with the hotel's agent.",
-        "link": f"{base_url}/catalogue/{p.product_id}", "image_link": f"{base_url}/catalogue/{h.id}.svg",
-        "availability": "in_stock", "price": f"{price.amount} {price.currency}",
+                       f"{CANCEL_LABELS[p.cancellation]}. One night, arriving {n.night:%a %d %b %Y}; for a longer "
+                       f"stay add the following nights of the same rate to the cart. Paid in full at checkout.",
+        "link": f"{base_url}/catalogue/{n.product_id}", "image_link": f"{base_url}/catalogue/{h.id}.svg",
+        "availability": "in_stock" if h.available(p.room_code, n.night) else "out_of_stock",
+        "price": f"{price.amount} {price.currency}",
         "brand": h.name, "condition": "new",
         "product_type": " > ".join(x for x in ("Hotels", h.city, h.name) if x), "identifier_exists": "no",
     }
 
 
-def catalogue(hotels: dict[str, Hotel], base_url: str) -> list[dict]:
+def catalogue(hotels: dict[str, Hotel], base_url: str, start: date, days: int = DAYS) -> list[dict]:
     base_url = base_url.rstrip("/")
-    return [product(h, p, base_url) for h in list(hotels.values()) for p in plans(h)]
+    return [product(h, Night(p, start + timedelta(days=i)), base_url)
+            for h in list(hotels.values()) for p in plans(h) for i in range(days)]
 
 
 def tsv(rows: list[dict]) -> str:
@@ -125,53 +148,49 @@ def image(h: Hotel) -> bytes:
             f' font-family="Helvetica,sans-serif" font-size="24" text-anchor="middle">{h.city}</text></svg>').encode()
 
 
+def minor(m: Money) -> int:
+    return int((m.amount * 100).to_integral_value())
+
+
 # ---- create_checkout --------------------------------------------------------
 @dataclass(frozen=True)
-class CheckoutRequest:
-    checkout_id: str
-    product_id: str | None
-    offer_id: str | None
-    check_in: str | None
-    check_out: str | None
-    guests: int | None
+class Cart:
+    """A create_checkout request read as a stay: consecutive nights of one plan."""
+    plan: Plan
+    check_in: date
+    check_out: date
+    rooms: int                       # requested_quantity, the same on every night
+    line_items: tuple[dict, ...]     # as sent (id, item_id, requested_quantity)
+    currency: str
+    customer: dict
 
 
-def parse_checkout(body: dict) -> CheckoutRequest:
-    """ASSUMED shape until Airwallex shares it: an id for the checkout, one item (a product id, or a
-    negotiated offer_id), the stay dates and guests, at the top level or on the item."""
+def parse_checkout(body: dict) -> Cart:
     if not isinstance(body, dict):
         raise CheckoutError(400, "send the checkout as a JSON object")
-    items = body.get("items") or body.get("line_items") or [{}]
-    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
-        raise CheckoutError(422, "one room per checkout")
-    item = items[0]
-    pick = lambda *keys: next((src[k] for k in keys for src in (item, body) if src.get(k) not in (None, "")), None)
-    if int(pick("quantity") or 1) != 1:
-        raise CheckoutError(422, "one room per checkout")
-    checkout_id = pick("checkout_id", "checkout_session_id", "id")
-    if not checkout_id:
-        raise CheckoutError(400, "missing checkout id")
-    guests = pick("guests", "number_of_guests")
-    return CheckoutRequest(str(checkout_id), pick("product_id", "sku"), pick("offer_id"), pick("check_in"),
-                           pick("check_out"), int(guests) if guests is not None else None)
-
-
-def checkout_response(checkout_id: str, booking: dict, pay_url: str) -> dict:
-    """ASSUMED shape: our order number, what was booked, and how the shopper pays the deposit."""
-    hold = booking["cancellation"] != Cancellation.NON_REFUNDABLE.value
-    return {"checkout_id": checkout_id, "status": "created", "merchant_order_id": booking["booking_ref"],
-            "currency": booking["currency"], "total": booking["total"],
-            "line_items": [{"product_id": booking.get("product_id"), "offer_id": booking.get("offer_id"),
-                            "title": f"{booking['hotel']}, {booking['room']}", "quantity": 1,
-                            "check_in": booking["check_in"], "check_out": booking["check_out"],
-                            "guests": booking["guests"], "extras": booking["extras"],
-                            "cancellation": booking["cancellation"]}],
-            "payment": {"type": "deposit_hold" if hold else "charge", "amount": booking["deposit"],
-                        "currency": booking["currency"], "url": pay_url}}
+    items = body.get("line_items")
+    if not isinstance(items, list) or not items or not all(isinstance(i, dict) for i in items):
+        raise CheckoutError(400, "line_items must be a non-empty list")
+    if len(items) > MAX_NIGHTS:
+        raise CheckoutError(422, f"a stay is 1 to {MAX_NIGHTS} nights")
+    nights = [Night.parse(str(i.get("item_id", ""))) for i in items]
+    if len({n.plan for n in nights}) != 1:
+        raise CheckoutError(422, "one room and rate per checkout: every night must be the same plan")
+    dates = sorted(n.night for n in nights)
+    if any((b - a).days != 1 for a, b in zip(dates, dates[1:])):
+        raise CheckoutError(422, "the nights of a stay must be consecutive, each once")
+    try:
+        qty = {int(i.get("requested_quantity", 1)) for i in items}
+    except (TypeError, ValueError):
+        raise CheckoutError(400, "requested_quantity must be a number") from None
+    if len(qty) != 1 or min(qty) < 1:
+        raise CheckoutError(422, "book the same number of rooms on every night")
+    return Cart(nights[0].plan, dates[0], dates[-1] + timedelta(days=1), qty.pop(), tuple(items),
+                str(body.get("currency") or "").upper(), body.get("customer") or {})
 
 
 class MerchantCheckout:
-    """Answers Airwallex's create_checkout calls. Off (404) unless a shared secret is configured."""
+    """Answers Airwallex's create_checkout calls and books paid checkouts. Off (404) without a shared secret."""
 
     def __init__(self, desk, secret: str, tenant: str = TENANT):
         self.desk = desk
@@ -185,74 +204,95 @@ class MerchantCheckout:
         if not signature_ok(self.secret, h.get("x-timestamp", ""), raw, h.get("x-signature", ""), now_ms):
             return 401, {"error": "bad signature"}
         try:
-            req = parse_checkout(json.loads(raw))
-            return 200, self.checkout(req)
+            return 200, self.checkout(parse_checkout(json.loads(raw)))
         except ValueError as e:   # CheckoutError, or malformed JSON / numbers
-            return getattr(e, "status", 400), {"status": "rejected", "error": str(e)}
+            return getattr(e, "status", 400), {"error": str(e)}
 
-    def checkout(self, req: CheckoutRequest) -> dict:
-        """At most one booking per checkout id: a retry returns the first outcome, never a second room."""
-        key = f"agentic_checkout:{req.checkout_id}"
-        try:
-            done = self.desk.ledger.run(key, lambda _rid: self._book(req))
-        except DuplicateOperation as e:
-            if e.op.status is not OpStatus.SUCCEEDED:
-                return {"checkout_id": req.checkout_id, "status": "in_progress",
-                        "error": "this checkout is being processed; read it again shortly"}
-            done = e.op.result
-        if "booking_ref" not in done:
-            return {"checkout_id": req.checkout_id, **done}
-        booking = self.desk.bookings.get(done["booking_ref"])
-        return checkout_response(req.checkout_id, {**booking, "product_id": done.get("product_id")},
-                                 f"{self.desk.pay_base_url}/pay/{booking['booking_ref']}")
+    def _offer(self, h: Hotel, cart: Cart, total: Money) -> Offer:
+        p = cart.plan
+        return Offer(h.id, p.room_code, cart.check_in, cart.check_out, p.breakfast_guests or 1,
+                     ("breakfast",) if p.breakfast_guests else (), p.cancellation, Decimal(1), total,
+                     self.desk.now() + OFFER_TTL)
 
-    def _book(self, req: CheckoutRequest) -> dict:
-        offer_id, tenant = (self._negotiated(req) if req.offer_id else self._from_catalogue(req))
-        # The shopper confirmed this item in their agent before Airwallex called create_checkout.
-        out = self.desk.book(offer_id, traveller_confirmed=True, payment_method="card", tenant=tenant)
-        if out["result"] in ("booked", "booked_payment_unavailable", "already_booked"):
-            return {"booking_ref": out["booking_ref"], "offer_id": offer_id, "product_id": req.product_id}
-        if out["result"] == "terms_changed":
-            new = out["new_offer"]
-            return {"status": "price_changed", "reason": out["reason"], "offer_id": new["offer_id"],
-                    "total": new["total"], "next_step": "show the shopper the new terms; check out again with "
-                                                        "this offer_id once they agree"}
-        return {"status": "unavailable", "reason": out.get("reason", out["result"])}
-
-    def _negotiated(self, req: CheckoutRequest) -> tuple[str, str]:
-        """An offer a hotel's seller agent committed to, at its negotiated price."""
-        offer = self.desk.offers.get(req.offer_id)
-        if offer is None:
-            raise CheckoutError(422, f"unknown offer {req.offer_id}")
-        if req.product_id:
-            p = Plan.parse(req.product_id)
-            if (p.hotel_id, p.room_code) != (offer.hotel_id, offer.room_code):
-                raise CheckoutError(422, "offer_id is for a different hotel or room than product_id")
-        return req.offer_id, self.desk.offer_tenant[req.offer_id]
-
-    def _from_catalogue(self, req: CheckoutRequest) -> tuple[str, str]:
-        """The product at its published price for the shopper's dates, committed as an offer."""
-        p = Plan.parse(req.product_id or "")
+    def checkout(self, cart: Cart) -> dict:
+        """Price the cart at the published nightly rates and record the quote; nothing is booked yet."""
+        p = cart.plan
         h = self.desk.hotels.get(p.hotel_id)
-        if h is None or p.room_code not in h.rooms:
-            raise CheckoutError(422, f"unknown product {req.product_id!r}")
-        room = h.rooms[p.room_code]
-        if p.breakfast_guests > room.max_guests:
-            raise CheckoutError(422, f"unknown product {req.product_id!r}")
+        if h is None or p.room_code not in h.rooms or p.breakfast_guests > h.rooms[p.room_code].max_guests:
+            raise CheckoutError(422, f"unknown product {cart.line_items[0].get('item_id')!r}")
+        if cart.currency and cart.currency != h.currency:
+            raise CheckoutError(422, f"{h.name} sells in {h.currency}")
+        total = Money.of(sum(night_price(h, p, cart.check_in + timedelta(days=i)).amount
+                             for i in range((cart.check_out - cart.check_in).days)), h.currency)
+        offer = self._offer(h, cart, total)
+        open_ = cart.check_in >= self.desk.now().date() and \
+            self.desk._policy(h.id).evaluate(offer).verdict is Verdict.EXECUTE
+        checkout_id = "chk_" + uuid.uuid4().hex[:16]
+        ids = [str(i.get("id", "")) for i in cart.line_items]
+        if open_:   # one room per checkout: Airwallex shows the shopper the adjusted quantity
+            self.desk.ledger.run(f"agentic_checkout:{checkout_id}", lambda _rid: {
+                "hotel_id": h.id, "room_code": p.room_code, "breakfast_guests": p.breakfast_guests,
+                "cancellation": p.cancellation.value, "check_in": cart.check_in.isoformat(),
+                "check_out": cart.check_out.isoformat(), "total": str(total.amount), "currency": total.currency,
+                "line_item_ids": ids, "customer": cart.customer})
+        out = {"id": checkout_id,
+               "line_items": [{**i, "available_quantity": 1 if open_ else 0} for i in cart.line_items],
+               "totals": [{"type": t, "amount": minor(total) if open_ else 0, "display_text": t.title()}
+                          for t in ("subtotal", "total")],
+               "permalink_url": f"{self.desk.pay_base_url}/catalogue/{Night(p, cart.check_in).product_id}"}
+        if open_:
+            out["fulfillment"] = {"methods": [{
+                "id": f"stay_{checkout_id}", "type": "DIGITAL", "line_item_ids": ids,
+                "options": [{"id": f"confirmation_{checkout_id}", "cost": 0,
+                             "title": f"Booking confirmation from {h.name}; nothing more to pay at the hotel"}]}]}
+        return out
+
+    # ---- payment_intent.succeeded ------------------------------------------
+    def on_payment(self, event: dict) -> str | None:
+        """Book the stay a managed payment paid for. Returns the booking ref, or None if the event is
+        not an agentic checkout of ours. Runs at most once per payment intent."""
+        obj = (event.get("data") or {}).get("object") or {}
+        if event.get("name") != "payment_intent.succeeded" or not obj.get("agentic_payment_data"):
+            return None
+        m = _CHECKOUT.search(json.dumps(obj["agentic_payment_data"].get("fulfillment") or {}))
+        quote = self.desk.ledger.get(f"agentic_checkout:{m.group(1)}") if m else None
+        if quote is None or not quote.result:
+            self.desk.audit.record("agentic_payment_unmatched", payment_intent_id=obj.get("id"))
+            return None
         try:
-            check_in, check_out = date.fromisoformat(req.check_in or ""), date.fromisoformat(req.check_out or "")
-        except ValueError:
-            raise CheckoutError(422, "check_in and check_out must be ISO dates (2026-11-20)") from None
-        if not 0 < (check_out - check_in).days <= MAX_NIGHTS:
-            raise CheckoutError(422, f"a stay is 1 to {MAX_NIGHTS} nights")
-        guests = req.guests or p.breakfast_guests or 1
-        if p.breakfast_guests and guests != p.breakfast_guests:
-            raise CheckoutError(422, f"this rate includes breakfast for {p.breakfast_guests}; "
-                                     f"pick the product for {guests} guests")
-        if guests > room.max_guests:
-            raise CheckoutError(422, f"{room.name} sleeps at most {room.max_guests}")
-        offer = Offer(h.id, room.code, check_in, check_out, guests, ("breakfast",) if p.breakfast_guests else (),
-                      p.cancellation, h.min_deposit[p.cancellation], Money.of(0, h.currency),
-                      self.desk.now() + OFFER_TTL)
-        offer = replace(offer, total=h.published_total(offer))
-        return self.desk.commit(offer, self.tenant), self.tenant
+            done = self.desk.ledger.run(f"agentic_paid:{obj['id']}",
+                                        lambda _rid: self._book(m.group(1), quote.result, obj))
+        except DuplicateOperation as e:
+            done = e.op.result or {}
+        return done.get("booking_ref")
+
+    def _book(self, checkout_id: str, q: dict, pi: dict) -> dict:
+        h = self.desk.hotels[q["hotel_id"]]
+        total = Money.of(Decimal(q["total"]), q["currency"])
+        paid = Money.of(Decimal(str(pi.get("amount", 0))), str(pi.get("currency", "")).upper())
+        if paid != total:
+            return self._refund(pi, paid, f"paid {paid}, checkout {checkout_id} was {total}")
+        plan = Plan(h.id, q["room_code"], q["breakfast_guests"], Cancellation(q["cancellation"]))
+        cart = Cart(plan, date.fromisoformat(q["check_in"]), date.fromisoformat(q["check_out"]), 1, (), total.currency,
+                    q.get("customer") or {})
+        offer_id = self.desk.commit(self._offer(h, cart, total), self.tenant)
+        out = self.desk.book(offer_id, traveller_confirmed=True, payment_method="agentic", tenant=self.tenant)
+        if out["result"] not in ("booked", "already_booked"):
+            return self._refund(pi, paid, out.get("reason", out["result"]))
+        ref = out["booking_ref"]
+        self.desk.bookings.update(ref, f"paid {paid} through Airwallex Agentic Commerce", status="paid",
+                                  payment_intent_id=pi["id"], agentic_checkout=checkout_id,
+                                  guest={k: cart.customer.get(k) for k in ("first_name", "last_name", "email")
+                                         if cart.customer.get(k)})
+        try:
+            self.desk.payments.settle(ref, "deposit")   # the hotel's share; retried from hotel_ops.py if this fails
+        except Exception as e:
+            self.desk.audit.record("agentic_settle_failed", booking_ref=ref, error=str(e))
+        self.desk.note_booking(ref)
+        return {"booking_ref": ref}
+
+    def _refund(self, pi: dict, amount: Money, reason: str) -> dict:
+        self.desk.ledger.run(f"refund:agentic:{pi['id']}", lambda rid: self.desk.payments._api().create_refund(
+            rid, pi["id"], amount, f"Could not book: {reason}"))
+        self.desk.audit.record("agentic_payment_refunded", payment_intent_id=pi["id"], amount=str(amount), reason=reason)
+        return {"refunded": str(amount), "reason": reason}

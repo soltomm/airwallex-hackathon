@@ -182,7 +182,7 @@ class HotelPayments:
         b = self.store.get(ref)
         payout = b.get("payout")
         done = b.get("settlement", {})
-        if not payout or b["method"] != "card":
+        if not payout or b["method"] not in ("card", "agentic"):
             return b
         field = field or done.get("field")
         if field is None:
@@ -286,7 +286,7 @@ class HotelPayments:
         b = self.refresh(ref)
         if b["status"] not in ("awaiting_payment", "deposit_held", "paid"):   # stays not yet delivered
             raise BookingError(f"booking {ref} is {b['status'].replace('_', ' ')}; the hotel cannot cancel it")
-        if b["method"] != "card":
+        if b["method"] == "metal":
             return self.store.update(ref, f"hotel cancelled ({reason}): Metal deposit refund due",
                                      status="cancelled_by_hotel")
         if b["status"] in ("awaiting_payment", "deposit_held"):
@@ -297,10 +297,21 @@ class HotelPayments:
             return self.store.update(ref, f"hotel cancelled ({reason}): card hold released, nothing charged",
                                      status="cancelled_by_hotel")
         # Money was captured: refund the guest everything captured, then recover the hotel's share.
+        captured, recovered, st = self._refund_captured(ref, b, f"Hotel could not deliver the stay: {reason}",
+                                                        f"Stay not delivered: {reason}")
+        self._log(ref, "hotel_refunded", reason=reason, refunded=str(captured), recovered=recovered)
+        return self.store.update(
+            ref, f"hotel could not deliver ({reason}): guest refunded {captured}; "
+                 f"hotel share recovered: {', '.join(recovered) or 'nothing paid out yet'}",
+            status="refunded_by_hotel", **({"settlement": st} if st else {}))
+
+    def _refund_captured(self, ref: str, b: dict, refund_reason: str, reverse_reason: str):
+        """Refund the guest everything captured, then take the hotel's share back: its held reserve first,
+        then the part paid out. Returns (refunded, recovered parts, settlement)."""
         st = b.get("settlement", {})
         captured = charged(b, st.get("field", "deposit"))
         self.ledger.run(f"refund:{ref}", lambda rid: self._api().create_refund(
-            rid, b["payment_intent_id"], captured, f"Hotel could not deliver the stay: {reason}"))
+            rid, b["payment_intent_id"], captured, refund_reason))
         recovered = []
         for part in ("reserve", "now"):
             p = st.get("parts", {}).get(part, {})
@@ -309,14 +320,10 @@ class HotelPayments:
             if p.get("status") not in ("RELEASED", "SETTLED") and part == "reserve":
                 self.ledger.run(f"release:{ref}", lambda rid: self._api().release_funds_split(rid, p["id"]))
             self.ledger.run(f"reverse:{ref}:{part}", lambda rid: self._api().reverse_funds_split(
-                rid, p["id"], Money.of(p["amount"], p["currency"]), f"Stay not delivered: {reason}"))
+                rid, p["id"], Money.of(p["amount"], p["currency"]), reverse_reason))
             p["status"] = "REVERSED"
             recovered.append(f"{p['amount']} {p['currency']} {'from reserve' if part == 'reserve' else 'clawed back'}")
-        self._log(ref, "hotel_refunded", reason=reason, refunded=str(captured), recovered=recovered)
-        return self.store.update(
-            ref, f"hotel could not deliver ({reason}): guest refunded {captured}; "
-                 f"hotel share recovered: {', '.join(recovered) or 'nothing paid out yet'}",
-            status="refunded_by_hotel", **({"settlement": st} if st else {}))
+        return captured, recovered, st
 
     # ---- Metal --------------------------------------------------------------
     @_serialised
@@ -355,6 +362,11 @@ class HotelPayments:
             self.ledger.run(f"cancel:{ref}", lambda rid: self._api().cancel_payment_intent(
                 rid, b["payment_intent_id"], "Free cancellation"))
             outcome, status = f"free cancellation: hold of {describe(b, 'deposit')} released", "cancelled"
+        elif free and b["method"] == "agentic":   # paid in full through Airwallex Agentic Commerce
+            refunded, _, st = self._refund_captured(ref, b, "Free cancellation", "Guest cancelled for free")
+            if st:
+                self.store.update(ref, "hotel share recovered", settlement=st)
+            outcome, status = f"free cancellation: {refunded} refunded", "cancelled"
         elif free:   # Metal deposit already paid
             outcome, status = f"free cancellation: refund of {b['metal']['usdz']} *USDZ due to the traveller", "cancelled_refund_due"
         elif b["status"] == "deposit_held":

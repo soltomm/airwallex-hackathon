@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect Your Agent</title>
+  <style>
+    :root { --bg: #fafaf9; --card: #ffffff; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #612fff;
+            --accent-soft: #ece6ff; --bad: #b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1c1917; --card: #262220; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #9b7bff;
+              --accent-soft: #2e2547; --bad: #f87171; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 48px 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+    main { max-width: 420px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+    .row { display: flex; gap: 8px; margin-top: 12px; }
+    input { flex: 1; min-width: 0; font: inherit; color: var(--fg); background: var(--card); padding: 8px;
+            border: 1px solid var(--line); border-radius: 6px; }
+    button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card);
+             color: var(--fg); cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: .6; cursor: default; }
+    .wide { width: 100%; }
+    .or { text-align: center; color: var(--muted); font-size: 12px; margin: 14px 0 2px; }
+    ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+    .err { color: var(--bad); margin-top: 12px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Connect your agent</h1>
+  <p class="sub" id="who">Book hotel rooms through your AI assistant.</p>
+
+  <div class="card" id="signin" hidden>
+    <button class="primary wide" id="guest">Continue as guest</button>
+    <div class="or">or sign in with email</div>
+    <div class="row"><input id="email" type="email" placeholder="you@example.com" autocomplete="email"><button id="send">Send code</button></div>
+    <div class="row" id="coderow" hidden><input id="code" inputmode="numeric" placeholder="6-digit code" autocomplete="one-time-code"><button id="verify">Sign in</button></div>
+  </div>
+
+  <div class="card" id="consent" hidden>
+    <div><strong id="client">An AI agent</strong> wants to shop the hotels on your behalf.</div>
+    <ul id="scopes"></ul>
+    <div class="row"><button class="primary" id="approve">Allow</button><button id="deny">Deny</button></div>
+  </div>
+
+  <div class="err" id="err" hidden></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<script>
+  // Supabase's OAuth 2.1 server sends the shopper here with ?authorization_id=; Airwallex's merchant MCP
+  // trusts the access token Supabase then issues to the agent (Kit 10, apis.oauth.acp).
+  const CONFIG = __CONFIG__;
+  const $ = id => document.getElementById(id);
+  const authId = new URLSearchParams(location.search).get("authorization_id");
+  const sb = CONFIG.url ? supabase.createClient(CONFIG.url, CONFIG.key) : null;
+
+  function fail(e) {
+    $("err").textContent = e && e.message ? e.message : String(e);
+    $("err").hidden = false;
+    document.querySelectorAll("button").forEach(b => b.disabled = false);
+  }
+  async function busy(button, work) {
+    $("err").hidden = true;
+    button.disabled = true;
+    try { await work(); } catch (e) { fail(e); }
+  }
+
+  async function showConsent() {
+    const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authId);
+    if (error) return fail(error);
+    if (!data.authorization_id && data.redirect_url) return location.assign(data.redirect_url);   // consented before
+    const name = (data.client && (data.client.name || data.client.client_name)) || "An AI agent";
+    $("client").textContent = name;
+    $("scopes").replaceChildren(...(data.scope || "").split(" ").filter(Boolean).map(s => {
+      const li = document.createElement("li"); li.textContent = s; return li;
+    }));
+    $("signin").hidden = true;
+    $("consent").hidden = false;
+  }
+
+  async function decide(approve) {
+    const call = approve ? sb.auth.oauth.approveAuthorization : sb.auth.oauth.denyAuthorization;
+    const { data, error } = await call.call(sb.auth.oauth, authId);
+    if (error) throw error;
+    location.assign(data.redirect_url);
+  }
+
+  $("guest").onclick = e => busy(e.target, async () => {
+    const { error } = await sb.auth.signInAnonymously();
+    if (error) throw error;
+    await showConsent();
+  });
+  $("send").onclick = e => busy(e.target, async () => {
+    const { error } = await sb.auth.signInWithOtp({ email: $("email").value.trim() });
+    if (error) throw error;
+    $("coderow").hidden = false;
+    $("code").focus();
+  });
+  $("verify").onclick = e => busy(e.target, async () => {
+    const { error } = await sb.auth.verifyOtp({ email: $("email").value.trim(), token: $("code").value.trim(), type: "email" });
+    if (error) throw error;
+    await showConsent();
+  });
+  $("approve").onclick = e => busy(e.target, () => decide(true));
+  $("deny").onclick = e => busy(e.target, () => decide(false));
+
+  (async () => {
+    if (!authId) return fail("This page is opened by your AI assistant when it connects; open it from there.");
+    if (!CONFIG.url) return fail("Sign-in is not configured on this server.");
+    const { data } = await sb.auth.getSession();
+    if (data.session) await showConsent(); else $("signin").hidden = false;
+  })();
+</script>
+</body>
+</html>
