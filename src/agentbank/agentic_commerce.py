@@ -20,6 +20,8 @@ import base64
 import binascii
 import json
 import re
+import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -214,17 +216,40 @@ class MerchantCheckout:
         self.desk = desk
         self.secret = secret
         self.tenant = tenant
+        self.rejected: list[dict] = []   # recent refusals, newest last (GET /agentic-commerce/rejections)
 
     def receive(self, headers: dict, raw: bytes, now_ms: int | None = None) -> tuple[int, dict]:
         if not self.secret:
             return 404, {"error": "not found"}
         h = {k.lower(): v for k, v in headers.items()}
         if not signature_ok(self.secret, h.get("x-timestamp", ""), raw, h.get("x-signature", ""), now_ms):
+            self._reject(401, "bad signature", raw, timestamp=h.get("x-timestamp"))
             return 401, {"error": "bad signature"}
+        body = None
         try:
-            return 200, self.checkout(parse_checkout(json.loads(raw)))
+            body = json.loads(raw)
+            return 200, self.checkout(parse_checkout(body))
         except ValueError as e:   # CheckoutError, or malformed JSON / numbers
-            return getattr(e, "status", 400), {"error": str(e)}
+            self._reject(getattr(e, "status", 400), str(e), raw)
+            items = body.get("line_items") if isinstance(body, dict) else None
+            if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                return getattr(e, "status", 400), {"error": str(e)}
+            # Airwallex reads every reply as a checkout: refuse the cart as one, with the reason
+            return 200, {"id": "chk_" + uuid.uuid4().hex[:16],
+                         "line_items": [{**i, "available_quantity": 0} for i in items],
+                         "totals": [{"type": t, "amount": 0, "display_text": t.title()} for t in ("subtotal", "total")],
+                         "messages": [{"type": "error", "content_type": "plain", "content": str(e)}]}
+
+    def _reject(self, status: int, reason: str, raw: bytes, **extra) -> None:
+        try:
+            items = [{k: i.get(k) for k in ("id", "item_id", "requested_quantity")}
+                     for i in json.loads(raw).get("line_items") or []]
+        except (ValueError, AttributeError, TypeError):
+            items = raw[:300].decode("utf-8", "replace")
+        entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "status": status, "reason": reason,
+                 "line_items": items, **extra}
+        self.rejected = self.rejected[-49:] + [entry]
+        print(f"agentic checkout refused: {json.dumps(entry)}", file=sys.stderr)   # stdout is MCP
 
     def _offer(self, h: Hotel, cart: Cart, total: Money) -> Offer:
         p = cart.plan

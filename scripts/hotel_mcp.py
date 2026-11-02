@@ -335,6 +335,13 @@ def serve_http() -> None:
         status, body = inbox.receive(dict(request.headers), await request.body())   # raw bytes, as signed
         return JSONResponse(body, status)
 
+    @server.custom_route("/agentic-commerce/rejections", methods=["GET"])
+    async def agentic_rejections(request: Request) -> Response:
+        """Recent create_checkout calls we refused, for debugging; behind the checkout secret."""
+        if not merchant.secret or not hmac.compare_digest(request.query_params.get("token", ""), merchant.secret):
+            return JSONResponse({"error": "not found"}, 404)
+        return JSONResponse(merchant.rejected)
+
     @server.custom_route("/agentic-commerce/checkout", methods=["POST"])
     async def agentic_checkout(request: Request) -> Response:
         """Airwallex's merchant MCP pricing a cart (Kit 10); signed like the webhooks."""
