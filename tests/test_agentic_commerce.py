@@ -81,6 +81,7 @@ class CheckoutTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         tmp = Path(self.tmp.name)
         self.api = FakeAirwallex()
+        self.api.fx_rate = lambda sell, buy: {"currency_pair": sell + buy, "rate": 1.114079}
         self.desk = OfferDesk(load_hotels(ROOT / "data/hotels.json"), AuditLog(tmp / "audit.jsonl"),
                               OperationLedger(":memory:"), BookingStore(tmp / "bookings.json"), api=self.api,
                               pay_base_url=BASE, now=lambda: NOW)
@@ -129,7 +130,7 @@ class CheckoutTests(unittest.TestCase):
                  cart("20261120", "20261120"),
                  {**cart("20261120"), "line_items": cart("20261120")["line_items"]
                   + cart("20261121", plan="htl_paris_marais.DBL.ro.nr")["line_items"]},
-                 cart("20261120", currency="USD"),
+                 cart("20261120", currency="JPY"),
                  cart("20261199"),
                  {"line_items": []}]
         for body in cases:
@@ -159,6 +160,23 @@ class CheckoutTests(unittest.TestCase):
         self.assertIn("split", [c[0] for c in self.api.calls])   # the hotel's share paid out
         self.assertEqual(self.checkout.on_payment(self.paid(quote)), ref)   # redelivered: same booking
         self.assertEqual(len(self.desk.bookings.all()), 1)
+
+    def test_carts_in_the_shoppers_currency_are_quoted_charged_and_refunded_at_one_rate(self):
+        quote = self.send(cart("20261120", "20261121", currency="USD"))[1]
+        self.assertEqual(quote["totals"][-1]["amount"], 75980)   # 682.00 EUR x 1.114079 = 759.80 USD
+        event = self.paid(quote, amount="759.80")
+        event["data"]["object"]["currency"] = "USD"
+        b = self.desk.bookings.get(self.checkout.on_payment(event))
+        self.assertEqual((b["total"], b["currency"], b["fx"]["total"], b["fx"]["currency"]),
+                         ("682.00", "EUR", "759.80", "USD"))
+        self.desk.payments.cancel(b["booking_ref"])   # non-refundable rate: nothing back
+        quote = self.send(cart("20261125", plan="htl_paris_marais.DBL.ro.f48", currency="USD"))[1]
+        self.assertEqual(quote["totals"][-1]["amount"], 31863)   # 286.00 EUR, free cancellation
+        event = self.paid(quote, amount="318.63", pid="int_2")
+        event["data"]["object"]["currency"] = "USD"
+        ref = self.checkout.on_payment(event)
+        self.desk.payments.cancel(ref)
+        self.assertIn(("refund", "318.63 USD"), self.api.calls)
 
     def test_payments_that_cannot_be_booked_are_refunded(self):
         quote = self.send(cart("20261120"))[1]

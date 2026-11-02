@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from .guest_currency import GUEST_CURRENCIES, convert
 from .ledger import DuplicateOperation
 from .money import Money
 from .offers import OFFER_TTL, Cancellation, Hotel, Offer
@@ -263,10 +264,9 @@ class MerchantCheckout:
         h = self.desk.hotels.get(p.hotel_id)
         if h is None or p.room_code not in h.rooms or p.breakfast_guests > h.rooms[p.room_code].max_guests:
             raise CheckoutError(422, f"unknown product {cart.line_items[0].get('item_id')!r}")
-        if cart.currency and cart.currency != h.currency:
-            raise CheckoutError(422, f"{h.name} sells in {h.currency}")
         total = Money.of(sum(night_price(h, p, cart.check_in + timedelta(days=i)).amount
                              for i in range((cart.check_out - cart.check_in).days)), h.currency)
+        charge, rate = self._in_currency(total, cart.currency or h.currency)
         offer = self._offer(h, cart, total)
         open_ = cart.check_in >= self.desk.now().date() and \
             self.desk._policy(h.id).evaluate(offer).verdict is Verdict.EXECUTE
@@ -277,10 +277,11 @@ class MerchantCheckout:
                 "hotel_id": h.id, "room_code": p.room_code, "breakfast_guests": p.breakfast_guests,
                 "cancellation": p.cancellation.value, "check_in": cart.check_in.isoformat(),
                 "check_out": cart.check_out.isoformat(), "total": str(total.amount), "currency": total.currency,
+                "charge": str(charge.amount), "charge_currency": charge.currency, "rate": rate,
                 "line_item_ids": ids, "customer": cart.customer})
         out = {"id": checkout_id,
                "line_items": [{**i, "available_quantity": 1 if open_ else 0} for i in cart.line_items],
-               "totals": [{"type": t, "amount": minor(total) if open_ else 0, "display_text": t.title()}
+               "totals": [{"type": t, "amount": minor(charge) if open_ else 0, "display_text": t.title()}
                           for t in ("subtotal", "total")],
                "permalink_url": f"{self.desk.pay_base_url}/catalogue/{Night(p, cart.check_in).product_id}"}
         if open_:
@@ -289,6 +290,16 @@ class MerchantCheckout:
                 "options": [{"id": f"confirmation_{checkout_id}", "cost": 0,
                              "title": f"Booking confirmation from {h.name}; nothing more to pay at the hotel"}]}]}
         return out
+
+    def _in_currency(self, total: Money, currency: str) -> tuple[Money, str | None]:
+        """The hotel's price in the shopper's currency, at Airwallex's current rate (no rate: same currency).
+        Airwallex prices the whole checkout in the currency it asks for."""
+        if currency == total.currency:
+            return total, None
+        if currency not in GUEST_CURRENCIES:
+            raise CheckoutError(422, f"prices are available in {', '.join(GUEST_CURRENCIES)}")
+        rate = str(self.desk.payments._api().fx_rate(total.currency, currency)["rate"])
+        return convert(total, rate, currency), rate
 
     # ---- payment_intent.succeeded ------------------------------------------
     def on_payment(self, event: dict) -> str | None:
@@ -312,9 +323,10 @@ class MerchantCheckout:
     def _book(self, checkout_id: str, q: dict, pi: dict) -> dict:
         h = self.desk.hotels[q["hotel_id"]]
         total = Money.of(Decimal(q["total"]), q["currency"])
+        charge = Money.of(Decimal(q.get("charge", q["total"])), q.get("charge_currency", q["currency"]))
         paid = Money.of(Decimal(str(pi.get("amount", 0))), str(pi.get("currency", "")).upper())
-        if paid != total:
-            return self._refund(pi, paid, f"paid {paid}, checkout {checkout_id} was {total}")
+        if paid != charge:
+            return self._refund(pi, paid, f"paid {paid}, checkout {checkout_id} was {charge}")
         plan = Plan(h.id, q["room_code"], q["breakfast_guests"], Cancellation(q["cancellation"]))
         cart = Cart(plan, date.fromisoformat(q["check_in"]), date.fromisoformat(q["check_out"]), 1, (), total.currency,
                     q.get("customer") or {})
@@ -325,6 +337,8 @@ class MerchantCheckout:
         ref = out["booking_ref"]
         self.desk.bookings.update(ref, f"paid {paid} through Airwallex Agentic Commerce", status="paid",
                                   payment_intent_id=pi["id"], agentic_checkout=checkout_id,
+                                  **({"fx": {"currency": charge.currency, "rate": q["rate"], "deposit": str(charge.amount),
+                                             "total": str(charge.amount)}} if q.get("rate") else {}),
                                   guest={k: cart.customer.get(k) for k in ("first_name", "last_name", "email")
                                          if cart.customer.get(k)})
         try:
