@@ -5,8 +5,8 @@ calls our create_checkout URL to price a cart, takes the payment itself (managed
 tells us on the payment_intent.succeeded webhook. Contract: airwallexdev.com/agentic-commerce.
 
 A cart carries no dates, so a product is one room-night: a room, rate plan (room only, or
-breakfast for 1..max guests, priced per guest) and cancellation term on one date, grouped by
-plan as GMC variants. A stay is the consecutive nights of one plan in one cart.
+breakfast for 1..max guests, priced per guest) and cancellation term on one date. A stay is the
+consecutive nights of one plan in one cart.
 
 create_checkout prices the cart and books nothing: it records the quote under our checkout id
 and offers one DIGITAL fulfillment method whose id carries that checkout id. The paid webhook
@@ -39,7 +39,7 @@ CANCEL_CODES = {Cancellation.NON_REFUNDABLE: "nr", Cancellation.FREE_48H: "f48",
 CANCEL_LABELS = {Cancellation.NON_REFUNDABLE: "non-refundable",
                  Cancellation.FREE_48H: "free cancellation until 48h before arrival",
                  Cancellation.FREE_24H: "free cancellation until 24h before arrival"}
-GMC_FIELDS = ("id", "item_group_id", "title", "description", "link", "image_link", "availability", "price",
+GMC_FIELDS = ("id", "title", "description", "link", "image_link", "availability", "price",
               "brand", "condition", "product_type", "identifier_exists")
 _PLAN = r"(htl_\w+)\.(\w+)\.(ro|bb[1-9])\.(nr|f48|f24)"
 _ID = re.compile(_PLAN + r"\.(\d{8})")
@@ -54,7 +54,7 @@ class CheckoutError(ValueError):
 
 @dataclass(frozen=True)
 class Plan:
-    """A room, rate plan and cancellation term: one GMC item group."""
+    """A room, rate plan and cancellation term."""
     hotel_id: str
     room_code: str
     breakfast_guests: int          # 0: room only
@@ -108,7 +108,8 @@ def product(h: Hotel, n: Night, base_url: str) -> dict:
         else f"up to {room.max_guests} guests"
     price = night_price(h, p, n.night)
     return {
-        "id": n.product_id, "item_group_id": p.product_id,
+        # No item_group_id: the sandbox fails (HTTP 500) on any upsert holding two variants of one product
+        "id": n.product_id,
         "title": f"{h.name}, {room.name}, {board}, {CANCEL_LABELS[p.cancellation].split(' until')[0]}, "
                  f"night of {n.night:%a %d %b %Y}",
         "description": f"{room.name} at {h.name}{f', {h.city}' if h.city else ''}: {board}, {guests}, "
@@ -118,7 +119,8 @@ def product(h: Hotel, n: Night, base_url: str) -> dict:
         "availability": "in_stock" if h.available(p.room_code, n.night) else "out_of_stock",
         "price": f"{price.amount} {price.currency}",
         "brand": h.name, "condition": "new",
-        "product_type": " > ".join(x for x in ("Hotels", h.city, h.name) if x), "identifier_exists": "no",
+        "product_type": [" > ".join(x for x in ("Hotels", h.city, h.name) if x)],   # a list in the JSON API
+        "identifier_exists": "no",
     }
 
 
@@ -130,7 +132,7 @@ def catalogue(hotels: dict[str, Hotel], base_url: str, start: date, days: int = 
 
 def tsv(rows: list[dict]) -> str:
     """The same rows as a GMC feed file (tab-separated, header row of attribute names)."""
-    clean = lambda v: re.sub(r"[\t\r\n]+", " ", str(v))
+    clean = lambda v: re.sub(r"[\t\r\n]+", " ", ",".join(v) if isinstance(v, list) else str(v))
     return "\n".join(["\t".join(GMC_FIELDS)] + ["\t".join(clean(r.get(f, "")) for f in GMC_FIELDS) for r in rows]) + "\n"
 
 

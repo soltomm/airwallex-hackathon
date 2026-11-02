@@ -52,7 +52,7 @@ class CatalogueTests(unittest.TestCase):
         for r in self.rows:
             self.assertEqual(set(r), set(GMC_FIELDS))
             self.assertRegex(r["price"], r"^\d+\.\d{2} [A-Z]{3}$")
-            self.assertTrue(r["id"].startswith(r["item_group_id"] + "."))   # nights are variants of a plan
+            self.assertRegex(r["id"], r"\.\d{8}$")   # one product per night
             self.assertTrue(r["link"].startswith(BASE + "/catalogue/"))
         self.assertTrue(all(len(b["gmc_products"]) <= 300 for b in batches(self.rows)))
 
