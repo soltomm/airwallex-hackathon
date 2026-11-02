@@ -94,14 +94,18 @@ class CheckoutTests(unittest.TestCase):
         headers, raw = signed(body, secret)
         return self.checkout.receive(headers, raw, now_ms=int(TS))
 
-    def paid(self, quote: dict, amount: str = "682.00", pid: str = "int_1") -> dict:
+    def paid(self, quote: dict, amount: str = "682.00", pid: str = "int_1", order_id: bool = True) -> dict:
+        """payment_intent.succeeded as seen live: merchant_order_id is our last quote's id, and the
+        fulfillment echo sits on the payment attempt."""
         method = quote["fulfillment"]["methods"][0]
         # Airwallex's MCP created and confirmed this intent on our account
         self.api.intents[pid] = {"id": pid, "status": "SUCCEEDED", "amount": float(amount)}
         return {"id": f"evt_{pid}", "name": "payment_intent.succeeded", "data": {"object": {
             "id": pid, "amount": float(amount), "currency": "EUR", "status": "SUCCEEDED",
-            "agentic_payment_data": {"fulfillment": {"method_id": method["id"], "line_item_ids": method["line_item_ids"],
-                                                     "option_id": method["options"][0]["id"]}}}}}
+            **({"merchant_order_id": quote["id"]} if order_id else {}),
+            "latest_payment_attempt": {"agentic_payment_data": {"fulfillment": [{
+                "id": method["id"], "type": "digital", "line_item_ids": method["line_item_ids"],
+                "selected_option_id": method["options"][0]["id"]}]}}}}}
 
     def test_unsigned_or_wrongly_signed_calls_are_refused(self):
         self.assertEqual(self.send(cart("20261120"), secret="forged")[0], 401)
@@ -195,6 +199,20 @@ class CheckoutTests(unittest.TestCase):
         self.assertEqual(checkout_id_in({"option_id": option}), "chk_7e5d0adb0f0e4164")
         self.assertEqual(checkout_id_in({"method_id": "stay_chk_7e5d0adb0f0e4164"}), "chk_7e5d0adb0f0e4164")
         self.assertIsNone(checkout_id_in({"option_id": "c29tZXRoaW5nX2Vsc2VfZW50aXJlbHk"}))
+
+    def test_payment_without_our_order_id_is_matched_by_its_fulfillment(self):
+        quote = self.send(cart("20261120"))[1]
+        self.assertIsNotNone(self.checkout.on_payment(self.paid(quote, amount="341.00", order_id=False)))
+
+    def test_reconcile_books_paid_checkouts_whose_webhook_was_missed(self):
+        quote = self.send(cart("20261120"))[1]
+        pi = self.paid(quote, amount="341.00", pid="int_missed")["data"]["object"]
+        card = {"id": "int_card", "merchant_order_id": "BKG-12345678", "status": "SUCCEEDED"}
+        self.api.c = type("C", (), {"get": lambda _self, path, params=None: {"items": [card, pi]}})()
+        self.api.get_payment_intent = lambda pid: pi
+        [done] = self.checkout.reconcile()
+        self.assertTrue(done["booking_ref"].startswith("BKG-"))
+        self.assertEqual(self.checkout.reconcile(), [done])   # again: the same booking, not a second
 
     def test_other_events_are_left_to_the_desk(self):
         self.assertIsNone(self.checkout.on_payment({"id": "evt_x", "name": "payment_intent.succeeded",

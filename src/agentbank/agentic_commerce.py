@@ -50,6 +50,7 @@ _PLAN = r"(htl_\w+)\.(\w+)\.(ro|bb[1-9])\.(nr|f48|f24)"
 _ID = re.compile(_PLAN + r"\.(\d{8})")
 _CHECKOUT = re.compile(r"(?:stay|confirmation)_(chk_[0-9a-f]{16})")
 _B64 = re.compile(r"[A-Za-z0-9_-]{16,}")
+_CHECKOUT_ID = re.compile(r"chk_[0-9a-f]{16}")
 
 
 def checkout_id_in(fulfillment) -> str | None:
@@ -306,19 +307,46 @@ class MerchantCheckout:
         """Book the stay a managed payment paid for. Returns the booking ref, or None if the event is
         not an agentic checkout of ours. Runs at most once per payment intent."""
         obj = (event.get("data") or {}).get("object") or {}
-        if event.get("name") != "payment_intent.succeeded" or not obj.get("agentic_payment_data"):
+        if event.get("name") != "payment_intent.succeeded":
             return None
-        checkout_id = checkout_id_in(obj["agentic_payment_data"].get("fulfillment"))
-        quote = self.desk.ledger.get(f"agentic_checkout:{checkout_id}") if checkout_id else None
-        if quote is None or not quote.result:
-            self.desk.audit.record("agentic_payment_unmatched", payment_intent_id=obj.get("id"))
+        found = self._quote_for(obj)
+        if found is None:
+            if str(obj.get("merchant_order_id", "")).startswith("chk_"):
+                self.desk.audit.record("agentic_payment_unmatched", payment_intent_id=obj.get("id"))
             return None
+        checkout_id, quote = found
         try:
-            done = self.desk.ledger.run(f"agentic_paid:{obj['id']}",
-                                        lambda _rid: self._book(checkout_id, quote.result, obj))
+            done = self.desk.ledger.run(f"agentic_paid:{obj['id']}", lambda _rid: self._book(checkout_id, quote, obj))
         except DuplicateOperation as e:
             done = e.op.result or {}
         return done.get("booking_ref")
+
+    def _quote_for(self, pi: dict) -> tuple[str, dict] | None:
+        """The quote a payment is for. Airwallex sets the intent's merchant_order_id to the id of our
+        last quote for the session, and echoes the fulfillment ids we offered (on the payment attempt,
+        sometimes base64url-encoded); either leads back to a recorded quote."""
+        attempt = pi.get("latest_payment_attempt") or {}
+        apd = pi.get("agentic_payment_data") or attempt.get("agentic_payment_data") or {}
+        for checkout_id in (pi.get("merchant_order_id"), attempt.get("merchant_order_id"),
+                            checkout_id_in(apd.get("fulfillment"))):
+            if checkout_id and _CHECKOUT_ID.fullmatch(str(checkout_id)):
+                quote = self.desk.ledger.get(f"agentic_checkout:{checkout_id}")
+                if quote is not None and quote.result:
+                    return checkout_id, quote.result
+        return None
+
+    def reconcile(self, page_size: int = 100) -> list[dict]:
+        """Book paid checkouts whose webhook we missed (or could not match before a fix): the latest
+        succeeded intents with one of our checkout ids. Safe to repeat; each intent is booked once."""
+        items = self.desk.payments._api().c.get("/pa/payment_intents",
+                                                params={"status": "SUCCEEDED", "page_size": page_size})
+        out = []
+        for pi in items.get("items", []):
+            if _CHECKOUT_ID.fullmatch(str(pi.get("merchant_order_id", ""))):
+                pi = self.desk.payments._api().get_payment_intent(pi["id"])   # the list omits the attempt
+                ref = self.on_payment({"name": "payment_intent.succeeded", "data": {"object": pi}})
+                out.append({"payment_intent_id": pi["id"], "checkout": pi.get("merchant_order_id"), "booking_ref": ref})
+        return out
 
     def _book(self, checkout_id: str, q: dict, pi: dict) -> dict:
         h = self.desk.hotels[q["hotel_id"]]

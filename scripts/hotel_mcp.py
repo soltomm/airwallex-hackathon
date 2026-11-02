@@ -342,6 +342,13 @@ def serve_http() -> None:
             return JSONResponse({"error": "not found"}, 404)
         return JSONResponse(merchant.rejected)
 
+    @server.custom_route("/agentic-commerce/reconcile", methods=["POST"])
+    async def agentic_reconcile(request: Request) -> Response:
+        """Book paid agentic checkouts whose webhook was missed; behind the checkout secret."""
+        if not merchant.secret or not hmac.compare_digest(request.query_params.get("token", ""), merchant.secret):
+            return JSONResponse({"error": "not found"}, 404)
+        return JSONResponse(await run_in_threadpool(merchant.reconcile))
+
     @server.custom_route("/agentic-commerce/checkout", methods=["POST"])
     async def agentic_checkout(request: Request) -> Response:
         """Airwallex's merchant MCP pricing a cart (Kit 10); signed like the webhooks."""
