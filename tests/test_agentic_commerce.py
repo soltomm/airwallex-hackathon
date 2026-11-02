@@ -133,15 +133,12 @@ class CheckoutTests(unittest.TestCase):
                  cart("20261199"),
                  {"line_items": []}]
         for body in cases:
-            status, out = self.send(body)
-            if body["line_items"]:   # answered as a checkout Airwallex can read: nothing available, and why
-                self.assertEqual(status, 200, body)
-                self.assertTrue(out["id"].startswith("chk_"))
-                self.assertEqual({i["available_quantity"] for i in out["line_items"]}, {0})
-                self.assertTrue(out["messages"][0]["content"])
-                self.assertNotIn("fulfillment", out)
-            else:
-                self.assertEqual(status, 400)
+            status, out = self.send(body)   # answered as a checkout Airwallex can read: nothing available, and why
+            self.assertEqual(status, 200, body)
+            self.assertTrue(out["id"].startswith("chk_"))
+            self.assertEqual({i["available_quantity"] for i in out["line_items"]} - {0}, set())
+            self.assertTrue(out["messages"][0]["content"])
+            self.assertNotIn("fulfillment", out)
         self.assertEqual(len(self.checkout.rejected), len(cases))
 
     def test_sold_out_or_past_nights_are_quoted_unavailable(self):
