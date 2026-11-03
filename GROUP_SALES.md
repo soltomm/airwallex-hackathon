@@ -48,46 +48,36 @@ through the seller's `check_payment`/`check_refund`, and when a hold expires.
 
 ## Demo script (about 6 minutes)
 
-Start from **Reset scenario**. It is 09:00, 11 Jan 2027, with two inquiries in the queue. The seller
-mode can be Claude or rules; the buyer is the presenter.
+Each deal page has a coloured **next step** card with the buttons for that step:
+- amber: your decision, as hotel manager or the buyer's organizer
+- purple: your move as the buyer
+- grey: the seller agent or Airwallex is working
 
-1. **Run seller.** Northstar has the earlier deadline but is missing details. The seller asks for the
-   meeting layout, the legal payer and whether the budget includes taxes. It notes why it is moving to
-   Summit, then quotes Summit: 24 king room-nights at £190 plus 24 breakfasts, **£4,920, deposit
-   £1,476**, held for 24 hours. Expand *Records consulted* to show the PMS, meeting space, F&B, RMS,
-   CRM and policy checks with timestamps.
-2. **Buyer console → Send as buyer** (the answers come pre-filled from Northstar's private brief). The
-   seller quotes v1: £220 twin + breakfast = £250 per room-night, **£9,600**, 30% deposit, 10%
-   attrition. The hold covers 36 twin room-nights and the Thames Room. The inventory strip updates.
-3. **Send the counter** (20% attrition, 25% deposit). The seller keeps the £220 rate and trades 20%
-   attrition for a **40% deposit (£3,840)**. v2 pauses for the **hotel manager**. Approve it in the
-   Approvals panel; the seller sends v2 on the same hold and expiry.
-4. **Send accept.** The deposit is over Northstar's £3,000 and 30% limits, so the buyer side pauses
-   for its **organizer**. Approve it. The approvals and the acceptance all carry v2's hash.
-5. The seller opens checkout. **Open booking payment page → Pay deposit with Airwallex** redirects to
-   the hosted page; pay with `4035 5010 0000 0008`. On return, the backend checks the Payment Intent
-   with Airwallex (amount, currency, `merchant_order_id`), records the receipt once and converts the
-   hold to a booking. The booking is confirmed.
-6. **Clock → 20 Jan 09:00.** Summit's unaccepted quote lapses and its 8 kings go back to inventory.
-   Send Northstar's **change request** (two fewer twins on all three nights). The seller checks 6
-   room-nights against the allowance of 7 and the 24 Feb deadline, and sends amendment v3: **£8,280,
-   revised deposit £3,312, refund £528**. Send accept. The rooms are released once (10 twins per
-   night) and £528 is recorded as owed.
-7. The refund is over the seller's £500 authority, so the seller asks the manager to authorize **£528
-   GBP against that payment and amendment v3**. Approve it. The seller creates the refund in Airwallex
-   and saves its id. The completion notification is held back ("hold refund notifications"), so the
-   seller sees an unresolved refund. It **checks the existing refund** instead of creating a new one,
-   and when Airwallex reports ACCEPTED the ledger is updated once.
-8. **Deliver held notifications.** The late notice is recognised as already reconciled and the ledger
-   doesn't change. Final state: £3,840 received, £528 refunded, **£3,312 net, £4,968 still due**
-   (£828 by 8 Feb, £4,140 by 3 Mar). The operating instructions show 10 twins and 20 guests, the same
-   meeting, and breakfast guaranteed for 24.
+Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo controls**.
 
-Other things to show: **Paste RFP…** with other dates or a group dinner (handed to a person with the
-reason), or one asking for more twins than are left (the seller offers what can be held and explains
-the difference). Also **fail next booking commit** before paying ("payment received – booking
-exception", routed to the manager, no second charge), and **Reject** on the refund approval (the
-reduction stands, £528 stays owed, and the discrepancy is escalated).
+1. **Demo controls → Reset scenario**, then **Run seller** on the card. Northstar gets three questions.
+   Summit gets a quote: **£4,920, deposit £1,476**. The activity feed explains why the seller moved to
+   Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
+2. **Northstar → Send answers.** The seller quotes v1: **£9,600**, 30% deposit, 10% attrition.
+3. **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a **40%
+   deposit (£3,840)** in return. Click **Approve** as the hotel manager.
+4. **Accept v2.** The deposit is over Northstar's own limits, so click **Approve** as the buyer's
+   organizer.
+5. **Open payment page ↗** and pay with `4035 5010 0000 0008`. When you return, the booking is
+   verified with Airwallex and confirmed.
+6. **Jump to 20 Jan**, from the card or Demo controls. Summit's quote lapses. Click **Send change
+   request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
+7. **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates the refund in
+   Airwallex, checks it rather than creating another, and the ledger updates once.
+8. **Demo controls → Deliver held notifications.** The late notice is ignored as a duplicate. Final
+   state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests.
+
+Summit can be accepted at any point (**Accept v1**). Its deposit is within Summit's own limits, so
+checkout opens straight away.
+
+Other things to show: **Paste a new RFP…** with other dates or a group dinner (it's handed to a
+person, with the reason). **Fail the next booking commit** before paying (payment received – booking
+exception). **Reject** on the refund (the reduction stands and £528 stays owed).
 
 ## What the backend enforces
 
