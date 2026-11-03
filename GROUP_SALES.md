@@ -10,7 +10,7 @@ src/agentbank/groupsales/
   calc.py       pricing, deposits, attrition allowance, contribution margin, reductions, schedules
   policy.py     hotel authority (seller vs manager vs hard limits) and buyer mandate checks
   engine.py     shared hotel state + every enforced operation (intake, holds, versions, approvals,
-                payments, amendments, refunds, webhooks, reset); saved to var/groupsales/state.json
+                payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
   seller.py     ClaudeSeller (tools over the engine) and RulesSeller (deterministic, same tools)
   buyer.py      buyer moves from the private brief (presenter mode) and an optional Claude buyer agent
@@ -122,7 +122,7 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   recorded and the manager reconciles payments. Going over the allowance or past the deadline goes to
   manager review, and the existing agreement stays in effect until a change is accepted.
 - **Reset.** A reset creates a new run id and restores the hotel data. Airwallex is not reset.
-  In-flight operations are written to `var/groupsales/followups.json`. Events tagged with an earlier
+  In-flight operations are written to `the groupsales_followups document`. Events tagged with an earlier
   run are logged and not applied.
 
 ## Verified live (Airwallex sandbox, 2026-11-02)

@@ -30,6 +30,7 @@ from .calc import gbp
 from .extract import extract, missing_info, stay_nights
 from .policy import buyer_check, hotel_check
 from .provider import AirwallexError, AmbiguousResult
+from ..storage import doc
 
 ROOT = Path(__file__).resolve().parents[3]
 SCENARIO = ROOT / "data" / "groupsales" / "scenario.json"
@@ -61,11 +62,16 @@ class Engine:
         self.scenario_path = Path(scenario_path)
         self.public_base = public_base.rstrip("/")
         self.lock = threading.RLock()
-        self.path = self.var / "state.json"
+        # One JSON document: a file under var/, or a Postgres row when DATABASE_URL is set (storage.py),
+        # so a hosted instance keeps its state across deploys and idle spin-downs.
+        self.store = doc(self.var / "groupsales_state.json")
+        self.runs = doc(self.var / "groupsales_runs.json")
+        self.followups = doc(self.var / "groupsales_followups.json")
         self.scenario = json.loads(self.scenario_path.read_text())
         self.listeners: list = []          # called after state changes that should wake an agent
-        if self.path.exists():
-            self.s = json.loads(self.path.read_text())
+        saved = self.store.read()
+        if saved:
+            self.s = saved
         else:
             self.s = {}
             self.reset(reason="first start", archive=False)
@@ -87,9 +93,7 @@ class Engine:
         return self.s["clock"]
 
     def _save(self):
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.s, indent=1, default=str))
-        tmp.replace(self.path)
+        self.store.write(json.loads(json.dumps(self.s, default=str)))
 
     def _id(self, prefix: str) -> str:
         self.s["seq"] += 1
@@ -124,12 +128,10 @@ class Engine:
                     if op["status"] in ("submitting", "unknown", "created", "RECEIVED"):
                         followups.append({**op, "client_secret": None, "marked_at": _iso(datetime.now(timezone.utc)),
                                           "note": "in flight at reset: needs follow-up against the provider"})
-                (self.var / "runs").mkdir(exist_ok=True)
-                (self.var / "runs" / f"{self.s['run_id']}.json").write_text(json.dumps(self.s, indent=1))
+                # Keep the last few runs whole, for reconciling provider records against them later.
+                self.runs.write(((self.runs.read() or []) + [{"run_id": self.s["run_id"], "state": self.s}])[-5:])
                 if followups:
-                    fpath = self.var / "followups.json"
-                    prior = json.loads(fpath.read_text()) if fpath.exists() else []
-                    fpath.write_text(json.dumps(prior + followups, indent=1))
+                    self.followups.write((self.followups.read() or []) + followups)
             self.scenario = json.loads(self.scenario_path.read_text())
             h = self.hotel
             prior_events = self.s.get("events_seen", []) if self.s else []

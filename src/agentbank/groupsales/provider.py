@@ -100,16 +100,13 @@ class SimulatedProvider:
         self.lock = threading.RLock()
         self.refund_settle_seconds = refund_settle_seconds
         self.knobs = {"timeout_next_create": False, "fail_next_refund": False}
-        self.db = {"intents": {}, "refunds": {}, "requests": {}}
-        if self.path and self.path.exists():
-            self.db = json.loads(self.path.read_text())
+        from ..storage import doc
+        self.store = doc(self.path) if self.path else None
+        self.db = (self.store.read() if self.store else None) or {"intents": {}, "refunds": {}, "requests": {}}
 
     def _save(self):
-        if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.db, indent=1))
-            tmp.replace(self.path)
+        if self.store:
+            self.store.write(self.db)
 
     def _dupe(self, request_id: str):
         if request_id in self.db["requests"]:
@@ -233,4 +230,4 @@ def make_provider(mode: str | None, var_dir: Path):
         mode = "airwallex" if os.environ.get("AWX_CLIENT_ID") and os.environ.get("AWX_API_KEY") else "simulated"
     if mode == "airwallex":
         return AirwallexProvider()
-    return SimulatedProvider(var_dir / "sim_provider.json")
+    return SimulatedProvider(var_dir / "groupsales_sim_provider.json")

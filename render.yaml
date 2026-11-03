@@ -1,40 +1,39 @@
-# Render blueprint: the hotels MCP server for friends' Claude / ChatGPT (card payments only).
-# Dashboard > New > Blueprint > this repo. Render asks for the sync:false secrets; the MCP URL is
-#   https://<service>.onrender.com/mcp/<HOTELS_ACCESS_TOKEN>   (token: service > Environment)
+# Render blueprint for the Harbour House group-sales demo (branch group-sales).
+# Dashboard > New > Blueprint > this repo, branch group-sales. Render asks for the sync:false secrets.
+# Open the dashboard at  https://<service>.onrender.com/?k=<GS_ACCESS_TOKEN>  (service > Environment).
+# The hotel-negotiation service is deployed from its own branch and its own blueprint.
 services:
   - type: web
-    name: hotel-negotiation
+    name: harbour-house-group-sales
     runtime: python
-    plan: free            # sleeps after 15 min idle (first call then takes ~1 min); "starter" stays up
+    region: oregon        # same region as hotel-negotiation: the Airwallex key's IP whitelist has these egress IPs
+    plan: free            # sleeps after 15 min idle (first request then takes ~1 min); state is in Postgres
+    branch: group-sales
     buildCommand: pip install -e ".[agent,postgres]"
-    startCommand: python scripts/hotel_mcp.py --http
+    startCommand: python scripts/group_sales.py
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.7
-      - key: HOTELS_ACCESS_TOKEN        # secret part of the MCP URL: share the URL only with friends
+      - key: GS_ACCESS_TOKEN            # needed once to open the dashboard: <service URL>/?k=<token>
         generateValue: true
-      - key: HOTELS_ADMIN_TOKEN         # hotels' revenue dashboard: <service URL>/dashboard/<token>
-        generateValue: true
-      - key: HOTELS_JOIN_TOKEN          # hotel sign-up page: <service URL>/join/<token> (linked from the dashboard)
-        generateValue: true
-      - key: HOTELS_MAX_NEW_HOTELS      # hotels that may sign themselves up on this deployment
-        value: "6"
-      - key: DATABASE_URL               # Postgres (Supabase transaction pooler URL): bookings, ledger, logs and
-        sync: false                     # sign-ups survive deploys and spin-downs; unset = files that reset
-      - key: ANTHROPIC_API_KEY          # pays for the hotels' seller agents
+      - key: STORAGE_NAMESPACE          # keeps this demo's rows apart from hotel-negotiation's in the same database
+        value: groupsales
+      - key: PAYMENTS
+        value: airwallex
+      - key: BUYER_MODE                 # presenter plays the buyer; "agent" lets the buyer side answer itself
+        value: presenter
+      - key: GS_MAX_CLAUDE_RUNS_PER_DAY # then the rules seller takes over until the next day
+        value: "150"
+      - key: DATABASE_URL               # Postgres (Supabase transaction pooler URL); unset = files that reset on spin-down
         sync: false
-      - key: AWX_CLIENT_ID              # Airwallex sandbox, for card deposits
+      - key: ANTHROPIC_API_KEY          # Claude seller; without it the rules seller runs
+        sync: false
+      - key: ANTHROPIC_WORKSPACE_ID     # only for user-level keys not tied to a workspace
+        sync: false
+      - key: AWX_CLIENT_ID              # Airwallex sandbox
         sync: false
       - key: AWX_API_KEY
         sync: false
-      - key: AWX_WEBHOOK_SECRET         # optional: secret of the webhook URL <service URL>/webhooks/airwallex
+      - key: AWX_WEBHOOK_SECRET         # optional: webhook URL <service URL>/webhooks/airwallex
         sync: false
-      - key: HOTELS_PAYMENT_METHODS     # Metal needs the traveller's own wallet: local demo only
-        value: card
-      - key: HOTELS_MAX_NEGOTIATIONS    # per chat session
-        value: "4"
-      - key: HOTELS_MAX_TURNS           # buyer messages per chat session, across negotiations
-        value: "12"
-      - key: HOTELS_DAILY_USD           # stop seller agents after ~this much model spend per day
-        value: "10"

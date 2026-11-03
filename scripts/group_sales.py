@@ -4,7 +4,10 @@
   PYTHONPATH=src python scripts/group_sales.py            # http://localhost:8010
 Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presenter|agent
      PUBLIC_BASE_URL (for Airwallex return URLs)  AWX_WEBHOOK_SECRET (to accept Airwallex webhooks)
-     GS_PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
+     GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
+     GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
+     GS_MAX_CLAUDE_RUNS_PER_DAY (default 150): beyond this the seller falls back to rules.
+     DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
 
@@ -32,9 +35,12 @@ from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.webhooks import signature_ok  # noqa: E402
 
-PORT = int(os.environ.get("GS_PORT", "8010"))
+PORT = int(os.environ.get("GS_PORT") or os.environ.get("PORT") or "8010")
 VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
-PUBLIC = os.environ.get("PUBLIC_BASE_URL", f"http://localhost:{PORT}")
+PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
+ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
+MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
+OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
@@ -51,6 +57,7 @@ class Runner:
                          "buyer_mode": os.environ.get("BUYER_MODE", "presenter")}
         self.busy = None
         self.last = []
+        self.claude_runs = {"day": time.strftime("%Y-%m-%d"), "n": 0}
         self.pending = threading.Event()
         self.lock = threading.Lock()
         threading.Thread(target=self._loop, daemon=True).start()
@@ -73,8 +80,18 @@ class Runner:
     def run_once(self, trigger: str, force_seller: bool = False):
         with self.lock:
             if self.settings["auto_seller"] or force_seller:
-                self.busy = f"seller ({self.settings['seller_mode']})"
-                seller = ClaudeSeller(engine) if self.settings["seller_mode"] == "claude" else RulesSeller(engine)
+                mode = self.settings["seller_mode"]
+                if mode == "claude":
+                    today = time.strftime("%Y-%m-%d")
+                    if self.claude_runs["day"] != today:
+                        self.claude_runs = {"day": today, "n": 0}
+                    self.claude_runs["n"] += 1
+                    if self.claude_runs["n"] > MAX_CLAUDE_RUNS:
+                        mode = "rules"
+                        engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
+                                    "seller until tomorrow.", actor="system")
+                self.busy = f"seller ({mode})"
+                seller = ClaudeSeller(engine) if mode == "claude" else RulesSeller(engine)
                 self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run()
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
@@ -132,10 +149,28 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return {}
 
+    def _authorized(self, path: str, q: dict) -> bool:
+        if not ACCESS or path.startswith(OPEN_PATHS):
+            return True
+        cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
+        import hmac
+        return hmac.compare_digest(cookies.get("gs_k", ""), ACCESS) or hmac.compare_digest(q.get("k", ""), ACCESS)
+
     def do_GET(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         p = u.path.rstrip("/") or "/"
+        if p == "/healthz":
+            return self._send(200, {"ok": True})
+        if not self._authorized(p, q):
+            return self._send(401, "<h1>Harbour House group desk</h1><p>Open the link with its access token.</p>", "text/html")
+        if q.get("k") and ACCESS:
+            self.send_response(303)
+            self.send_header("Set-Cookie", f"gs_k={ACCESS}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+                             + ("; Secure" if PUBLIC.startswith("https") else ""))
+            self.send_header("Location", p)
+            self.end_headers()
+            return
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
@@ -160,6 +195,8 @@ class Handler(BaseHTTPRequestHandler):
         p = u.path.rstrip("/")
         raw = self._body()
         b = self._json(raw)
+        if not self._authorized(p, {}):
+            return self._send(401, {"error": "access token required"})
         try:
             if p == "/webhooks/airwallex":
                 return self._webhook(raw)
