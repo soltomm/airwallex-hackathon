@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Group Deposit</title>
+  <script src="https://static.airwallex.com/components/sdk/v1/index.js"></script>
+  <style>
+    :root { --bg: #f6f5f2; --card: #fff; --fg: #1d1b18; --muted: #6f6a62; --line: #e4e0d8; --accent: #1f4e5f; --ok: #1e7a46; --bad: #a3271d; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #171614; --card: #201f1c; --fg: #f1efe9; --muted: #a39e94; --line: #34312c; --accent: #7fb6c9; --ok: #5fcf8e; --bad: #f08a80; } }
+    body { margin: 0; padding: 40px 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+    main { max-width: 540px; margin: 0 auto; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }
+    h1 { font-size: 22px; margin: 0 0 4px; } .sub { color: var(--muted); margin: 0 0 20px; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; } td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    td:last-child { text-align: right; white-space: nowrap; padding-left: 12px; }
+    .due { font-size: 20px; font-weight: 650; } button, a.btn { display: block; width: 100%; box-sizing: border-box; text-align: center; padding: 13px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: 600 15px system-ui; cursor: pointer; text-decoration: none; }
+    button:disabled { opacity: .5; cursor: default; } #status { margin-top: 16px; font-weight: 600; } .ok { color: var(--ok); } .bad { color: var(--bad); }
+    code { font-size: 13px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1 id="title"></h1>
+  <p class="sub" id="sub"></p>
+  <table id="lines"></table>
+  <p>Signing deposit due now: <span class="due" id="amount"></span></p>
+  <div id="action"></div>
+  <div id="status"></div>
+  <p class="sub" style="margin-top:18px;font-size:13px">Sandbox: test card <code>4035 5010 0000 0008</code>, any future expiry, any CVC. Card details are entered on Airwallex's hosted page; the hotel and its agent never see them.</p>
+</main>
+<script>
+  const P = __PAY__;
+  const $ = id => document.getElementById(id);
+  const say = (t, c) => { $('status').textContent = t; $('status').className = c || ''; };
+  $('title').textContent = `${P.hotel} · ${P.company}`;
+  $('sub').textContent = `Booking ${P.ref}, agreement version ${P.version || '-'} · total ${P.total || '-'}`;
+  $('lines').innerHTML = (P.lines || []).map(l => `<tr><td>${l.item}</td><td>${l.amount}</td></tr>`).join('');
+  $('amount').textContent = P.amount ? `${P.amount} GBP` : '-';
+  if (P.message) say(P.message, 'bad');
+  if (P.booking === 'confirmed') {
+    say('Payment verified with Airwallex. Your booking is confirmed.', 'ok');
+  } else if (P.booking === 'exception') {
+    say('Payment received. The hotel is resolving a booking exception and will contact you; you will not be charged again.', 'bad');
+  } else if (P.op_status === 'succeeded') {
+    say('Payment verified.', 'ok');
+  } else if (!P.hold_ok) {
+    say('This offer has expired, so checkout is closed. The hotel will renew the offer before you can pay.', 'bad');
+  } else if (!P.client_secret && P.provider !== 'simulated') {
+    say(`Checkout is not available (${P.op_status || 'no payment opened'}).`, 'bad');
+  } else if (P.provider === 'simulated') {
+    $('action').innerHTML = `<a class="btn" href="${P.sim_url}">Pay deposit (simulated hosted page)</a>`;
+  } else {
+    $('action').innerHTML = `<button id="pay">Pay deposit with Airwallex</button>`;
+    (async () => {
+      const { payments } = await window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
+      $('pay').onclick = () => payments.redirectToCheckout({
+        env: 'demo', mode: 'payment', intent_id: P.intent_id, client_secret: P.client_secret, currency: P.currency,
+        successUrl: P.success_url, submitType: 'book', appearance: { variables: { colorBrand: '#1f4e5f' } },
+      });
+    })().catch(e => say('Could not load Airwallex checkout: ' + e.message, 'bad'));
+    if (location.pathname.endsWith('/return')) say('Waiting for Airwallex to confirm the payment…');
+  }
+  if (location.pathname.endsWith('/return') && P.booking !== 'confirmed' && P.op_status !== 'succeeded' && P.hold_ok) {
+    setTimeout(() => location.reload(), 3000);
+  }
+</script>
+</body>
+</html>

@@ -1,5 +1,9 @@
 # Hotel Negotiation Desk
 
+> **Group sales (product spec v2):** a seller agent that handles hotel group RFPs from the first email
+> through negotiation, booking, Airwallex deposit and amendment refunds. See [GROUP_SALES.md](GROUP_SALES.md)
+> (`PYTHONPATH=src python scripts/group_sales.py`).
+
 **Hotels sell rooms to AI agents, and they negotiate.** A traveller asks their Claude for a stay. Claude
 talks to each hotel's own seller agent, which builds a personalised offer (breakfast, late checkout,
 cancellation terms, deposit) inside the hotel's rules. The traveller approves the exact terms and pays the

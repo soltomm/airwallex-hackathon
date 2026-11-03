@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harbour House Group Desk</title>
+<style>
+:root {
+  --bg: #f5f3ef; --panel: #ffffff; --panel2: #faf8f4; --fg: #1d1b18; --muted: #6f6a62; --line: #e3ded5;
+  --accent: #1f4e5f; --accent-soft: #e2edf0; --ok: #1e7a46; --ok-soft: #e1f2e7; --warn: #8a5a00; --warn-soft: #fdf0d5;
+  --bad: #a3271d; --bad-soft: #f8e1de; --seller: #1f4e5f; --buyer: #7a4b8c; --sys: #6f6a62; --mgr: #8a5a00;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141311; --panel: #1d1c19; --panel2: #23221e; --fg: #f0ede6; --muted: #a29d92; --line: #34312b;
+  --accent: #7fb6c9; --accent-soft: #1f3138; --ok: #5fcf8e; --ok-soft: #173223; --warn: #e7b453; --warn-soft: #3a2e14;
+  --bad: #f08a80; --bad-soft: #3c1e1b; --seller: #7fb6c9; --buyer: #c79ad8; --sys: #a29d92; --mgr: #e7b453; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; } header h1 span { color: var(--muted); font-weight: 500; }
+.clock { font-variant-numeric: tabular-nums; font-weight: 600; } .chip { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; background: var(--panel2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.chip.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; } .chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.chip.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; } .chip.acc { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel2); font-size: 13px; }
+.controls .grp { display: flex; gap: 6px; align-items: center; padding-right: 10px; margin-right: 4px; border-right: 1px solid var(--line); }
+button, select { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border-color: transparent; } @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button.primary { color: #10191c; } }
+button.okb { background: var(--ok); color: #fff; border-color: transparent; } button.badb { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+label.t { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+.inv { display: flex; gap: 8px; overflow-x: auto; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.inv .n { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; white-space: nowrap; }
+.inv b { font-variant-numeric: tabular-nums; }
+.layout { display: grid; grid-template-columns: 290px minmax(0, 1fr) 360px; gap: 14px; padding: 14px 16px 40px; align-items: start; }
+@media (max-width: 1200px) { .layout { grid-template-columns: 260px minmax(0, 1fr); } .right { grid-column: 1 / -1; } }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 8px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.q { padding: 10px; border-radius: 10px; border: 1px solid var(--line); margin-bottom: 8px; cursor: pointer; background: var(--panel); }
+.q.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; } .q .top { display: flex; justify-content: space-between; gap: 6px; font-weight: 600; }
+.q .meta { color: var(--muted); font-size: 12px; margin-top: 3px; } .q .wait { font-size: 12px; margin-top: 5px; }
+.deal-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; } .deal-h h2 { font-size: 19px; text-transform: none; letter-spacing: 0; color: var(--fg); margin: 0; }
+.msg { border-left: 3px solid var(--line); padding: 4px 0 4px 10px; margin: 8px 0; white-space: pre-wrap; }
+.msg.buyer { border-color: var(--buyer); } .msg.seller { border-color: var(--seller); }
+.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; } th { text-align: left; color: var(--muted); font-weight: 500; }
+th, td { padding: 4px 6px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; } td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; } .kv dt { color: var(--muted); } .kv dd { margin: 0; }
+details { border-top: 1px solid var(--line); padding: 6px 0; } details:first-of-type { border-top: 0; } summary { cursor: pointer; }
+.ver { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; } .ver.cur { border-color: var(--accent); }
+.muted { color: var(--muted); } .small { font-size: 12px; } .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ap { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px; } .ap.pending { border-color: var(--warn); background: var(--warn-soft); }
+.act { font-size: 12.5px; padding: 6px 0; border-bottom: 1px solid var(--line); } .act .w { font-weight: 600; }
+.act.seller .w { color: var(--seller); } .act.buyer .w, .act[class*="buyer"] .w { color: var(--buyer); } .act.hotel_manager .w, .act.organizer .w { color: var(--mgr); } .act.system .w { color: var(--sys); }
+.feed { max-height: 520px; overflow: auto; } textarea, input[type=text], input[type=number] { width: 100%; font: inherit; font-size: 13px; padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); color: var(--fg); }
+.pause { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-weight: 600; margin: 8px 0; }
+.busy { animation: pulse 1.2s infinite; } @keyframes pulse { 50% { opacity: .45; } }
+.big { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; } .stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.stat > div { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; } .stat .l { color: var(--muted); font-size: 12px; }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg); width: min(640px, 92vw); }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Harbour House <span>· Group sales desk</span></h1>
+  <span class="clock" id="clock"></span>
+  <span class="chip" id="run"></span>
+  <span class="chip" id="modes"></span>
+  <span id="busy" class="chip acc" style="display:none"></span>
+</header>
+<div class="controls">
+  <div class="grp"><button class="primary" id="runSeller">Run seller ▸</button>
+    <label class="t"><input type="checkbox" id="auto"> auto</label>
+    <select id="sellerMode"><option value="rules">Seller: rules</option><option value="claude">Seller: Claude</option></select>
+    <select id="buyerMode"><option value="presenter">Buyer: presenter</option><option value="agent">Buyer: agent</option></select></div>
+  <div class="grp">Clock <button data-h="1">+1h</button><button data-h="24">+1 day</button><button id="jump">→ 20 Jan 09:00</button></div>
+  <div class="grp"><label class="t"><input type="checkbox" id="delayN"> hold refund notifications</label>
+    <button id="releaseN">Deliver held notifications</button></div>
+  <div class="grp"><label class="t"><input type="checkbox" id="failCommit"> fail next booking commit</label></div>
+  <button id="paste">Paste RFP…</button>
+  <button class="badb" id="reset">Reset scenario</button>
+</div>
+<div class="inv" id="inv"></div>
+<div class="layout">
+  <aside><div class="card"><h2>Inquiry queue</h2><div id="queue"></div></div></aside>
+  <main id="deal"><div class="empty">Select an inquiry.</div></main>
+  <aside class="right">
+    <div class="card"><h2>Approvals</h2><div id="approvals"></div></div>
+    <div class="card"><h2>Agent activity <label class="t small"><input type="checkbox" id="onlyDeal" checked> this deal</label></h2><div class="feed" id="feed"></div></div>
+    <div class="card"><h2>Provider events</h2><div id="recon" class="small"></div></div>
+  </aside>
+</div>
+<dialog id="dlg"><form method="dialog" id="rfpForm">
+  <h3 style="margin-top:0">Paste a new RFP</h3>
+  <p class="small muted">Processed with the same logic as the scenario inquiries. Requests outside 10-13 March 2027 or the supported services are handed to a person.</p>
+  <p><input type="text" id="rfpFrom" placeholder="From, e.g. Sam <sam@company.example>"></p>
+  <p><input type="text" id="rfpSubj" placeholder="Subject"></p>
+  <p><textarea id="rfpBody" rows="8" placeholder="Email body"></textarea></p>
+  <div class="row"><button value="cancel">Cancel</button><button class="primary" id="rfpSend" value="default">Add to inbox</button></div>
+</form></dialog>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const gbp = p => p == null ? '–' : (p < 0 ? '-' : '') + '£' + (Math.abs(p) / 100).toLocaleString('en-GB', {minimumFractionDigits: Math.abs(p) % 100 ? 2 : 0, maximumFractionDigits: 2});
+const fmt = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
+const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', ...o});
+let S = null, sel = null, draftKey = null;
+try { sel = localStorage.getItem('gs.sel'); } catch (e) {}
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(j.error || r.statusText); throw new Error(j.error); }
+  return j;
+};
+const STATUS = {new: ['New', ''], intake: ['Intake', ''], needs_info: ['Waiting for answers', 'warn'], pending_approval: ['Needs manager', 'warn'],
+  approved_to_send: ['Approved', 'acc'], revise: ['Revise', 'warn'], offer_sent: ['Offer sent', 'acc'], acceptance_pending_organizer: ['Buyer organizer', 'warn'],
+  accepted: ['Accepted', 'ok'], awaiting_payment: ['Awaiting deposit', 'warn'], confirmed: ['Confirmed', 'ok'], amendment_sent: ['Amendment sent', 'acc'],
+  amendment_review: ['Reduction review', 'warn'], amendment_approved: ['Reduction approved', 'acc'], refund_due: ['Refund due', 'warn'],
+  refund_awaiting_approval: ['Refund approval', 'warn'], refund_pending: ['Refund pending', 'warn'], refund_failed: ['Refund failed', 'bad'],
+  expired: ['Expired', 'bad'], handoff: ['With a person', 'bad'], declined: ['Declined', ''], lost: ['Lost', ''],
+  payment_received_booking_exception: ['Payment received – booking exception', 'bad']};
+const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class="chip ${c}">${esc(l)}</span>`; };
+
+async function load() {
+  try { S = await api('/api/state'); } catch (e) { return; }
+  render();
+}
+function render() {
+  $('clock').textContent = 'Scenario: ' + new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'});
+  $('run').textContent = S.run_id;
+  const st = S.runner.settings;
+  $('modes').textContent = `payments: ${S.provider === 'airwallex' ? 'Airwallex sandbox' : 'simulated'}`;
+  $('busy').style.display = S.runner.busy ? '' : 'none'; $('busy').textContent = (S.runner.busy || '') + ' working…'; $('busy').classList.toggle('busy', !!S.runner.busy);
+  $('auto').checked = st.auto_seller; $('sellerMode').value = st.seller_mode; $('buyerMode').value = st.buyer_mode;
+  $('sellerMode').querySelector('[value=claude]').disabled = !S.runner.claude_available;
+  $('delayN').checked = S.sim.delay_refund_notifications; $('failCommit').checked = S.sim.fail_next_commit;
+  $('releaseN').textContent = `Deliver held notifications (${S.delayed_notifications})`; $('releaseN').disabled = !S.delayed_notifications;
+  // inventory
+  const nights = Object.keys(S.inventory);
+  $('inv').innerHTML = nights.map(n => {
+    const x = S.inventory[n];
+    return `<div class="n"><span class="muted">${day(n, {weekday: 'short', day: 'numeric', month: 'short'})}</span> ` +
+      ['twin', 'king'].map(rt => `${rt} <b>${x[rt].available}</b> free · ${x[rt].held} held · ${x[rt].booked} booked`).join(' &nbsp;|&nbsp; ') + '</div>';
+  }).join('') + Object.entries(S.meeting.thames).map(([d, m]) => `<div class="n">Thames Room ${day(d, {day: 'numeric', month: 'short'})}: <b>${m.status}</b></div>`).join('') +
+    `<div class="n">Breakfast covers: ${Object.entries(S.breakfast).map(([m, b]) => `${m.slice(8)}/3 <b>${b.held + b.booked}</b>/60`).join(' · ')}</div>`;
+  // queue
+  const deals = [...S.deals].sort((a, b) => (a.reply_by || '9') < (b.reply_by || '9') ? -1 : 1);
+  if (!sel || !deals.find(d => d.id === sel)) sel = deals[0] && deals[0].id;
+  $('queue').innerHTML = deals.map(d => {
+    const hrs = d.reply_by ? Math.round((new Date(d.reply_by) - new Date(S.clock)) / 36e5) : null;
+    const cur = d.versions.length ? d.versions[d.versions.length - 1] : null;
+    return `<div class="q ${d.id === sel ? 'sel' : ''}" data-id="${d.id}"><div class="top"><span>${esc(d.company)}</span>${chip(d.status)}</div>
+      <div class="meta">${d.ref} · reply by ${fmt(d.reply_by)}${hrs != null ? ` (${hrs >= 0 ? hrs + 'h left' : 'passed'})` : ''}${cur ? ' · ' + gbp(cur.pricing.total) : ''}</div>
+      <div class="wait">${d.waiting_on ? '⏸ ' + esc(d.waiting_on) : ''}${d.unread ? ' <span class="chip acc">new input</span>' : ''}</div></div>`;
+  }).join('') || '<div class="muted">Inbox empty.</div>';
+  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; try { localStorage.setItem('gs.sel', sel); } catch (e) {} render(); });
+  renderDeal(S.deals.find(d => d.id === sel));
+  renderApprovals(); renderFeed();
+  $('recon').innerHTML = S.reconcile_log.slice().reverse().map(r => `<div class="act">${esc(r.name || '')} <code>${esc(r.event)}</code>: ${esc(r.result)}</div>`).join('') || '<span class="muted">No provider events yet.</span>';
+}
+
+function openState() { return [...document.querySelectorAll('#deal details')].map(x => x.open); }
+function renderDeal(d) {
+  if (!d) { $('deal').innerHTML = '<div class="empty">No inquiry selected.</div>'; return; }
+  const opens = openState(), scroll = window.scrollY;
+  const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest('#buyerBox');
+  const keepBuyer = focused ? $('buyerBox').outerHTML : null;
+  const r = d.requirements, f = d.finance_view;
+  const pend = S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
+  let h = `<div class="card"><div class="deal-h"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
+    <div class="small muted" style="margin-top:4px">${esc(d.sender)} · received ${fmt(d.received_at)} · reply by ${fmt(d.reply_by)} · next: ${esc(d.next_step)}</div>
+    ${d.waiting_on ? `<div class="pause">⏸ Waiting on ${esc(d.waiting_on)}</div>` : ''}
+    ${d.handoff ? `<div class="pause" style="background:var(--bad-soft);color:var(--bad)">Handed to a person: ${esc(d.handoff.reason)}</div>` : ''}
+    ${d.flags.map(x => `<div class="small" style="color:var(--bad)">⚑ ${esc(x)}</div>`).join('')}</div>`;
+
+  h += `<div class="card"><h2>Correspondence</h2>${d.thread.map(m => `<div class="msg ${m.from}"><div class="who">${m.from === 'buyer' ? '↘ ' + esc(d.company) : '↗ Harbour House'} · ${m.channel} · ${fmt(m.at)}${m.action ? ' · ' + m.action : ''}${m.version ? ' · v' + m.version : ''}</div>${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text)}${m.payload && Object.keys(m.payload).length ? `\n<span class="small muted">${esc(JSON.stringify(m.payload))}</span>` : ''}</div>`).join('')}</div>`;
+
+  if (r) {
+    const m = r.meeting;
+    h += `<div class="card"><h2>Structured request</h2><dl class="kv">
+      <dt>Rooms</dt><dd>${r.rooms ?? '?'} × ${esc(r.room_type ?? '?')}${r.occupancy ? ` (occupancy ${r.occupancy})` : ''} · ${r.guests ?? '?'} guests</dd>
+      <dt>Stay</dt><dd>${esc(r.arrival)} → ${esc(r.departure)}</dd><dt>Breakfast</dt><dd>${r.breakfast ? 'each morning' : 'no'}</dd>
+      <dt>Meeting</dt><dd>${m ? `${m.attendees ?? '?'} people, ${esc(m.date)} ${esc(m.hours || '')}, layout ${m.layout ? esc(m.layout) : '<span class="chip warn">missing</span>'}` : 'none'}</dd>
+      <dt>Budget</dt><dd>${gbp(r.budget_total)} ${r.budget_includes_taxes == null ? (r.budget_total ? '<span class="chip warn">taxes?</span>' : '') : r.budget_includes_taxes ? 'incl. taxes' : 'excl. taxes'}${r.target_per_room_night ? ` · target ${gbp(r.target_per_room_night)}/room-night${r.target_includes_breakfast ? ' incl. breakfast' : ''}` : ''}</dd>
+      <dt>Payer</dt><dd>${r.payer ? esc(r.payer) : '<span class="chip warn">missing</span>'}</dd>
+      ${(r.out_of_scope || []).length ? `<dt>Out of scope</dt><dd style="color:var(--bad)">${esc(r.out_of_scope.join('; '))}</dd>` : ''}
+      ${d.missing.length ? `<dt>Missing</dt><dd>${d.missing.map(x => `<span class="chip warn">${esc(x)}</span>`).join(' ')}</dd>` : ''}</dl></div>`;
+  }
+  if (d.records.length) {
+    h += `<div class="card"><h2>Records consulted</h2>${d.records.map(x => `<details><summary><b>${esc(x.system)}</b> <span class="small muted">checked ${fmt(x.checked_at)}</span><br><span class="small">${esc(x.summary)}</span></summary><pre class="small" style="white-space:pre-wrap;margin:6px 0">${esc(JSON.stringify(x.data, null, 1))}</pre></details>`).join('')}</div>`;
+  }
+  if (d.versions.length) {
+    const cur = d.versions[d.versions.length - 1];
+    h += `<div class="card"><h2>Agreement versions</h2>${d.versions.slice().reverse().map(v => {
+      const p = v.pricing, t = v.terms, isCur = v === cur;
+      const body = `<table><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit</th><th class="r">Amount</th></tr>${p.lines.map(l => `<tr><td>${esc(l.item)}${l.note ? `<div class="small muted">${esc(l.note)}</div>` : ''}</td><td class="r">${l.qty}</td><td class="r">${gbp(l.unit)}</td><td class="r">${gbp(l.amount)}</td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td></td><td></td><td class="r"><b>${gbp(p.total)}</b></td></tr></table>
+        <dl class="kv" style="margin-top:8px"><dt>Terms</dt><dd>${gbp(t.rate)} ${t.room_type} · deposit ${t.deposit_pct}% = <b>${gbp(p.deposit)}</b> · attrition ${t.attrition_pct}% (${p.attrition_allowance} room-nights; ${p.allowance_remaining} remaining)</dd>
+        <dt>Per room-night</dt><dd>${gbp(p.per_room_night_incl_breakfast)} incl. breakfast</dd>
+        <dt>Contribution</dt><dd>${p.margin_all_rooms.margin_pct}% all rooms (${gbp(p.margin_all_rooms.contribution)}) · ${p.margin_full_release.margin_pct}% if full allowance released</dd>
+        ${v.hotel_check && v.hotel_check.approvals.length ? `<dt>Needs approval</dt><dd>${esc(v.hotel_check.approvals.join('; '))}</dd>` : ''}
+        ${v.explanation ? `<dt>Seller's note</dt><dd>${esc(v.explanation)}</dd>` : ''}
+        ${v.unmet && v.unmet.length ? `<dt>Differs from request</dt><dd>${esc(v.unmet.join('; '))}</dd>` : ''}
+        ${v.reduction ? `<dt>Reduction</dt><dd>${v.reduction.requested_room_nights} room-nights released of ${v.reduction.allowance} allowed (${v.reduction.already_released} before) · revised deposit ${gbp(v.reduction.revised_deposit)} · refund ${gbp(v.reduction.refund_due)} (${esc(v.reduction.refund_mode)})${v.reduction.review_reasons.length ? ' · review: ' + esc(v.reduction.review_reasons.join('; ')) : ''}</dd>` : ''}
+        <dt>Version</dt><dd class="small muted">hash ${v.hash} · created ${fmt(v.created_at)}${v.sent_at ? ' · sent ' + fmt(v.sent_at) : ''}${v.expires_at ? ' · hold until ' + fmt(v.expires_at) : ''}</dd></dl>`;
+      const title = `<b>v${v.n}</b> ${v.kind === 'amendment' ? 'amendment' : 'offer'} · ${esc(v.status.replaceAll('_', ' '))} · ${gbp(p.total)} / deposit ${gbp(p.deposit)}`;
+      return isCur ? `<div class="ver cur">${title}${body}</div>` : `<div class="ver"><details><summary>${title}</summary>${body}</details></div>`;
+    }).join('')}</div>`;
+  }
+  if (f && (f.total != null || f.received)) {
+    const ops = S.operations.filter(o => o.deal_id === d.id), led = S.ledger.filter(x => x.deal_id === d.id);
+    h += `<div class="card"><h2>Payments &amp; ledger</h2><div class="stat">
+      <div><div class="l">Booking total</div><div class="big">${gbp(f.total)}</div></div>
+      <div><div class="l">Received</div><div class="big">${gbp(f.received)}</div></div>
+      <div><div class="l">Refunded</div><div class="big">${gbp(f.refunded)}</div></div>
+      <div><div class="l">Net received</div><div class="big">${gbp(f.net_received)}</div></div>
+      <div><div class="l">Refund owed to buyer</div><div class="big" style="color:${f.refund_owed ? 'var(--warn)' : 'inherit'}">${gbp(f.refund_owed)}</div></div>
+      <div><div class="l">Still due</div><div class="big">${gbp(f.still_due)}</div></div></div>
+      ${f.collection_blocked ? `<div class="pause">${esc(f.collection_blocked)}; schedule below is projected after the refund</div>` : ''}
+      ${f.schedule ? `<table><tr><th>Payment schedule</th><th>Due</th><th class="r">Cumulative target</th><th class="r">Amount due</th></tr>${f.schedule.map(x => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {day: 'numeric', month: 'short', year: 'numeric'}) : 'on signing'}</td><td class="r">${gbp(x.cumulative_target)}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">Later installments are displayed obligations, not automatic card charges.</p>` : ''}
+      ${d.pay_url ? `<p class="row"><a href="${d.pay_url}" target="_blank"><button class="primary">Open booking payment page ↗</button></a><button id="chkPay">Verify payment</button>${ops.some(o => o.kind === 'refund') ? '<button id="chkRef">Check refund</button>' : ''}</p>` : ''}
+      ${ops.length ? `<details><summary>Financial operations (${ops.length})</summary><table><tr><th>Op</th><th>Kind</th><th class="r">Amount</th><th>Provider id</th><th>Status</th></tr>${ops.map(o => `<tr><td><code>${o.id}</code><div class="small muted">${esc(o.request_id)}</div></td><td>${o.kind} v${o.version}</td><td class="r">${gbp(o.amount)} ${o.currency}</td><td><code class="small">${esc(o.payment_intent_id && o.kind === 'deposit' ? o.payment_intent_id : o.provider_id || '–')}</code>${o.merchant_order_id ? `<div class="small muted">${esc(o.merchant_order_id)}</div>` : ''}</td><td>${esc(o.status)}${o.provider_status ? ` <span class="chip">${esc(o.provider_status)}</span>` : ''}</td></tr>`).join('')}</table></details>` : ''}
+      ${led.length ? `<details open><summary>Ledger (${led.length})</summary><table>${led.map(x => `<tr><td>${fmt(x.at)}</td><td>${esc(x.type.replaceAll('_', ' '))}</td><td class="r">${gbp(x.amount)}</td><td class="small"><code>${esc(x.provider_id)}</code></td></tr>`).join('')}</table></details>` : ''}
+      ${ops.some(o => o.provider_status && ['ACCEPTED', 'SETTLED'].includes(o.provider_status) && o.kind === 'refund') ? '<p class="small muted">Refund status is the provider\'s (ACCEPTED/SETTLED); it does not prove the buyer\'s bank has posted the money.</p>' : ''}</div>`;
+  }
+  if (d.ops) {
+    h += `<div class="card"><h2>Operating instructions</h2><dl class="kv"><dt>Front office</dt><dd>${esc(d.ops.front_office)}</dd><dt>Events</dt><dd>${esc(d.ops.events)}</dd><dt>F&amp;B</dt><dd>${esc(d.ops.food_and_beverage)}</dd><dt>Finance</dt><dd>${esc(d.ops.finance)}</dd></dl></div>`;
+  }
+  // buyer console
+  const s = d.buyer_suggestion, key = d.id + JSON.stringify(s) + d.thread.length;
+  const cur = d.versions.length ? d.versions[d.versions.length - 1] : null;
+  const buyerBox = `<div class="card" id="buyerBox"><h2>Buyer console <span class="small muted">presenter acts as the authenticated buyer</span></h2>
+    ${s ? `<div class="small muted">Next move from ${esc(d.company)}'s private brief:</div>` : `<div class="small muted">The buyer's brief has nothing to send right now${d.status === 'awaiting_payment' ? ' (pay on the hosted page)' : d.status === 'acceptance_pending_organizer' ? ' (organizer is deciding)' : ''}. You can still write one.</div>`}
+    <div class="row" style="margin:6px 0"><select id="bAct">${['reply', 'counter', 'accept', 'change_request', 'message', 'decline'].map(a => `<option ${s && s.action === a ? 'selected' : ''}>${a}</option>`).join('')}</select>
+      <input type="text" id="bPayload" style="flex:1" value="${esc(JSON.stringify(s ? s.payload : (cur ? {version: cur.n} : {})))}" title="structured payload"></div>
+    <textarea id="bText" rows="3">${esc(s ? s.text : '')}</textarea>
+    <div class="row" style="margin-top:6px"><button class="primary" id="bSend">Send as buyer</button><button id="bAgent">Let buyer agent respond</button>
+      ${S.runner.settings.buyer_mode === 'agent' ? '<span class="chip acc">buyer agent is on</span>' : ''}</div></div>`;
+  h += keepBuyer && draftKey === key ? keepBuyer : buyerBox;
+  draftKey = key;
+  $('deal').innerHTML = h;
+  document.querySelectorAll('#deal details').forEach((x, i) => { if (opens[i] !== undefined) x.open = opens[i]; });
+  window.scrollTo(0, scroll);
+  if ($('chkPay')) $('chkPay').onclick = () => api(`/api/deals/${d.id}/check_payment`, {}).then(load);
+  if ($('chkRef')) $('chkRef').onclick = () => api(`/api/deals/${d.id}/check_refund`, {}).then(load);
+  $('bSend').onclick = async () => {
+    let payload = {}; try { payload = JSON.parse($('bPayload').value || '{}'); } catch (e) { return alert('payload must be JSON'); }
+    await api(`/api/buyer/${d.id}`, {token: d.buyer_token, action: $('bAct').value, text: $('bText').value, payload});
+    draftKey = null; load();
+  };
+  $('bAgent').onclick = async () => { await api(`/api/buyer/${d.id}/agent`, {}); draftKey = null; load(); };
+}
+
+function renderApprovals() {
+  const list = S.approvals.slice().reverse();
+  $('approvals').innerHTML = list.map(a => {
+    const who = a.approver === 'hotel_manager' ? 'Hotel manager' : 'Buyer organizer';
+    return `<div class="ap ${a.status}"><div class="row" style="justify-content:space-between"><b>${who}</b><span class="chip ${a.status === 'approved' ? 'ok' : a.status === 'pending' ? 'warn' : a.status === 'rejected' ? 'bad' : ''}">${a.status}</span></div>
+      <div class="small muted">${a.ref} · ${a.subject}${a.version ? ' v' + a.version + ' · hash ' + a.hash : ''}${a.amount ? ' · ' + gbp(a.amount) + ' GBP' : ''} · ${fmt(a.requested_at)}</div>
+      <div style="margin:4px 0">${esc(a.summary)}</div>
+      ${a.status === 'pending' ? `<div class="row"><button class="okb" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve as ${who.toLowerCase()}</button><button class="badb" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div>` : a.note ? `<div class="small muted">${esc(a.note)}</div>` : ''}</div>`;
+  }).join('') || '<span class="muted">None yet.</span>';
+  document.querySelectorAll('[data-ap]').forEach(b => b.onclick = async () => {
+    const note = b.dataset.d === 'reject' ? (prompt('Reason (optional)') || '') : '';
+    await api(`/api/approvals/${b.dataset.ap}`, {decision: b.dataset.d, actor: b.dataset.who, note}); load();
+  });
+}
+function renderFeed() {
+  const only = $('onlyDeal').checked;
+  const items = S.activity.filter(a => !only || !a.deal_id || a.deal_id === sel).slice().reverse();
+  const ref = id => (S.deals.find(d => d.id === id) || {}).ref || '';
+  $('feed').innerHTML = items.map(a => `<div class="act ${a.actor.replace(/\s.*/, '')} ${a.actor.replaceAll(' ', '_')}"><span class="w">${esc(a.actor)}</span> <span class="muted">${fmt(a.at)}${a.deal_id ? ' · ' + ref(a.deal_id) : ''}</span><div>${esc(a.text)}</div></div>`).join('');
+}
+
+$('onlyDeal').onchange = renderFeed;
+$('runSeller').onclick = () => api('/api/seller/run', {}).then(load);
+$('auto').onchange = e => api('/api/settings', {auto_seller: e.target.checked}).then(load);
+$('sellerMode').onchange = e => api('/api/settings', {seller_mode: e.target.value}).then(load, load);
+$('buyerMode').onchange = e => api('/api/settings', {buyer_mode: e.target.value}).then(load);
+document.querySelectorAll('[data-h]').forEach(b => b.onclick = () => api('/api/clock', {hours: +b.dataset.h}).then(load));
+$('jump').onclick = () => api('/api/clock', {to: '2027-01-20T09:00:00+00:00'}).then(load);
+$('delayN').onchange = e => api('/api/sim', {delay_refund_notifications: e.target.checked}).then(load);
+$('failCommit').onchange = e => api('/api/sim', {fail_next_commit: e.target.checked}).then(load);
+$('releaseN').onclick = () => api('/api/notifications/release', {}).then(load);
+$('reset').onclick = () => confirm('Reset the hotel scenario? Airwallex records are kept; a new run id isolates their events.') && api('/api/reset', {}).then(() => { sel = null; load(); });
+$('paste').onclick = () => $('dlg').showModal();
+$('rfpSend').onclick = async e => { e.preventDefault(); const r = await api('/api/inbox', {from: $('rfpFrom').value, subject: $('rfpSubj').value, body: $('rfpBody').value}); $('dlg').close(); sel = r.deal_id; load(); };
+load(); setInterval(load, 1500);
+</script>
+</body>
+</html>

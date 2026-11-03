@@ -1,0 +1,1433 @@
+"""The hotel back office: shared state and every operation an agent, buyer or manager can perform.
+
+Agents never change state directly. They call these methods, which enforce pricing, authority,
+inventory and payment rules in code and refuse anything outside them (`Refused`). State is one
+JSON document saved after every change, so a refresh or restart picks up where the demo was.
+
+Invariants enforced here:
+- inventory: available = capacity - held - booked, never negative; a hold converts to a booking in
+  one operation, and an accepted reduction releases rooms exactly once.
+- versions: offers and amendments are immutable versions with a hash of their terms; approvals and
+  acceptance name a version and its hash, so a changed offer needs fresh approval.
+- money: every provider call is preceded by a persisted operation with its own request_id; a call
+  whose outcome is unknown blocks any new call for the same purpose until it is resolved; ledger
+  entries carry a unique key, so a repeated notification can't credit twice.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+import secrets
+import threading
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from . import calc
+from .calc import gbp
+from .extract import extract, missing_info, stay_nights
+from .policy import buyer_check, hotel_check
+from .provider import AirwallexError, AmbiguousResult
+
+ROOT = Path(__file__).resolve().parents[3]
+SCENARIO = ROOT / "data" / "groupsales" / "scenario.json"
+REFUND_RANK = {"RECEIVED": 1, "ACCEPTED": 2, "SETTLED": 3, "FAILED": 9}
+
+
+class Refused(Exception):
+    """The operation is outside the caller's authority or the hotel's hard limits."""
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _dt(s: str) -> datetime:
+    return datetime.fromisoformat(s)
+
+
+def _hash(obj) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:12]
+
+
+class Engine:
+    def __init__(self, var_dir: str | Path, provider, scenario_path: str | Path = SCENARIO,
+                 public_base: str = "http://localhost:8010"):
+        self.var = Path(var_dir)
+        self.var.mkdir(parents=True, exist_ok=True)
+        self.provider = provider
+        self.scenario_path = Path(scenario_path)
+        self.public_base = public_base.rstrip("/")
+        self.lock = threading.RLock()
+        self.path = self.var / "state.json"
+        self.scenario = json.loads(self.scenario_path.read_text())
+        self.listeners: list = []          # called after state changes that should wake an agent
+        if self.path.exists():
+            self.s = json.loads(self.path.read_text())
+        else:
+            self.s = {}
+            self.reset(reason="first start", archive=False)
+
+    # ================================================================ basics
+    @property
+    def hotel(self):
+        return self.scenario["hotel"]
+
+    @property
+    def policy(self):
+        return self.scenario["policy"]
+
+    @property
+    def rms(self):
+        return self.scenario["rms"]
+
+    def now(self) -> str:
+        return self.s["clock"]
+
+    def _save(self):
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.s, indent=1, default=str))
+        tmp.replace(self.path)
+
+    def _id(self, prefix: str) -> str:
+        self.s["seq"] += 1
+        return f"{prefix}{self.s['seq']:04d}"
+
+    def log(self, deal_id, actor: str, kind: str, text: str, data=None):
+        self.s["activity"].append({"at": self.now(), "real_at": _iso(datetime.now(timezone.utc)), "deal_id": deal_id,
+                                   "actor": actor, "kind": kind, "text": text, "data": data})
+
+    def _wake(self, reason: str):
+        for fn in list(self.listeners):
+            try:
+                fn(reason)
+            except Exception:
+                pass
+
+    def deal(self, deal_id: str) -> dict:
+        d = self.s["deals"].get(deal_id)
+        if not d:
+            for x in self.s["deals"].values():
+                if x["ref"].lower() == str(deal_id).lower():
+                    return x
+            raise Refused(f"no deal {deal_id}")
+        return d
+
+    # ================================================================ reset / clock
+    def reset(self, reason: str = "presenter reset", archive: bool = True) -> dict:
+        with self.lock:
+            followups = []
+            if archive and self.s:
+                for op in self.s.get("operations", {}).values():
+                    if op["status"] in ("submitting", "unknown", "created", "RECEIVED"):
+                        followups.append({**op, "client_secret": None, "marked_at": _iso(datetime.now(timezone.utc)),
+                                          "note": "in flight at reset: needs follow-up against the provider"})
+                (self.var / "runs").mkdir(exist_ok=True)
+                (self.var / "runs" / f"{self.s['run_id']}.json").write_text(json.dumps(self.s, indent=1))
+                if followups:
+                    fpath = self.var / "followups.json"
+                    prior = json.loads(fpath.read_text()) if fpath.exists() else []
+                    fpath.write_text(json.dumps(prior + followups, indent=1))
+            self.scenario = json.loads(self.scenario_path.read_text())
+            h = self.hotel
+            prior_events = self.s.get("events_seen", []) if self.s else []
+            self.s = {
+                "run_id": "run_" + uuid.uuid4().hex[:8],
+                "clock": self.scenario["start"],
+                "seq": 1000,
+                "inventory": {n: {rt: {"capacity": cap, "held": 0, "booked": 0}
+                                  for rt, cap in h["availability"].items()} for n in h["nights"]},
+                "meeting": {room: {day: {"status": "free", "deal_id": None} for day in mr["available"]}
+                            for room, mr in h["meeting_rooms"].items()},
+                "breakfast": {m: {"held": 0, "booked": 0} for m in self._mornings(h["nights"])},
+                "emails": {}, "deals": {}, "holds": {}, "approvals": {}, "operations": {}, "ledger": [],
+                "activity": [], "events_seen": prior_events[-500:], "delayed_notifications": [],
+                "reconcile_log": [],
+                "sim": {"delay_refund_notifications": True, "fail_next_commit": False},
+                "followups_at_reset": len(followups),
+            }
+            self.log(None, "system", "reset", f"Scenario reset ({reason}). New run {self.s['run_id']}; "
+                     f"clock {self.s['clock']}." + (f" {len(followups)} in-flight provider operations marked for "
+                                                    "follow-up." if followups else ""))
+            for e in self.scenario["inbox"]:
+                self.ingest_email(e["from"], e["subject"], e["body"], message_id=e["message_id"],
+                                  received_at=e["received_at"], wake=False)
+            self._save()
+            return {"run_id": self.s["run_id"], "followups": len(followups)}
+
+    @staticmethod
+    def _mornings(nights: list[str]) -> list[str]:
+        return [(calc.d(n) + timedelta(days=1)).isoformat() for n in nights]
+
+    def advance_clock(self, hours: float | None = None, to: str | None = None) -> str:
+        with self.lock:
+            cur = _dt(self.now())
+            new = _dt(to) if to else cur + timedelta(hours=hours or 0)
+            if new < cur:
+                raise Refused("the scenario clock only moves forward")
+            self.s["clock"] = _iso(new)
+            self.log(None, "presenter", "clock", f"Scenario clock moved to {self.s['clock']}.")
+            self._sweep()
+            self._save()
+        self._wake("clock")
+        return self.s["clock"]
+
+    def set_sim(self, **knobs):
+        with self.lock:
+            for k, v in knobs.items():
+                if k in self.s["sim"]:
+                    self.s["sim"][k] = bool(v)
+                elif hasattr(self.provider, "knobs") and k in self.provider.knobs:
+                    self.provider.knobs[k] = bool(v)
+            self.log(None, "presenter", "sim", f"Simulation settings: {knobs}")
+            self._save()
+
+    # ================================================================ intake
+    def ingest_email(self, sender: str, subject: str, body: str, message_id: str | None = None,
+                     in_reply_to: str | None = None, received_at: str | None = None, wake: bool = True) -> dict:
+        with self.lock:
+            norm = re.sub(r"\s+", " ", body.strip().lower())
+            key = message_id or "h:" + hashlib.sha256(f"{sender.lower()}|{norm}".encode()).hexdigest()[:20]
+            content_key = "c:" + hashlib.sha256(f"{sender.lower()}|{norm}".encode()).hexdigest()[:20]
+            for e in self.s["emails"].values():
+                if e["key"] == key or e["content_key"] == content_key:
+                    self.log(e["deal_id"], "system", "duplicate",
+                             f"Duplicate email ignored ({subject!r}); already filed under {self.s['deals'][e['deal_id']]['ref']}.")
+                    self._save()
+                    return {"deal_id": e["deal_id"], "duplicate": True}
+            domain = sender.split("@")[-1].strip(" >").lower()
+            deal = None
+            if in_reply_to:
+                deal = next((self.s["deals"][e["deal_id"]] for e in self.s["emails"].values()
+                             if e["key"] == in_reply_to), None)
+            m = re.search(r"\b(GS-\d{4})\b", subject)
+            if not deal and m:
+                deal = next((x for x in self.s["deals"].values() if x["ref"] == m.group(1)), None)
+            base = re.sub(r"^\s*((re|fw|fwd)\s*:\s*)+", "", subject, flags=re.I).strip().lower()
+            if not deal and base != subject.strip().lower():
+                deal = next((x for x in self.s["deals"].values()
+                             if x["subject"].strip().lower() == base and x["domain"] == domain), None)
+            eid = self._id("em")
+            at = received_at or self.now()
+            if deal:
+                self.s["emails"][eid] = {"id": eid, "key": key, "content_key": content_key, "deal_id": deal["id"],
+                                         "from": sender, "subject": subject, "body": body, "at": at}
+                deal["thread"].append({"id": eid, "at": at, "from": "buyer", "channel": "email", "text": body})
+                deal["unread"] = True
+                self.log(deal["id"], "buyer", "email", f"Reply threaded to {deal['ref']}: {body[:140]}")
+                self._save()
+                if wake:
+                    self._wake("email")
+                return {"deal_id": deal["id"], "duplicate": False, "threaded": True}
+
+            did = self._id("deal_")
+            ref = f"GS-{1000 + len(self.s['deals']) + 1}"
+            preview = extract(subject, body, sender)
+            crm = self.scenario["crm"].get(domain)
+            deal = {
+                "id": did, "ref": ref, "domain": domain, "company": (crm or {}).get("account") or domain,
+                "sender": sender, "subject": subject, "received_at": at,
+                "reply_by": preview.get("reply_by"), "status": "new", "requirements": None, "missing": [],
+                "thread": [{"id": eid, "at": at, "from": "buyer", "channel": "email", "text": body,
+                            "subject": subject}],
+                "records": [], "versions": [], "hold_id": None, "accepted_version": None, "booking": None,
+                "finance": {"refund_owed": 0, "refund_owed_version": None}, "flags": [],
+                "buyer_token": secrets.token_urlsafe(12), "unread": True, "handoff": None,
+                "buyer_profile": domain if domain in self.scenario["buyers"] else None,
+                "pending_acceptance": None,
+            }
+            self.s["deals"][did] = deal
+            self.s["emails"][eid] = {"id": eid, "key": key, "content_key": content_key, "deal_id": did,
+                                     "from": sender, "subject": subject, "body": body, "at": at}
+            self.log(did, "system", "intake", f"New inquiry {ref} from {sender}: {subject}")
+            self._save()
+        if wake:
+            self._wake("email")
+        return {"deal_id": did, "duplicate": False, "threaded": False}
+
+    # ================================================================ seller: reading
+    def queue(self) -> list[dict]:
+        with self.lock:
+            self._sweep()
+            out = []
+            for d in self.s["deals"].values():
+                cur = self._current_version(d)
+                hours_left = None
+                if d.get("reply_by"):
+                    hours_left = round((_dt(d["reply_by"]) - _dt(self.now())).total_seconds() / 3600, 1)
+                value = cur["pricing"]["total"] if cur else None
+                out.append({
+                    "deal_id": d["id"], "ref": d["ref"], "company": d["company"], "status": d["status"],
+                    "reply_by": d.get("reply_by"), "hours_to_deadline": hours_left,
+                    "unread_buyer_input": d.get("unread", False),
+                    "waiting_on": self.waiting_on(d), "next_step": self.next_step(d),
+                    "current_version": cur["n"] if cur else None,
+                    "package_value": gbp(value) if value is not None else None,
+                    "margin_pct": cur["pricing"]["margin_all_rooms"]["margin_pct"] if cur else None,
+                })
+            out.sort(key=lambda x: (x["reply_by"] or "9999"))
+            return out
+
+    def deal_view(self, deal_id: str, for_: str = "seller", mark_read: bool = False) -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            if mark_read and for_ == "seller":
+                d["unread"] = False
+                self._save()
+            view = {k: d[k] for k in ("id", "ref", "company", "sender", "subject", "status", "reply_by",
+                                      "requirements", "missing", "thread", "accepted_version", "flags")}
+            view["waiting_on"] = self.waiting_on(d)
+            view["versions"] = [self._version_public(v, for_) for v in d["versions"]]
+            view["finance"] = self.finance(d)
+            view["booking"] = d.get("booking")
+            if for_ == "seller":
+                view["next_step"] = self.next_step(d)
+                view["records_consulted"] = [{"system": r["system"], "checked_at": r["checked_at"],
+                                              "summary": r["summary"]} for r in d["records"]]
+                view["hold"] = self._hold_public(d)
+                view["approvals"] = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]]
+                view["key_dates"] = calc.key_dates(self.hotel, self.policy)
+                view["clock"] = self.now()
+            return view
+
+    def _version_public(self, v: dict, for_: str) -> dict:
+        out = {k: v[k] for k in ("n", "kind", "status", "hash", "terms", "created_at", "sent_at", "message",
+                                 "explanation", "unmet", "expires_at") if k in v}
+        p = v["pricing"]
+        out["pricing"] = {k: p[k] for k in ("lines", "total", "deposit", "deposit_pct", "attrition_pct",
+                                            "attrition_allowance", "allowance_remaining", "room_nights",
+                                            "contracted_room_nights", "released_room_nights",
+                                            "per_room_night_incl_breakfast", "accommodation")}
+        if for_ == "seller":
+            out["pricing"]["margin_all_rooms"] = p["margin_all_rooms"]
+            out["pricing"]["margin_full_release"] = p["margin_full_release"]
+            out["hotel_check"] = v.get("hotel_check")
+            out["reduction"] = v.get("reduction")
+        elif v.get("reduction"):
+            r = v["reduction"]
+            out["reduction"] = {k: r[k] for k in ("requested_room_nights", "allowance", "remaining_after",
+                                                  "revised_deposit", "refund_due", "refund_mode")}
+        return out
+
+    def _hold_public(self, d):
+        h = self.s["holds"].get(d.get("hold_id") or "")
+        return h and {k: h[k] for k in ("id", "status", "expires_at", "rooms", "room_type", "meeting")}
+
+    # ================================================================ seller: requirements & records
+    def record_requirements(self, deal_id: str, req: dict, actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            base = d["requirements"] or {}
+            merged = {**base, **{k: v for k, v in req.items() if v is not None}}
+            if isinstance(req.get("meeting"), dict) and isinstance(base.get("meeting"), dict):
+                merged["meeting"] = {**base["meeting"], **{k: v for k, v in req["meeting"].items() if v is not None}}
+            if req.get("meeting") is None and "meeting" in req and base.get("meeting") is None:
+                merged["meeting"] = None
+            rt = merged.get("room_type")
+            if rt and rt not in self.hotel["room_types"]:
+                merged.setdefault("unsupported", []).append(f"{rt} rooms")
+            problems = list(merged.get("unsupported") or [])
+            if merged.get("arrival") and merged.get("departure"):
+                nights = stay_nights(merged["arrival"], merged["departure"])
+                if not nights or any(n not in self.hotel["nights"] for n in nights):
+                    problems.append(f"dates {merged['arrival']} to {merged['departure']} are outside the supported "
+                                    f"stay ({self.hotel['arrival']} to {self.hotel['departure']})")
+            merged["out_of_scope"] = problems
+            d["requirements"] = merged
+            d["missing"] = missing_info(merged)
+            if d["status"] == "new":
+                d["status"] = "intake"
+            self.log(d["id"], actor, "requirements",
+                     "Requirements recorded" + (f"; missing: {', '.join(d['missing'])}" if d["missing"] else "; complete")
+                     + (f"; out of scope: {', '.join(problems)}" if problems else ""), merged)
+            self._save()
+            return {"requirements": merged, "missing": d["missing"], "out_of_scope": problems}
+
+    def check_systems(self, deal_id: str, actor: str = "seller") -> dict:
+        """Consult PMS, meeting space, breakfast, RMS, CRM and policy records for this deal."""
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            req = d["requirements"]
+            if not req:
+                raise Refused("record the requirements first")
+            now = self.now()
+            nights = stay_nights(req["arrival"], req["departure"]) if req.get("arrival") and req.get("departure") else []
+            rt = req.get("room_type")
+            own_hold = self.s["holds"].get(d.get("hold_id") or "")
+            pms = {}
+            for n in nights:
+                inv = self.s["inventory"].get(n)
+                if not inv:
+                    pms[n] = "outside supported stay"
+                    continue
+                pms[n] = {t: {"available": self._available(n, t), "held": inv[t]["held"], "booked": inv[t]["booked"]}
+                          for t in inv}
+            meeting = None
+            if req.get("meeting"):
+                day = req["meeting"].get("date")
+                slot = self.s["meeting"]["thames"].get(day)
+                mr = self.hotel["meeting_rooms"]["thames"]
+                meeting = {"room": "Thames Room", "date": day, "status": slot["status"] if slot else "not available",
+                           "hours_available": mr["available"].get(day), "capacity": mr["capacity"],
+                           "day_rate": gbp(mr["day_rate"]), "includes": mr["includes"]}
+            bf = {m: {"capacity": self.hotel["breakfast"]["group_capacity_per_day"],
+                      "committed": v["held"] + v["booked"]} for m, v in self.s["breakfast"].items()}
+            rates = self.rms["rates"].get(rt) if rt else self.rms["rates"]
+            crm = self.scenario["crm"].get(d["domain"], {"account": None, "type": "unknown sender", "credit_terms": False})
+            records = [
+                {"system": "PMS", "summary": "; ".join(
+                    f"{n}: {v[rt]['available'] if isinstance(v, dict) and rt in v else v} {rt or 'rooms'} free"
+                    for n, v in pms.items()) + (f" (own hold {own_hold['id']} {own_hold['status']})" if own_hold else ""),
+                 "data": pms},
+                {"system": "Meeting space", "summary": (f"Thames Room {meeting['date']}: {meeting['status']}, "
+                                                        f"{meeting['hours_available']}, classroom {meeting['capacity'].get('classroom')}")
+                 if meeting else "No meeting space requested", "data": meeting},
+                {"system": "F&B (breakfast)", "summary": "; ".join(f"{m}: {v['committed']}/{v['capacity']} group covers committed"
+                                                                 for m, v in bf.items()), "data": bf},
+                {"system": "RMS", "summary": (f"{rt}: target {gbp(rates['target'])}, seller floor {gbp(rates['autonomous_floor'])}, "
+                                              f"absolute min {gbp(rates['absolute_min'])}; min margin {self.rms['min_contribution_margin_pct']}%")
+                 if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"]}},
+                {"system": "CRM", "summary": f"{crm.get('account') or d['domain']}: {crm.get('type')}, "
+                                             f"credit terms {'yes' if crm.get('credit_terms') else 'no'}", "data": crm},
+                {"system": "Policy", "summary": "Deposit 30% standard (up to 40%; 20-29% needs manager); attrition 10% "
+                                                "standard (to 20% with manager, needs 40% deposit); quotes/holds 24h",
+                 "data": {"deposit": self.policy["deposit"], "attrition": self.policy["attrition"],
+                          "key_dates": calc.key_dates(self.hotel, self.policy)}},
+            ]
+            for r in records:
+                r["checked_at"] = now
+                r["query"] = d["ref"]
+            d["records"] = records + [r for r in d["records"] if r["checked_at"] != now][:12]
+            self.log(d["id"], actor, "records", "Checked PMS, meeting space, breakfast, RMS, CRM and policy records.",
+                     [{"system": r["system"], "summary": r["summary"]} for r in records])
+            self._save()
+            return {"checked_at": now, "pms": pms, "meeting": meeting, "breakfast": bf, "rms": rates,
+                    "crm": crm, "key_dates": calc.key_dates(self.hotel, self.policy)}
+
+    def ask_buyer(self, deal_id: str, questions: list[str], message: str, actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                "text": message, "questions": questions})
+            d["status"] = "needs_info"
+            self.log(d["id"], actor, "clarification", f"Asked {d['company']}: {'; '.join(questions)}")
+            self._save()
+            return {"sent": True, "status": d["status"]}
+
+    def note(self, deal_id: str | None, text: str, actor: str = "seller"):
+        with self.lock:
+            self.log(deal_id and self.deal(deal_id)["id"], actor, "reasoning", text)
+            self._save()
+
+    # ================================================================ offers
+    def build_terms(self, d: dict, rate: int, deposit_pct: int, attrition_pct: int,
+                    rooms_per_night: int | None = None, room_type: str | None = None) -> dict:
+        req = d["requirements"] or {}
+        if req.get("out_of_scope"):
+            raise Refused("request is outside supported dates/services: " + "; ".join(req["out_of_scope"])
+                          + ". Hand it to a person (escalate).")
+        if not (req.get("arrival") and req.get("departure") and (room_type or req.get("room_type"))):
+            raise Refused("requirements incomplete: need dates and room type")
+        nights = stay_nights(req["arrival"], req["departure"])
+        n_rooms = int(rooms_per_night or req.get("rooms") or 0)
+        if n_rooms <= 0:
+            raise Refused("need a number of rooms")
+        guests = int(req.get("guests") or n_rooms * int(req.get("occupancy") or 1))
+        terms = {
+            "room_type": room_type or req["room_type"], "rate": int(rate),
+            "rooms": {n: n_rooms for n in nights}, "released": {n: 0 for n in nights},
+            "breakfast": {m: guests for m in self._mornings(nights)} if req.get("breakfast") else {},
+            "meeting": None, "attrition_pct": int(attrition_pct), "deposit_pct": int(deposit_pct),
+            "payer": req.get("payer"), "currency": "GBP",
+        }
+        if req.get("meeting"):
+            m = req["meeting"]
+            terms["meeting"] = {"room": "thames", "date": m.get("date"), "layout": m.get("layout"),
+                                "attendees": int(m.get("attendees") or guests), "hours": m.get("hours")}
+        return terms
+
+    def price_terms(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int,
+                    rooms_per_night: int | None = None, room_type: str | None = None) -> dict:
+        """Dry run: what these terms cost, earn, and whether the seller may offer them."""
+        with self.lock:
+            d = self.deal(deal_id)
+            terms = self.build_terms(d, rate, deposit_pct, attrition_pct, rooms_per_night, room_type)
+            pricing = calc.price(terms, self.hotel, self.rms)
+            check = hotel_check(terms, pricing, self.scenario)
+            return {"terms": terms, "pricing": pricing, "hotel_check": check,
+                    "fits_inventory": self._can_hold(terms, d)}
+
+    def propose_offer(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int, message: str,
+                      explanation: str = "", unmet: list[str] | None = None, rooms_per_night: int | None = None,
+                      room_type: str | None = None, justification: str = "", actor: str = "seller") -> dict:
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            if d.get("accepted_version") and d["status"] not in ("expired",):
+                raise Refused("an agreement is already accepted; changes go through prepare_reduction")
+            if d["missing"]:
+                raise Refused("still missing: " + "; ".join(d["missing"]) + ". Ask the buyer first.")
+            terms = self.build_terms(d, rate, deposit_pct, attrition_pct, rooms_per_night, room_type)
+            pricing = calc.price(terms, self.hotel, self.rms)
+            check = hotel_check(terms, pricing, self.scenario)
+            if not check["ok"]:
+                raise Refused("outside hotel limits: " + "; ".join(check["hard"]))
+            if not self._can_hold(terms, d):
+                raise Refused("inventory cannot be held for these terms (rooms, meeting space or breakfast capacity); "
+                              "offer a feasible alternative or explain why you cannot quote")
+            for v in d["versions"]:
+                if v["status"] in ("draft", "pending_approval", "approved", "sent"):
+                    v["status"] = "superseded"
+            for a in self.s["approvals"].values():
+                if a["deal_id"] == d["id"] and a["status"] == "pending" and a["subject"] == "offer":
+                    a["status"] = "stale"
+            n = len(d["versions"]) + 1
+            v = {"n": n, "kind": "offer", "terms": terms, "pricing": pricing, "hotel_check": check,
+                 "hash": _hash({"kind": "offer", "terms": terms}), "status": "draft", "created_at": self.now(),
+                 "sent_at": None, "message": message, "explanation": explanation, "unmet": unmet or [],
+                 "expires_at": None}
+            d["versions"].append(v)
+            self.log(d["id"], actor, "offer_drafted",
+                     f"Drafted v{n}: {terms['room_type']} {gbp(terms['rate'])}, {terms['attrition_pct']}% attrition, "
+                     f"{terms['deposit_pct']}% deposit; total {gbp(pricing['total'])}, deposit {gbp(pricing['deposit'])}, "
+                     f"margin {pricing['margin_all_rooms']['margin_pct']}% / {pricing['margin_full_release']['margin_pct']}%.")
+            if check["approvals"]:
+                v["status"] = "pending_approval"
+                d["status"] = "pending_approval"
+                summary = (f"{d['company']} v{n}: {'; '.join(check['approvals'])}. Total {gbp(pricing['total'])}, "
+                           f"deposit {terms['deposit_pct']}% = {gbp(pricing['deposit'])}, attrition allowance "
+                           f"{pricing['attrition_allowance']} room-nights. Margin {pricing['margin_all_rooms']['margin_pct']}% "
+                           f"(all rooms) / {pricing['margin_full_release']['margin_pct']}% (full release)."
+                           + (f" Seller's case: {justification}" if justification else ""))
+                appr = self._request_approval(d, "hotel_manager", "offer", summary, check["approvals"],
+                                              version=n, obj_hash=v["hash"])
+                self._save()
+                return {"version": n, "status": "pending_approval", "approval_id": appr["id"], "pricing": pricing,
+                        "note": "Paused: hotel manager approval required before this version can be sent."}
+            res = self._send_version(d, v, actor)
+            self._save()
+            return res
+
+    def send_offer(self, deal_id: str, version: int, actor: str = "seller") -> dict:
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            v = self._version(d, version)
+            if v is not d["versions"][-1]:
+                raise Refused(f"v{version} is not the latest version")
+            if v["status"] == "sent":
+                return {"version": version, "status": "sent", "note": "already sent"}
+            if v["status"] != "approved":
+                raise Refused(f"v{version} is {v['status']}; it needs a valid hotel manager approval first")
+            if not self._approval_valid(d, "offer", version, v["hash"]):
+                raise Refused("the approval on file does not match this version's terms")
+            res = self._send_version(d, v, actor)
+            self._save()
+            return res
+
+    def _send_version(self, d: dict, v: dict, actor: str) -> dict:
+        hold = self.s["holds"].get(d.get("hold_id") or "")
+        if v["kind"] == "offer":
+            if hold and hold["status"] == "active":
+                if not self._hold_covers(hold, v["terms"]):
+                    self._release_hold(hold, "replaced by a new package")
+                    hold = None
+            if not hold or hold["status"] != "active":
+                hold = self._create_hold(d, v["terms"])
+                if not hold:
+                    v["status"] = "draft"
+                    raise Refused("could not hold the rooms/meeting space; this offer cannot be sent as bookable")
+            v["expires_at"] = hold["expires_at"]
+        v["status"] = "sent"
+        v["sent_at"] = self.now()
+        d["status"] = "offer_sent" if v["kind"] == "offer" else "amendment_sent"
+        d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                            "text": v["message"], "version": v["n"]})
+        p = v["pricing"]
+        self.log(d["id"], actor, "offer_sent" if v["kind"] == "offer" else "amendment_sent",
+                 f"Sent v{v['n']} to {d['company']}: total {gbp(p['total'])}, deposit {gbp(p['deposit'])}"
+                 + (f"; held until {v['expires_at']}" if v.get("expires_at") else ""))
+        return {"version": v["n"], "status": "sent", "expires_at": v.get("expires_at"), "total": gbp(p["total"]),
+                "deposit": gbp(p["deposit"])}
+
+    def _version(self, d, n) -> dict:
+        for v in d["versions"]:
+            if v["n"] == int(n):
+                return v
+        raise Refused(f"no version {n}")
+
+    def _current_version(self, d):
+        if d.get("accepted_version"):
+            return self._version(d, d["accepted_version"])
+        live = [v for v in d["versions"] if v["status"] not in ("superseded", "rejected")]
+        return live[-1] if live else None
+
+    # ================================================================ approvals
+    def _request_approval(self, d, approver: str, subject: str, summary: str, reasons: list[str], version=None,
+                          obj_hash=None, amount=None, extra=None) -> dict:
+        aid = self._id("ap")
+        a = {"id": aid, "deal_id": d["id"], "ref": d["ref"], "approver": approver, "subject": subject,
+             "summary": summary, "reasons": reasons, "version": version, "hash": obj_hash, "amount": amount,
+             "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
+        self.s["approvals"][aid] = a
+        who = "Hotel manager" if approver == "hotel_manager" else "Organizer"
+        self.log(d["id"], "system", "approval_requested", f"{who} approval requested: {summary}")
+        return a
+
+    def _approval_valid(self, d, subject, version, obj_hash, approver="hotel_manager") -> bool:
+        return any(a["deal_id"] == d["id"] and a["subject"] == subject and a["approver"] == approver
+                   and a["version"] == version and a["hash"] == obj_hash and a["status"] == "approved"
+                   for a in self.s["approvals"].values())
+
+    def decide_approval(self, approval_id: str, decision: str, actor: str, note: str = "") -> dict:
+        """Only the named approver can decide; the decision binds to the exact version/amount on file."""
+        with self.lock:
+            self._sweep()
+            a = self.s["approvals"].get(approval_id)
+            if not a:
+                raise Refused("no such approval")
+            if actor != a["approver"]:
+                raise Refused(f"only the {a['approver'].replace('_', ' ')} can decide this")
+            if a["status"] != "pending":
+                raise Refused(f"approval is already {a['status']}")
+            if decision not in ("approve", "reject"):
+                raise Refused("decision must be approve or reject")
+            d = self.deal(a["deal_id"])
+            # A request whose object changed since it was raised is stale, whatever the decision.
+            if a["version"] is not None:
+                v = self._version(d, a["version"])
+                if v["hash"] != a["hash"] or v["status"] in ("superseded",):
+                    a["status"] = "stale"
+                    self.log(d["id"], "system", "approval_stale", f"Approval {a['id']} is stale: v{a['version']} changed.")
+                    self._save()
+                    raise Refused("this request is stale: the version it names has changed")
+            a["status"] = "approved" if decision == "approve" else "rejected"
+            a["decided_at"] = self.now()
+            a["note"] = note
+            who = "Hotel manager" if actor == "hotel_manager" else "Organizer"
+            self.log(d["id"], actor, "approval_" + a["status"], f"{who} {a['status']} {a['subject']}"
+                     + (f" v{a['version']}" if a["version"] else "") + (f" {gbp(a['amount'])}" if a["amount"] else "")
+                     + (f": {note}" if note else ""))
+            if a["subject"] == "offer":
+                v = self._version(d, a["version"])
+                v["status"] = "approved" if decision == "approve" else "rejected"
+                d["status"] = "approved_to_send" if decision == "approve" else "revise"
+            elif a["subject"] == "reduction":
+                v = self._version(d, a["version"])
+                v["status"] = "approved" if decision == "approve" else "rejected"
+                if decision == "approve":
+                    d["status"] = "amendment_approved"
+                else:
+                    d["status"] = "confirmed"
+                    d["flags"].append(f"reduction v{a['version']} declined by manager; existing agreement stands")
+            elif a["subject"] == "acceptance":
+                if decision == "approve":
+                    self._record_acceptance(d, self._version(d, a["version"]), "buyer (organizer-authorized)")
+                else:
+                    d["pending_acceptance"] = None
+                    d["status"] = "offer_sent"
+                    d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "buyer", "channel": "portal",
+                                        "text": f"Our organizer did not authorize v{a['version']}."})
+            elif a["subject"] == "refund":
+                if decision == "reject":
+                    d["flags"].append(f"refund {gbp(a['amount'])} not authorized: amount remains owed to the buyer; "
+                                      "discrepancy escalated for manager review")
+                    d["handoff"] = {"at": self.now(), "reason": "refund authorization withheld while the buyer is owed "
+                                    f"{gbp(d['finance']['refund_owed'])}"}
+            d["unread"] = True
+            self._save()
+        self._wake("approval")
+        return {"id": a["id"], "status": a["status"]}
+
+    # ================================================================ buyer interface
+    def buyer_action(self, deal_id: str, token: str, action: str, text: str = "", payload: dict | None = None,
+                     actor: str = "buyer") -> dict:
+        """Requests, counteroffers, acceptance and change requests, from the authenticated buyer only."""
+        payload = payload or {}
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            if not secrets.compare_digest(token or "", d["buyer_token"]):
+                raise Refused("not authenticated as this deal's buyer")
+            msg = {"id": self._id("msg"), "at": self.now(), "from": "buyer", "channel": "portal", "text": text,
+                   "action": action, "payload": payload}
+            result: dict = {"recorded": True}
+            if action == "accept":
+                n = int(payload.get("version") or 0)
+                v = self._version(d, n)
+                result = self._buyer_accept(d, v)
+            elif action == "change_request":
+                if not d.get("booking") or d["booking"]["status"] not in ("confirmed",):
+                    raise Refused("there is no confirmed booking to change")
+            elif action not in ("reply", "counter", "decline", "message"):
+                raise Refused(f"unknown action {action}")
+            d["thread"].append(msg)
+            d["unread"] = True
+            if action == "decline":
+                d["status"] = "lost"
+            self.log(d["id"], actor, "buyer_" + action, (text or action)[:200], payload or None)
+            self._save()
+        self._wake("buyer")
+        return result
+
+    def _buyer_accept(self, d: dict, v: dict) -> dict:
+        if v["status"] != "sent" or v is not d["versions"][-1]:
+            raise Refused(f"v{v['n']} is not the current offer (status {v['status']})")
+        if v["kind"] == "offer":
+            hold = self.s["holds"].get(d.get("hold_id") or "")
+            if not hold or hold["status"] != "active" or _dt(hold["expires_at"]) <= _dt(self.now()):
+                raise Refused("this offer has expired; the hotel must re-check availability and renew it")
+        mandate = self.scenario["buyers"].get(d.get("buyer_profile") or "")
+        reasons = buyer_check(v["terms"], v["pricing"], mandate) if mandate and v["kind"] == "offer" else []
+        if reasons and not self._approval_valid(d, "acceptance", v["n"], v["hash"], approver="organizer"):
+            pending = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]
+                            and a["subject"] == "acceptance" and a["version"] == v["n"] and a["status"] == "pending"), None)
+            if not pending:
+                pending = self._request_approval(
+                    d, "organizer", "acceptance",
+                    f"Buyer agent asks to accept {d['company']} v{v['n']} ({gbp(v['pricing']['total'])}, deposit "
+                    f"{v['terms']['deposit_pct']}% = {gbp(v['pricing']['deposit'])}): " + "; ".join(reasons),
+                    reasons, version=v["n"], obj_hash=v["hash"])
+            d["pending_acceptance"] = {"version": v["n"], "hash": v["hash"], "approval_id": pending["id"]}
+            d["status"] = "acceptance_pending_organizer"
+            return {"accepted": False, "status": "awaiting organizer authorization", "approval_id": pending["id"],
+                    "reasons": reasons}
+        self._record_acceptance(d, v, "buyer")
+        return {"accepted": True, "version": v["n"]}
+
+    def _record_acceptance(self, d, v, who):
+        if v["status"] != "sent" or v is not d["versions"][-1]:
+            raise Refused(f"v{v['n']} is no longer the current offer")
+        v["status"] = "accepted"
+        v["accepted_at"] = self.now()
+        d["pending_acceptance"] = None
+        if v["kind"] == "offer":
+            d["accepted_version"] = v["n"]
+            d["status"] = "accepted"
+            self.log(d["id"], "buyer", "accepted", f"{who} accepted v{v['n']} (hash {v['hash']}).")
+        else:
+            self._apply_amendment(d, v)
+
+    # ================================================================ holds & inventory
+    def _available(self, night: str, rt: str) -> int:
+        inv = self.s["inventory"][night][rt]
+        return inv["capacity"] - inv["held"] - inv["booked"]
+
+    def _can_hold(self, terms: dict, d: dict) -> bool:
+        own = self.s["holds"].get(d.get("hold_id") or "")
+        own_active = own if own and own["status"] == "active" else None
+        for night, n in terms["rooms"].items():
+            if night not in self.s["inventory"]:
+                return False
+            extra = own_active["rooms"].get(night, 0) if own_active and own_active["room_type"] == terms["room_type"] else 0
+            if n > self._available(night, terms["room_type"]) + extra:
+                return False
+        cap = self.hotel["breakfast"]["group_capacity_per_day"]
+        for m, n in terms["breakfast"].items():
+            b = self.s["breakfast"].get(m)
+            extra = own_active["breakfast"].get(m, 0) if own_active else 0
+            if b is None or b["held"] + b["booked"] - extra + n > cap:
+                return False
+        if terms.get("meeting"):
+            slot = self.s["meeting"]["thames"].get(terms["meeting"]["date"])
+            if not slot or (slot["status"] != "free" and slot["deal_id"] != d["id"]):
+                return False
+        return True
+
+    def _hold_covers(self, hold, terms) -> bool:
+        return (hold["room_type"] == terms["room_type"] and hold["rooms"] == terms["rooms"]
+                and hold["breakfast"] == terms["breakfast"]
+                and (hold["meeting"] or None) == ((terms.get("meeting") or {}).get("date")))
+
+    def _create_hold(self, d, terms) -> dict | None:
+        if not self._can_hold(terms, d):
+            return None
+        hid = self._id("hold_")
+        expires = _iso(_dt(self.now()) + timedelta(hours=self.policy["quote_validity_hours"]))
+        rt = terms["room_type"]
+        for night, n in terms["rooms"].items():
+            self.s["inventory"][night][rt]["held"] += n
+        for m, n in terms["breakfast"].items():
+            self.s["breakfast"][m]["held"] += n
+        mdate = (terms.get("meeting") or {}).get("date")
+        if mdate:
+            self.s["meeting"]["thames"][mdate] = {"status": "held", "deal_id": d["id"]}
+        hold = {"id": hid, "deal_id": d["id"], "room_type": rt, "rooms": dict(terms["rooms"]),
+                "breakfast": dict(terms["breakfast"]), "meeting": mdate, "created_at": self.now(),
+                "expires_at": expires, "status": "active"}
+        self.s["holds"][hid] = hold
+        d["hold_id"] = hid
+        self.log(d["id"], "system", "hold", f"PMS hold {hid}: {sum(terms['rooms'].values())} {rt} room-nights"
+                 + (f", Thames Room {mdate}" if mdate else "") + f"; expires {expires}.")
+        return hold
+
+    def _release_hold(self, hold, why: str):
+        if hold["status"] != "active":
+            return
+        for night, n in hold["rooms"].items():
+            self.s["inventory"][night][hold["room_type"]]["held"] -= n
+        for m, n in hold["breakfast"].items():
+            self.s["breakfast"][m]["held"] -= n
+        if hold["meeting"]:
+            self.s["meeting"]["thames"][hold["meeting"]] = {"status": "free", "deal_id": None}
+        hold["status"] = "released"
+        self.log(hold["deal_id"], "system", "hold_released", f"Hold {hold['id']} released: {why}.")
+
+    def _commit_booking(self, d, v) -> bool:
+        """Convert the hold to a booking in one inventory operation. False if it can't be done."""
+        if self.s["sim"].get("fail_next_commit"):
+            self.s["sim"]["fail_next_commit"] = False
+            return False
+        terms = v["terms"]
+        hold = self.s["holds"].get(d.get("hold_id") or "")
+        rt = terms["room_type"]
+        if hold and hold["status"] in ("active", "expired_payment_pending"):
+            covered = self._hold_covers(hold, terms)
+            if not covered:
+                return False
+            for night, n in hold["rooms"].items():
+                inv = self.s["inventory"][night][rt]
+                inv["held"] -= n
+                inv["booked"] += n
+            for m, n in hold["breakfast"].items():
+                self.s["breakfast"][m]["held"] -= n
+                self.s["breakfast"][m]["booked"] += n
+            if hold["meeting"]:
+                self.s["meeting"]["thames"][hold["meeting"]] = {"status": "booked", "deal_id": d["id"]}
+            hold["status"] = "converted"
+            return True
+        # No live hold (released at expiry): book from free inventory only if every unit is still there.
+        tmp = {**terms}
+        d_no_hold = {**d, "hold_id": None}
+        if not self._can_hold(tmp, d_no_hold):
+            return False
+        for night, n in terms["rooms"].items():
+            self.s["inventory"][night][rt]["booked"] += n
+        for m, n in terms["breakfast"].items():
+            self.s["breakfast"][m]["booked"] += n
+        if terms.get("meeting"):
+            self.s["meeting"]["thames"][terms["meeting"]["date"]] = {"status": "booked", "deal_id": d["id"]}
+        return True
+
+    def _sweep(self):
+        """Hold expiry. Reconcile any payment first; keep inventory held while an outcome is unknown."""
+        now = _dt(self.now())
+        for hold in list(self.s["holds"].values()):
+            if hold["status"] != "active" or _dt(hold["expires_at"]) > now:
+                continue
+            d = self.s["deals"][hold["deal_id"]]
+            op = self._deposit_op(d)
+            if op and op["status"] not in ("failed", "cancelled"):
+                self._verify_deposit(d, op, source="hold-expiry reconciliation")
+                if hold["status"] != "active":
+                    continue
+                if op["status"] in ("unknown", "submitting") or op.get("provider_status") in (
+                        "PENDING", "PENDING_REVIEW", "REQUIRES_CAPTURE", "REQUIRES_CUSTOMER_ACTION"):
+                    hold["status"] = "expired_payment_pending"
+                    d["flags"].append("hold expired while payment outcome unknown: inventory kept, manager review")
+                    d["handoff"] = {"at": self.now(), "reason": "payment outcome unknown at hold expiry"}
+                    self.log(d["id"], "system", "hold_expiry", "Hold expired during checkout with payment outcome "
+                             "unknown: inventory kept provisionally held, flagged for manager review.")
+                    continue
+                if op.get("payment_intent_id") and op["status"] == "created":
+                    try:
+                        self.provider.cancel_intent(op["request_id"] + "-cancel", op["payment_intent_id"],
+                                                    "hold expired")
+                        op["status"] = "cancelled"
+                    except Exception as e:
+                        op["note"] = f"cancel at expiry failed: {e}"
+            self._release_hold(hold, "quote validity (24 scenario hours) ended")
+            hold["status"] = "expired"
+            for v in d["versions"]:
+                if v["status"] in ("sent", "approved", "pending_approval") and v["kind"] == "offer":
+                    v["status"] = "expired"
+            if d["status"] not in ("confirmed", "lost", "handoff", "declined"):
+                d["status"] = "expired"
+                if not d.get("booking"):
+                    d["accepted_version"] = None   # an unpaid acceptance lapses with its hold
+            self.log(d["id"], "system", "expired", "Offer and hold expired after 24 scenario hours; checkout "
+                     "disabled. A renewed offer needs a fresh availability check and new acceptance.")
+            d["unread"] = True
+
+    # ================================================================ deposit payment
+    def _deposit_op(self, d):
+        ops = [o for o in self.s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "deposit"]
+        return ops[-1] if ops else None
+
+    def open_checkout(self, deal_id: str, actor: str = "seller") -> dict:
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            if not d.get("accepted_version"):
+                raise Refused("no accepted agreement")
+            v = self._version(d, d["accepted_version"])
+            if v is not d["versions"][-1] or v["status"] != "accepted":
+                raise Refused("the accepted version is not current")
+            hold = self.s["holds"].get(d.get("hold_id") or "")
+            if not hold or hold["status"] != "active" or _dt(hold["expires_at"]) <= _dt(self.now()):
+                raise Refused("the hold has expired: run a fresh availability check, renew the offer and get acceptance")
+            op = self._deposit_op(d)
+            if op and op["status"] not in ("failed", "cancelled"):
+                if op["version"] != v["n"]:
+                    raise Refused("an earlier checkout exists for another version; reconcile it first")
+                if op["status"] in ("submitting", "unknown"):
+                    self._recover(op)
+                return {"payment_url": self.pay_url(d), "operation": op["id"], "status": op["status"],
+                        "amount": gbp(op["amount"]), "note": "existing checkout reused"}
+            amount = v["pricing"]["deposit"]
+            oid = self._id("op_")
+            op = {"id": oid, "kind": "deposit", "deal_id": d["id"], "run_id": self.s["run_id"], "version": v["n"],
+                  "version_hash": v["hash"], "amount": amount, "currency": "GBP",
+                  "request_id": f"{self.s['run_id']}-{oid}", "merchant_order_id": f"{self.s['run_id']}-{d['ref']}-v{v['n']}",
+                  "payment_intent_id": None, "status": "submitting", "created_at": self.now(), "provider_status": None}
+            self.s["operations"][oid] = op
+            self._save()   # persist the operation before calling the provider
+            meta = {"run_id": self.s["run_id"], "deal": d["ref"], "agreement_version": str(v["n"]),
+                    "agreement_hash": v["hash"], "operation_id": oid, "obligation": "signing deposit"}
+            try:
+                pi = self.provider.create_intent(op["request_id"], amount, "GBP", op["merchant_order_id"], meta,
+                                                 return_url=self.pay_url(d, "return"))
+                op.update(payment_intent_id=pi["id"], client_secret=pi.get("client_secret"), status="created",
+                          provider_status=pi["status"])
+            except AmbiguousResult as e:
+                op["status"] = "unknown"
+                op["note"] = str(e)
+                self._recover(op)
+            except AirwallexError as e:
+                op["status"] = "failed"
+                op["note"] = str(e)
+                self._save()
+                raise Refused(f"provider refused the payment intent: {e}")
+            d["status"] = "awaiting_payment"
+            self.log(d["id"], actor, "checkout", f"Deposit due {gbp(amount)} for v{v['n']}; payment page opened "
+                     f"(intent {op.get('payment_intent_id') or 'unknown'}).")
+            self._save()
+            return {"payment_url": self.pay_url(d), "operation": oid, "status": op["status"], "amount": gbp(amount)}
+
+    def pay_url(self, d, suffix: str = "") -> str:
+        return f"{self.public_base}/pay/{d['ref']}{'/' + suffix if suffix else ''}?t={d['buyer_token']}"
+
+    def _recover(self, op):
+        """An op whose creation outcome is unknown: look it up by our own references, never resubmit."""
+        try:
+            if op["kind"] == "deposit":
+                found = [i for i in self.provider.find_intents(op["merchant_order_id"])
+                         if i.get("request_id") in (None, op["request_id"])
+                         and (i.get("metadata") or {}).get("operation_id") in (None, op["id"])]
+                if found:
+                    op.update(payment_intent_id=found[0]["id"], client_secret=found[0].get("client_secret"),
+                              status="created", provider_status=found[0]["status"])
+                    self.log(op["deal_id"], "system", "recovered", f"Recovered intent {found[0]['id']} for {op['id']} "
+                             "from provider records; no new intent created.")
+            else:
+                found = [r for r in self.provider.find_refunds(op["payment_intent_id"])
+                         if r.get("request_id") == op["request_id"]
+                         or (r.get("metadata") or {}).get("operation_id") == op["id"]]
+                if found:
+                    op.update(provider_id=found[0]["id"], status="created")
+                    self._apply_refund_status(op, found[0])
+                    self.log(op["deal_id"], "system", "recovered", f"Recovered refund {found[0]['id']} for {op['id']} "
+                             "from provider records; no new refund created.")
+        except Exception as e:
+            op["note"] = f"recovery lookup failed: {e}; left unresolved for review"
+
+    def check_payment(self, deal_id: str, source: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            op = self._deposit_op(d)
+            if not op:
+                raise Refused("no checkout opened")
+            self._verify_deposit(d, op, source)
+            self._save()
+            return {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
+                    "booking": d.get("booking"), "deal_status": d["status"]}
+
+    def _verify_deposit(self, d, op, source: str):
+        if op["status"] in ("submitting", "unknown"):
+            self._recover(op)
+            if op["status"] in ("submitting", "unknown"):
+                return
+        if op["status"] in ("failed", "cancelled") or not op.get("payment_intent_id"):
+            return
+        if op["status"] == "succeeded" and d.get("booking"):
+            return
+        pi = self.provider.get_intent(op["payment_intent_id"])
+        op["provider_status"] = pi["status"]
+        if pi["status"] != "SUCCEEDED":
+            return
+        problems = []
+        if pi["amount"] != op["amount"] or (pi["currency"] or "").upper() != op["currency"]:
+            problems.append(f"amount/currency {pi['amount']} {pi['currency']} != obligation {op['amount']} {op['currency']}")
+        if pi.get("merchant_order_id") and pi["merchant_order_id"] != op["merchant_order_id"]:
+            problems.append("merchant_order_id mismatch")
+        if problems:
+            d["flags"].append("payment mismatch: " + "; ".join(problems))
+            self.log(d["id"], "system", "payment_mismatch", "; ".join(problems))
+            return
+        op["status"] = "succeeded"
+        new = self._ledger(f"receipt:{pi['id']}", d, "deposit_received", op["amount"], op, pi["id"])
+        if not new and d.get("booking"):
+            return
+        v = self._version(d, op["version"])
+        if d.get("booking"):
+            return
+        if self._commit_booking(d, v):
+            d["booking"] = {"status": "confirmed", "confirmed_at": self.now(), "version": v["n"],
+                            "room_type": v["terms"]["room_type"], "rooms": dict(v["terms"]["rooms"]),
+                            "payment_intent_id": pi["id"], "deposit_op": op["id"], "applied_amendments": []}
+            d["status"] = "confirmed"
+            self.log(d["id"], "system", "confirmed", f"Payment {pi['id']} verified with the provider ({source}); "
+                     f"{gbp(op['amount'])} received; hold converted; booking confirmed.")
+        else:
+            d["booking"] = {"status": "exception", "confirmed_at": None, "version": v["n"],
+                            "room_type": v["terms"]["room_type"], "rooms": dict(v["terms"]["rooms"]),
+                            "payment_intent_id": pi["id"], "deposit_op": op["id"], "applied_amendments": []}
+            d["status"] = "payment_received_booking_exception"
+            d["handoff"] = {"at": self.now(), "reason": "payment received but inventory could not be committed"}
+            self.log(d["id"], "system", "booking_exception", "Payment received - booking exception: inventory could "
+                     "not be committed. Receipt kept; routed to the hotel manager. No second collection.")
+        d["unread"] = True
+
+    def _ledger(self, key: str, d, typ: str, amount: int, op, provider_id) -> bool:
+        if any(e["key"] == key for e in self.s["ledger"]):
+            self.log(d["id"], "system", "ledger_dedupe", f"Ledger already has {key}; not recorded twice.")
+            return False
+        self.s["ledger"].append({"id": self._id("le"), "key": key, "deal_id": d["id"], "type": typ, "amount": amount,
+                                 "currency": "GBP", "operation": op["id"], "provider_id": provider_id,
+                                 "version": op.get("version"), "at": self.now()})
+        return True
+
+    # ================================================================ amendments
+    def prepare_reduction(self, deal_id: str, rooms_per_night: int | None = None, release: dict | None = None,
+                          message: str = "", actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            if not d.get("booking") or d["booking"]["status"] != "confirmed":
+                raise Refused("no confirmed booking")
+            base = self._version(d, d["accepted_version"])
+            if release is None:
+                release = {n: int(rooms_per_night or 0) for n in base["terms"]["rooms"]}
+            release = {k: int(v) for k, v in release.items() if int(v)}
+            if not release:
+                raise Refused("nothing to release")
+            fin = self.finance(d)
+            ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
+                                         fin["net_received"])
+            for v in d["versions"]:
+                if v["kind"] == "amendment" and v["status"] in ("draft", "pending_approval", "approved", "sent"):
+                    v["status"] = "superseded"
+            n = len(d["versions"]) + 1
+            terms = ev.pop("new_terms")
+            pricing = ev.pop("new_pricing")
+            v = {"n": n, "kind": "amendment", "base_version": base["n"], "terms": terms, "pricing": pricing,
+                 "hotel_check": {"hard": [], "approvals": ev["review_reasons"], "ok": True},
+                 "hash": _hash({"kind": "amendment", "terms": terms, "base": base["hash"]}),
+                 "status": "draft", "created_at": self.now(), "sent_at": None, "reduction": ev,
+                 "message": message or self._reduction_message(d, ev, pricing), "explanation": "", "unmet": [],
+                 "release": release}
+            d["versions"].append(v)
+            self.log(d["id"], actor, "amendment_drafted",
+                     f"Reduction v{n}: release {ev['requested_room_nights']} room-nights (allowance {ev['allowance']}, "
+                     f"already used {ev['already_released']}); new total {gbp(pricing['total'])}, revised deposit "
+                     f"{gbp(ev['revised_deposit'])}, refund {gbp(ev['refund_due'])} ({ev['refund_mode']}).")
+            if ev["needs_manager_review"]:
+                v["status"] = "pending_approval"
+                d["status"] = "amendment_review"
+                a = self._request_approval(d, "hotel_manager", "reduction",
+                                           f"{d['company']} reduction v{n} needs review: " + "; ".join(ev["review_reasons"])
+                                           + ". The existing agreement remains in effect until a change is accepted.",
+                                           ev["review_reasons"], version=n, obj_hash=v["hash"])
+                self._save()
+                return {"version": n, "status": "pending_approval", "approval_id": a["id"], "evaluation": ev}
+            res = self._send_version(d, v, actor)
+            self._save()
+            return {**res, "evaluation": ev}
+
+    def send_amendment(self, deal_id: str, version: int, actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            v = self._version(d, version)
+            if v["kind"] != "amendment" or v is not d["versions"][-1]:
+                raise Refused("not the current amendment")
+            if v["status"] != "approved" or not self._approval_valid(d, "reduction", v["n"], v["hash"]):
+                raise Refused("this amendment needs a valid manager review approval first")
+            res = self._send_version(d, v, actor)
+            self._save()
+            return res
+
+    def _reduction_message(self, d, ev, pricing) -> str:
+        return (f"We can release {ev['requested_room_nights']} room-nights under your attrition allowance "
+                f"({ev['remaining_after']} room-night(s) remain for later release without penalty). Breakfast and "
+                f"meeting charges stay guaranteed. Revised total {gbp(pricing['total'])}; revised deposit "
+                f"{gbp(ev['revised_deposit'])}" + (f"; we will refund {gbp(ev['refund_due'])} to your original card "
+                                                    "once you accept." if ev["refund_due"] else "."))
+
+    def _apply_amendment(self, d, v):
+        """Accepted reduction: update booking, release inventory exactly once, record refund owed."""
+        b = d["booking"]
+        if v["n"] in b["applied_amendments"]:
+            return
+        rt = b["room_type"]
+        for night, n in v["release"].items():
+            inv = self.s["inventory"][night][rt]
+            if inv["booked"] < n:
+                raise Refused("inventory inconsistency: cannot release more than booked")
+            inv["booked"] -= n
+            b["rooms"][night] -= n
+        b["applied_amendments"].append(v["n"])
+        prev = d["accepted_version"]
+        v["status"] = "accepted"
+        v["accepted_at"] = self.now()
+        self._version(d, prev)["status"] = "superseded_by_amendment"
+        d["accepted_version"] = v["n"]
+        ev = v["reduction"]
+        if ev["refund_due"]:
+            d["finance"]["refund_owed"] += ev["refund_due"]
+            d["finance"]["refund_owed_version"] = v["n"]
+            d["status"] = "refund_due"
+        elif ev["refund_mode"] != "automatic":
+            d["status"] = "confirmed"
+            d["flags"].append(f"amendment v{v['n']} accepted after the first installment date: payments to be "
+                              "reconciled manually by the manager")
+        else:
+            d["status"] = "confirmed"
+        self.log(d["id"], "buyer", "amendment_accepted",
+                 f"Amendment v{v['n']} accepted: {sum(v['release'].values())} {rt} room-nights released to inventory "
+                 f"once; booking now {sorted(set(b['rooms'].values()))} {rt}s per night"
+                 + (f"; refund owed {gbp(ev['refund_due'])}" if ev["refund_due"] else "") + ".")
+
+    # ================================================================ refunds
+    def _refund_ops(self, d):
+        return [o for o in self.s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "refund"]
+
+    def refund_excess(self, deal_id: str, justification: str = "", actor: str = "seller") -> dict:
+        """Refund what the buyer is owed after an accepted reduction, within authority and refundable funds."""
+        with self.lock:
+            d = self.deal(deal_id)
+            owed = d["finance"]["refund_owed"]
+            if owed <= 0:
+                raise Refused("no refund is owed")
+            for o in self._refund_ops(d):
+                if o["status"] in ("submitting", "unknown") or o.get("provider_status") == "RECEIVED":
+                    raise Refused(f"refund {o.get('provider_id') or o['id']} is unresolved "
+                                  f"({o.get('provider_status') or o['status']}): check it with check_refund before "
+                                  "any new refund")
+            dep = self._deposit_op(d)
+            if not dep or dep["status"] != "succeeded":
+                raise Refused("no verified payment to refund against")
+            fin = self.finance(d)
+            refundable = fin["received"] - fin["refunded"] - fin["refund_pending"]
+            if owed > refundable:
+                raise Refused(f"owed {gbp(owed)} exceeds remaining refundable {gbp(refundable)}; manager reconciliation")
+            limit = self.policy["seller_refund_limit"]
+            cumulative = fin["refunded"] + fin["refund_pending"] + owed
+            ref_obj = {"amount": owed, "currency": "GBP", "payment_intent_id": dep["payment_intent_id"],
+                       "amendment_version": d["finance"]["refund_owed_version"], "deal": d["ref"]}
+            ref_hash = _hash(ref_obj)
+            if cumulative > limit:
+                ok = any(a["deal_id"] == d["id"] and a["subject"] == "refund" and a["hash"] == ref_hash
+                         and a["status"] == "approved" and not a.get("used") for a in self.s["approvals"].values())
+                if not ok:
+                    rejected = any(a["deal_id"] == d["id"] and a["subject"] == "refund" and a["hash"] == ref_hash
+                                   and a["status"] == "rejected" for a in self.s["approvals"].values())
+                    if rejected:
+                        raise Refused("the manager withheld authorization for this refund; the amount stays owed and "
+                                      "the discrepancy is escalated for review")
+                    pending = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]
+                                    and a["subject"] == "refund" and a["hash"] == ref_hash and a["status"] == "pending"), None)
+                    if not pending:
+                        pending = self._request_approval(
+                            d, "hotel_manager", "refund",
+                            f"Refund {gbp(owed)} GBP to the original card (intent {dep['payment_intent_id']}) for "
+                            f"{d['company']} amendment v{ref_obj['amendment_version']}: cumulative refunds "
+                            f"{gbp(cumulative)} exceed the seller's {gbp(limit)} limit. Contractually owed under the "
+                            "accepted reduction." + (f" {justification}" if justification else ""),
+                            [f"refund above the seller's {gbp(limit)} authority"], obj_hash=ref_hash, amount=owed,
+                            extra={"refund": ref_obj})
+                        self._save()
+                    d["status"] = "refund_awaiting_approval"
+                    return {"status": "pending_approval", "approval_id": pending["id"],
+                            "note": "Paused: hotel manager must authorize this exact refund."}
+            for a in self.s["approvals"].values():
+                if a["deal_id"] == d["id"] and a["subject"] == "refund" and a["hash"] == ref_hash and a["status"] == "approved":
+                    a["used"] = True
+            oid = self._id("op_")
+            op = {"id": oid, "kind": "refund", "deal_id": d["id"], "run_id": self.s["run_id"],
+                  "version": ref_obj["amendment_version"], "amount": owed, "currency": "GBP",
+                  "payment_intent_id": dep["payment_intent_id"], "request_id": f"{self.s['run_id']}-{oid}",
+                  "provider_id": None, "status": "submitting", "provider_status": None, "created_at": self.now(),
+                  "ref_hash": ref_hash}
+            self.s["operations"][oid] = op
+            self._save()   # persisted before the provider call
+            meta = {"run_id": self.s["run_id"], "deal": d["ref"], "agreement_version": str(op["version"]),
+                    "operation_id": oid}
+            try:
+                r = self.provider.create_refund(op["request_id"], dep["payment_intent_id"], owed,
+                                                "Group block reduction under attrition allowance", meta)
+                op.update(provider_id=r["id"], status="created")
+                self._save()   # the refund id is stored before anything else happens
+                self._apply_refund_status(op, r, notify=False)
+            except AmbiguousResult as e:
+                op["status"] = "unknown"
+                op["note"] = str(e)
+                self._recover(op)
+            except AirwallexError as e:
+                op["status"] = "failed"
+                op["note"] = str(e)
+                self.log(d["id"], "system", "refund_failed", f"Provider rejected refund: {e}. Amount stays owed.")
+                self._save()
+                raise Refused(f"provider rejected the refund: {e}")
+            d["status"] = "refund_pending"
+            self.log(d["id"], actor, "refund_initiated", f"Refund {gbp(owed)} initiated to the original payment "
+                     f"({op.get('provider_id') or 'id unknown'}), status {op.get('provider_status') or op['status']}.")
+            if op.get("provider_id"):
+                self._queue_notification(op)
+            self._save()
+            return {"operation": oid, "refund_id": op.get("provider_id"), "status": op.get("provider_status") or op["status"],
+                    "note": "Completion notification not yet received; verify with check_refund."}
+
+    def _queue_notification(self, op):
+        """The provider's completion notice. In the demo it is held back so the agent sees an unresolved refund."""
+        evt = {"id": f"evt_{op['provider_id']}_done", "name": "refund.accepted", "held": True,
+               "data": {"object": {"id": op["provider_id"], "status": "ACCEPTED", "amount": op["amount"],
+                                   "metadata": {"run_id": self.s["run_id"], "operation_id": op["id"]}}}}
+        if self.s["sim"].get("delay_refund_notifications"):
+            self.s["delayed_notifications"].append(evt)
+
+    def release_notifications(self) -> dict:
+        """Presenter: deliver held provider notifications now (they are deduplicated like any webhook)."""
+        with self.lock:
+            evts, self.s["delayed_notifications"] = self.s["delayed_notifications"], []
+            out = [self.handle_event(e, verified=True) for e in evts]
+            self._save()
+            return {"delivered": len(evts), "results": out}
+
+    def check_refund(self, deal_id: str, actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            ops = self._refund_ops(d)
+            if not ops:
+                raise Refused("no refund on file")
+            results = []
+            for op in ops:
+                if op["status"] in ("submitting", "unknown"):
+                    self._recover(op)
+                if op.get("provider_id") and op.get("provider_status") not in ("SETTLED", "FAILED"):
+                    r = self.provider.get_refund(op["provider_id"])
+                    self._apply_refund_status(op, r)
+                results.append({"operation": op["id"], "refund_id": op.get("provider_id"), "amount": gbp(op["amount"]),
+                                "provider_status": op.get("provider_status"), "status": op["status"]})
+            self.log(d["id"], actor, "refund_checked", "Checked refund status with the provider: "
+                     + ", ".join(f"{r['refund_id']} {r['provider_status']}" for r in results))
+            self._save()
+            return {"refunds": results, "finance": self.finance(d)}
+
+    def _apply_refund_status(self, op, r: dict, notify: bool = True):
+        """Monotonic: an older status can't overwrite a newer one, and the ledger is credited once."""
+        new = r.get("status")
+        old = op.get("provider_status")
+        if old and REFUND_RANK.get(new, 0) <= REFUND_RANK.get(old, 0):
+            return   # never move backwards, and a repeat changes nothing
+        if r.get("amount") is not None and r["amount"] != op["amount"]:
+            self.log(op["deal_id"], "system", "refund_mismatch", f"Refund {r.get('id')} amount {r['amount']} != {op['amount']}")
+            return
+        op["provider_status"] = new
+        d = self.s["deals"][op["deal_id"]]
+        if new in ("ACCEPTED", "SETTLED"):
+            op["status"] = "completed"
+            if self._ledger(f"refund:{op['provider_id']}", d, "refund_completed", -op["amount"], op, op["provider_id"]):
+                d["finance"]["refund_owed"] = max(0, d["finance"]["refund_owed"] - op["amount"])
+                if d["status"] in ("refund_pending", "refund_due"):
+                    d["status"] = "confirmed"
+                self.log(d["id"], "system", "refund_completed",
+                         f"Refund {op['provider_id']} {new} at the provider; ledger updated once. (Provider status does "
+                         "not prove the buyer's bank has posted the money.)")
+        elif new == "FAILED":
+            op["status"] = "failed"
+            d["status"] = "refund_failed"
+            d["handoff"] = {"at": self.now(), "reason": f"refund {op['provider_id']} failed; {gbp(op['amount'])} still owed"}
+            d["flags"].append(f"refund {op['provider_id']} failed: {gbp(op['amount'])} still owed, follow up")
+            self.log(d["id"], "system", "refund_failed", f"Refund {op['provider_id']} FAILED; amount stays owed.")
+        elif new == "RECEIVED":
+            op["status"] = "pending"
+
+    # ================================================================ webhooks
+    def handle_event(self, event: dict, verified: bool) -> dict:
+        """A provider notification (already signature-verified by the server). Used only as a trigger."""
+        with self.lock:
+            if not verified:
+                raise Refused("unverified event")
+            eid = str(event.get("id"))
+            if eid in self.s["events_seen"]:
+                self.s["reconcile_log"].append({"at": self.now(), "event": eid, "result": "duplicate ignored"})
+                self._save()
+                return {"event": eid, "result": "duplicate ignored"}
+            self.s["events_seen"].append(eid)
+            obj = (event.get("data") or {}).get("object") or {}
+            meta = obj.get("metadata") or {}
+            name = event.get("name", "")
+            run = meta.get("run_id")
+            result = "ignored"
+            if run and run != self.s["run_id"]:
+                result = f"belongs to earlier run {run}: kept for reconciliation, not applied to current hotel state"
+            elif name.startswith("payment_intent."):
+                op = next((o for o in self.s["operations"].values() if o.get("payment_intent_id") == obj.get("id")), None)
+                if op:
+                    self._verify_deposit(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
+                    result = f"re-read intent: {op.get('provider_status')}"
+            elif name.startswith("refund."):
+                op = next((o for o in self.s["operations"].values() if o.get("provider_id") == obj.get("id")), None)
+                if op:
+                    before = op["status"]
+                    self._apply_refund_status(op, self.provider.get_refund(op["provider_id"]))
+                    result = f"re-read refund: {op.get('provider_status')}" + (" (already reconciled; ledger unchanged)"
+                                                                               if before == "completed" else "")
+            self.s["reconcile_log"].append({"at": self.now(), "event": eid, "name": name, "result": result})
+            self.log(None, "system", "webhook", f"Provider event {name} {eid}: {result}")
+            self._save()
+            return {"event": eid, "result": result}
+
+    # ================================================================ escalation / handoff
+    def escalate(self, deal_id: str, reason: str, message: str = "", actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            d["handoff"] = {"at": self.now(), "reason": reason}
+            if d["status"] not in ("confirmed", "refund_due", "refund_pending"):
+                d["status"] = "handoff"
+            if message:
+                d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                    "text": message})
+            self.log(d["id"], actor, "handoff", f"Handed to a person: {reason}")
+            self._save()
+            return {"status": d["status"]}
+
+    def decline(self, deal_id: str, reason: str, message: str, actor: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            hold = self.s["holds"].get(d.get("hold_id") or "")
+            if hold:
+                self._release_hold(hold, "declined")
+            d["status"] = "declined"
+            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                "text": message})
+            self.log(d["id"], actor, "declined", reason)
+            self._save()
+            return {"status": "declined"}
+
+    # ================================================================ views
+    def finance(self, d) -> dict:
+        received = sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] == "deposit_received")
+        refunded = -sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] == "refund_completed")
+        pending = sum(o["amount"] for o in self._refund_ops(d) if o["status"] in ("submitting", "unknown", "created", "pending"))
+        cur = self._version(d, d["accepted_version"]) if d.get("accepted_version") else None
+        out = {"received": received, "refunded": refunded, "refund_pending": pending, "net_received": received - refunded,
+               "refund_owed": d["finance"]["refund_owed"], "total": cur["pricing"]["total"] if cur else None}
+        if cur:
+            # While a refund is owed, what is still due is measured against receipts net of that refund.
+            out["still_due"] = cur["pricing"]["total"] - (out["net_received"] - out["refund_owed"])
+            signing = self._version(d, d["booking"]["version"])["accepted_at"] if d.get("booking") else None
+            if out["refund_owed"] or pending:
+                out["projected_after_refund"] = calc.schedule(cur["pricing"]["total"], cur["terms"]["deposit_pct"],
+                                                              out["net_received"] - out["refund_owed"], self.hotel,
+                                                              self.policy, signing)
+                out["collection_blocked"] = "refund unresolved: reconcile before any further collection"
+                out["schedule"] = out["projected_after_refund"]
+            else:
+                out["schedule"] = calc.schedule(cur["pricing"]["total"], cur["terms"]["deposit_pct"],
+                                                out["net_received"], self.hotel, self.policy, signing)
+        return out
+
+    def waiting_on(self, d) -> str | None:
+        pend = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["status"] == "pending"]
+        if pend:
+            a = pend[-1]
+            return ("hotel manager" if a["approver"] == "hotel_manager" else "buyer's organizer") + f": {a['subject']} approval"
+        st = d["status"]
+        if d.get("unread") and st not in ("new",):
+            return "seller: new input to read"
+        return {"new": "seller: read inquiry", "intake": "seller: check records", "needs_info": "buyer: answers",
+                "offer_sent": "buyer: response to offer", "approved_to_send": "seller: send approved offer",
+                "revise": "seller: revise offer", "accepted": "seller: open checkout",
+                "awaiting_payment": "buyer: pay deposit on hosted page", "refund_due": "seller: refund",
+                "refund_pending": "provider: refund completion (check status)", "amendment_sent": "buyer: accept amendment",
+                "amendment_approved": "seller: send amendment", "expired": "seller: renew offer",
+                "handoff": "hotel staff", "payment_received_booking_exception": "hotel manager: booking exception",
+                "refund_awaiting_approval": "hotel manager: refund approval",
+                "refund_failed": "hotel manager: failed refund follow-up (amount still owed)"}.get(st)
+
+    def next_step(self, d) -> str:
+        st = d["status"]
+        refund_appr = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["subject"] == "refund"]
+        if refund_appr and d["finance"]["refund_owed"] and not any(
+                o["status"] in ("submitting", "unknown", "created", "pending") for o in self._refund_ops(d)):
+            last = refund_appr[-1]
+            if last["status"] == "approved" and not last.get("used"):
+                return f"manager approved the {gbp(last['amount'])} refund: call refund_excess now to execute it"
+            if last["status"] == "rejected":
+                return "manager withheld refund authorization: escalate (the buyer is still owed the money)"
+        if st == "refund_pending":
+            return "a refund exists: call check_refund (never create another)"
+        if st == "refund_due":
+            return "call refund_excess for the amount owed"
+        if st == "expired":
+            return ("buyer asked after the lapse: re-check availability and renew" if d.get("unread")
+                    and d["thread"] and d["thread"][-1]["from"] == "buyer" else
+                    "lapsed: do not renew unless the buyer asks")
+        if st == "new":
+            return "read the inquiry and record requirements"
+        if st == "intake":
+            return "ask for missing details" if d["missing"] else "check systems and quote"
+        if st == "needs_info":
+            return "read answers and quote" if d.get("unread") else "blocked: waiting for the buyer's answers"
+        if st in ("offer_sent", "amendment_sent"):
+            return "respond to the buyer's message" if d.get("unread") else "blocked: waiting for the buyer"
+        return self.waiting_on(d) or st
+
+    def ops_instructions(self, d) -> dict | None:
+        b = d.get("booking")
+        if not b or b["status"] != "confirmed":
+            return None
+        v = self._version(d, d["accepted_version"])
+        t = v["terms"]
+        rooms = b["rooms"]
+        per_night = sorted(set(rooms.values()))
+        occ = 2 if t["room_type"] == "twin" else 1
+        dates = calc.key_dates(self.hotel, self.policy)
+        return {
+            "front_office": f"{', '.join(f'{n}: {r} {t['room_type']}' for n, r in rooms.items())}; expected guests "
+                            f"{max(per_night) * occ if per_night else 0}; company master bill to {t.get('payer')}; "
+                            "guests pay incidentals. Rooming list due " + dates["rooming_list_due"] + ".",
+            "events": (f"Thames Room {t['meeting']['date']} {t['meeting'].get('hours') or ''}, {t['meeting'].get('layout')} "
+                       f"for {t['meeting']['attendees']}; projector, microphone, Wi-Fi.") if t.get("meeting") else "No meeting space.",
+            "food_and_beverage": "Guaranteed group breakfast: " + ", ".join(f"{m}: {n}" for m, n in t["breakfast"].items())
+                                 if t["breakfast"] else "No group breakfast.",
+            "finance": f"Release deadline {dates['release_deadline']}; allowance remaining "
+                       f"{v['pricing']['allowance_remaining']} room-nights.",
+        }
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            self._sweep()
+            deals = []
+            for d in self.s["deals"].values():
+                x = copy.deepcopy(d)
+                x["waiting_on"] = self.waiting_on(d)
+                x["next_step"] = self.next_step(d)
+                x["finance_view"] = self.finance(d)
+                x["ops"] = self.ops_instructions(d)
+                x["hold"] = self._hold_public(d)
+                x["pay_url"] = self.pay_url(d) if self._deposit_op(d) else None
+                deals.append(x)
+            ops = [{k: v for k, v in o.items() if k != "client_secret"} for o in self.s["operations"].values()]
+            inv = {n: {rt: {**v, "available": v["capacity"] - v["held"] - v["booked"]} for rt, v in x.items()}
+                   for n, x in self.s["inventory"].items()}
+            return {"run_id": self.s["run_id"], "clock": self.now(), "hotel": self.hotel["name"], "inventory": inv,
+                    "meeting": self.s["meeting"], "breakfast": self.s["breakfast"], "deals": deals,
+                    "approvals": list(self.s["approvals"].values()), "operations": ops, "ledger": self.s["ledger"],
+                    "activity": self.s["activity"][-200:], "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
+                    "delayed_notifications": len(self.s["delayed_notifications"]),
+                    "reconcile_log": self.s["reconcile_log"][-30:], "provider": self.provider.name,
+                    "key_dates": calc.key_dates(self.hotel, self.policy)}
