@@ -1467,7 +1467,8 @@ class Engine:
             inv = {n: {rt: {**v, "available": v["capacity"] - v["held"] - v["booked"]} for rt, v in x.items()}
                    for n, x in self.s["inventory"].items()}
             return {"run_id": self.s["run_id"], "clock": self.now(), "hotel": self.hotel["name"], "inventory": inv,
-                    "meeting": self.s["meeting"], "breakfast": self.s["breakfast"], "deals": deals,
+                    "meeting": self.s["meeting"], "breakfast": self.s["breakfast"],
+                    "breakfast_capacity": self.hotel["breakfast"]["group_capacity_per_day"], "deals": deals,
                     "approvals": list(self.s["approvals"].values()), "operations": ops, "ledger": self.s["ledger"],
                     "activity": self.s["activity"][-200:], "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
                     "delayed_notifications": len(self.s["delayed_notifications"]),

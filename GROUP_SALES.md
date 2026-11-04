@@ -55,10 +55,12 @@ Each deal page has a coloured **next step** card with the buttons for that step:
 
 Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo controls**.
 The **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
+The **Activity** tab lists what each agent and person did, newest first. The **Availability** button in
+the header opens a page with rooms, the Thames Room and breakfast by night, and who is holding them.
 
 1. **Demo controls → Reset scenario → Yes, reset**, then **Run seller** on the card. Northstar gets three questions.
-   Summit gets a quote: **£4,920, deposit £1,476**. The activity feed explains why the seller moved to
-   Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
+   Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the seller moved
+   to Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
 2. **Northstar → Send answers.** The seller quotes v1: **£9,600**, 30% deposit, 10% attrition.
 3. **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a **40%
    deposit (£3,840)** in return. Click **Approve** as the hotel manager.
@@ -135,7 +137,7 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (34 tests, no network, no keys; run with
+`tests/test_group_sales.py` (35 tests, no network, no keys; run with
 `PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
 
 - the spec's figures and the full demo story;
