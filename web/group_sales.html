@@ -517,10 +517,9 @@ const kvHtml = o => `<dl class="kv">${Object.entries(o).map(([k, v]) => `<dt>${e
   v && typeof v === 'object' ? esc(flat(v)) : esc(String(v))}</dd>`).join('')}</dl>`;
 function agentHtml(d) {
   const runs = (S.agent_runs || []).slice().reverse().map(r => ({...r, steps: r.steps.map((s, i) => ({...s, k: r.id + ':' + i}))
-    .filter(s => scopeAll || s.deal_id === d.id)})).filter(r => r.steps.length);
+    .filter(s => s.deal_id === d.id)})).filter(r => r.steps.length);
   const acts = runs.reduce((n, r) => n + r.steps.filter(s => !AG_READS.has(s.tool)).length, 0);
-  let h = `<div class="row" style="justify-content:space-between"><span class="small muted">What the seller agent did · newest run first · ${acts} action${acts === 1 ? '' : 's'}</span>
-    <span class="seg"><button class="${scopeAll ? '' : 'on'}" data-scope="deal">This deal</button><button class="${scopeAll ? 'on' : ''}" data-scope="all">All deals</button></span></div>`;
+  let h = `<p class="small muted" style="margin:0">What the seller agent did on ${esc(d.company)} · newest run first · ${acts} action${acts === 1 ? '' : 's'}</p>`;
   if (!runs.length) return h + '<p class="muted">The agent hasn\'t acted on this deal yet. Run the seller to start.</p>';
   for (const r of runs) {
     const agent = r.agent === 'claude' ? `Claude seller${r.model ? ` <span class="small">(${esc(r.model)})</span>` : ''}` : 'Rules seller';
@@ -529,7 +528,7 @@ function agentHtml(d) {
     for (const s of r.steps.filter(s => !AG_READS.has(s.tool))) {
       const fx = s.effects.filter(x => x.text !== s.summary);
       h += `<details class="ag${s.ok ? '' : ' no'}" data-k="${s.k}"${agentOpen.has(s.k) ? ' open' : ''}><summary><span class="dot"></span>
-        <span class="ttl">${esc(TOOL[s.tool] || cap(s.tool.replaceAll('_', ' ')))}${scopeAll && s.ref ? ` <span class="small muted">· ${s.ref}</span>` : ''}${s.ok ? '' : ' <span class="chip bad">refused</span>'}</span>
+        <span class="ttl">${esc(TOOL[s.tool] || cap(s.tool.replaceAll('_', ' ')))}${s.ok ? '' : ' <span class="chip bad">refused</span>'}</span>
         <span class="at">${hm(s.at)}</span><span class="one">${esc(tidy(s.summary))}</span></summary><div class="ag-body">
         ${s.error ? `<div class="label">Why it was refused</div><div style="color:var(--bad)">${esc(s.error)}</div>` : ''}
         ${fx.length ? `<div class="label">What else happened</div><ul>${fx.map(x => `<li>${x.actor === 'system' ? '<span class="chip">System</span> ' : ''}${esc(tidy(x.text))}</li>`).join('')}</ul>` : ''}
