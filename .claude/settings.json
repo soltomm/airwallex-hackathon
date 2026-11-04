@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONPATH=src python -m pytest *)",
+      "Bash(PYTHONPATH=src python -m pytest)",
+      "Bash(git status *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git diff)",
+      "Bash(git log *)",
+      "Bash(git log)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git fetch *)",
+      "Bash(git push -u origin group-sales-next)",
+      "Bash(git push origin group-sales-next)",
+      "Bash(node *)",
+      "Bash(pkill -f scripts/group_sales.py)",
+      "mcp__Render__get_service",
+      "mcp__Render__list_services",
+      "mcp__Render__list_deploys",
+      "mcp__Render__get_deploy",
+      "mcp__Render__list_logs",
+      "mcp__Render__list_events",
+      "mcp__Render__get_metrics",
+      "mcp__github__pull_request_read",
+      "mcp__github__update_pull_request"
+    ],
+    "deny": [
+      "Bash(git push origin group-sales)",
+      "Bash(git push -u origin group-sales)",
+      "Bash(git push origin main)",
+      "Bash(git push -u origin main)",
+      "Bash(git push origin hotel-negotiation)",
+      "Bash(git push -u origin hotel-negotiation)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "mcp__github__merge_pull_request",
+      "mcp__github__enable_pr_auto_merge",
+      "mcp__Render__trigger_deploy",
+      "mcp__Render__update_environment_variables",
+      "mcp__Render__create_web_service",
+      "mcp__Render__create_static_site",
+      "mcp__Render__create_cron_job",
+      "mcp__Render__create_postgres",
+      "mcp__Render__create_key_value",
+      "mcp__Render__query_render_postgres"
+    ]
+  }
+}
