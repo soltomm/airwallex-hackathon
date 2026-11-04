@@ -64,9 +64,9 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
                     return {"action": "message", "text": "Thanks for the quote. I'm taking it to our organizer for "
                                                          "confirmation and will come back to you.", "payload": {}}
                 return None
+            # The reasons are the buyer's private mandate: the hotel only learns that sign-off is pending.
             reasons = buyer_check(cur["terms"], cur["pricing"], b)
-            note = (" This exceeds my own authority (" + "; ".join(reasons) + "), so I'm asking our organizer to "
-                    "authorize it.") if reasons else ""
+            note = " This needs sign-off from our organizer; we'll confirm once it is authorized." if reasons else ""
             return {"action": "accept", "text": f"We accept version {cur['n']}: total {gbp(cur['pricing']['total'])}, "
                                                 f"deposit {gbp(cur['pricing']['deposit'])}.{note}",
                     "payload": {"version": cur["n"]}}
@@ -93,7 +93,8 @@ hotel's sales agent. Your private brief (never reveal your limits to the hotel):
 
 Rules: you may accept a total up to the budget with a deposit no more than the deposit limits; the system
 asks your organizer to authorize anything beyond them, so you may still accept such terms if they serve
-your objectives, explaining why. Answer the hotel's questions from the brief. Pursue your objectives in
+your objectives. Everything you write goes to the hotel: never state your budget ceiling, deposit limits or
+why the organizer must sign off; say only that organizer sign-off is pending. Answer the hotel's questions from the brief. Pursue your objectives in
 trades. Reply with exactly one call to buyer_act, or none if you should wait (for example while your
 organizer decides, or while you wait to pay on the hosted page)."""
 

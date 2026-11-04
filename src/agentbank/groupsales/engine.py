@@ -278,21 +278,46 @@ class Engine:
             if mark_read and for_ == "seller":
                 d["unread"] = False
                 self._save()
-            view = {k: d[k] for k in ("id", "ref", "company", "sender", "subject", "status", "reply_by",
-                                      "requirements", "missing", "thread", "accepted_version", "flags")}
-            view["waiting_on"] = self.waiting_on(d)
-            view["versions"] = [self._version_public(v, for_) for v in d["versions"]]
+            if for_ not in ("seller", "buyer"):
+                raise Refused("deal views exist for the seller or the buyer only")
+            # Each side sees only its own private constraints. The seller never gets the buyer's mandate
+            # or the organizer's reasons; the buyer never gets floors, costs, margins, hotel checks,
+            # records, holds, flags or the hotel manager's approval summaries. Thread messages are what
+            # each side chose to send. The presenter dashboard (snapshot) shows both sides.
+            view = {k: copy.deepcopy(d[k]) for k in ("id", "ref", "company", "sender", "subject", "status",
+                                                      "reply_by", "requirements", "missing", "thread",
+                                                      "accepted_version")}
             view["finance"] = self.finance(d)
-            view["booking"] = d.get("booking")
+            view["booking"] = copy.deepcopy(d.get("booking"))
             if for_ == "seller":
+                view["flags"] = list(d["flags"])
+                view["waiting_on"] = self.waiting_on(d)
+                view["versions"] = [self._version_public(v, for_) for v in d["versions"]]
                 view["next_step"] = self.next_step(d)
                 view["records_consulted"] = [{"system": r["system"], "checked_at": r["checked_at"],
                                               "summary": r["summary"]} for r in d["records"]]
                 view["hold"] = self._hold_public(d)
-                view["approvals"] = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]]
+                view["approvals"] = [self._approval_for_seller(a) for a in self.s["approvals"].values()
+                                     if a["deal_id"] == d["id"]]
                 view["key_dates"] = calc.key_dates(self.hotel, self.policy)
                 view["clock"] = self.now()
+            else:
+                w = self.waiting_on(d) or ""
+                view["waiting_on"] = w if w.startswith(("buyer", "buyer's organizer")) else ("hotel" if w else None)
+                # Drafts and versions awaiting the hotel manager are internal until the hotel sends them.
+                view["versions"] = [self._version_public(v, for_) for v in d["versions"] if v.get("sent_at")]
             return view
+
+    @staticmethod
+    def _approval_for_seller(a: dict) -> dict:
+        """The hotel's own approvals in full; buyer-side (organizer) approvals only as a pending/decided marker."""
+        if a["approver"] != "organizer":
+            return copy.deepcopy(a)
+        return {"id": a["id"], "deal_id": a["deal_id"], "ref": a["ref"], "approver": "organizer",
+                "subject": a["subject"], "version": a["version"], "status": a["status"],
+                "requested_at": a["requested_at"], "decided_at": a["decided_at"],
+                "summary": f"Acceptance of v{a['version']} is pending buyer-side authorization"
+                if a["status"] == "pending" else f"Buyer-side authorization {a['status']} for v{a['version']}"}
 
     def _version_public(self, v: dict, for_: str) -> dict:
         out = {k: v[k] for k in ("n", "kind", "status", "hash", "terms", "created_at", "sent_at", "message",
@@ -575,8 +600,12 @@ class Engine:
              "summary": summary, "reasons": reasons, "version": version, "hash": obj_hash, "amount": amount,
              "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
         self.s["approvals"][aid] = a
-        who = "Hotel manager" if approver == "hotel_manager" else "Organizer"
-        self.log(d["id"], "system", "approval_requested", f"{who} approval requested: {summary}")
+        if approver == "hotel_manager":
+            self.log(d["id"], "system", "approval_requested", f"Hotel manager approval requested: {summary}")
+        else:
+            # The organizer's reasons are the buyer's private mandate: they stay on the approval itself.
+            self.log(d["id"], "system", "approval_requested",
+                     f"Acceptance of v{version} is pending buyer-side authorization.")
         return a
 
     def _approval_valid(self, d, subject, version, obj_hash, approver="hotel_manager") -> bool:

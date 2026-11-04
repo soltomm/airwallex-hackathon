@@ -381,3 +381,120 @@ def test_persistence_across_restart(eng, tmp_path):
     RulesSeller(e).run()
     e2 = Engine(tmp_path / "var", e.provider)
     assert e2.s["run_id"] == e.s["run_id"] and len(e2.s["deals"]) == 2
+
+
+# ------------------------------------------------------------------------------ privacy between the two sides
+from agentbank.groupsales.calc import gbp  # noqa: E402
+from agentbank.groupsales.policy import buyer_check  # noqa: E402
+from agentbank.groupsales.seller import ClaudeSeller  # noqa: E402
+
+
+def _keys(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _keys(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _keys(v)
+
+
+def _seller_surface(e, d):
+    """Everything the seller's tools can read about the deals (the Claude seller's read tools)."""
+    tools = ClaudeSeller(e, client=object())
+    return json.dumps([tools._do("list_queue", {}), tools._do("read_deal", {"deal_id": d["id"]}),
+                       [m["text"] for m in d["thread"]]], default=str)
+
+
+def _to_organizer(e):
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    appr = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    s.run()
+    r = buyer_turn(e, "Northstar")
+    assert r["accepted"] is False
+    return s, n, r
+
+
+def test_seller_never_sees_buyer_mandate(eng):
+    e = eng
+    s, n, r = _to_organizer(e)
+    mandate = S["buyers"]["northstar.example"]
+    v = n["versions"][-1]
+    reasons = buyer_check(v["terms"], v["pricing"], mandate)
+    assert reasons                                                  # the organizer approval is really needed
+    organizer = e.s["approvals"][r["approval_id"]]
+    forbidden = reasons + [organizer["summary"], gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit",
+                           "limit", "authority", mandate["organizer"], mandate["flexibility"]]
+    assert gbp(mandate["deposit_limit"]) not in n["thread"][0]["text"]   # not something the RFP disclosed
+    surface = _seller_surface(e, n)
+    for f in forbidden:
+        assert f not in surface, f
+    for k in ("deposit_limit", "deposit_limit_pct", "budget_mandate", "objectives", "known_answers"):
+        assert k not in set(_keys(json.loads(surface)))
+    view = e.deal_view(n["id"], for_="seller")
+    org = next(a for a in view["approvals"] if a["approver"] == "organizer")
+    assert org["status"] == "pending" and "reasons" not in org and "pending buyer-side authorization" in org["summary"]
+    assert view["status"] == "acceptance_pending_organizer"
+    assert "organizer" in view["waiting_on"]                          # the seller may know it is pending
+    # Still private after the organizer decides, and the seller can carry on to checkout.
+    e.decide_approval(r["approval_id"], "approve", "organizer", note="fine, within the offsite budget")
+    s.run()
+    surface = _seller_surface(e, n)
+    for f in forbidden + ["within the offsite budget"]:
+        assert f not in surface, f
+    assert n["status"] == "awaiting_payment"
+
+
+def test_buyer_never_sees_hotel_internals(eng):
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()                                                           # v2 waits for the hotel manager
+    n = deal_by(e, "Northstar")
+    manager = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
+    rates, costs = RMS["rates"]["twin"], RMS["delivery_costs"]
+    hotel_only = {"margin_all_rooms", "margin_full_release", "hotel_check", "records", "records_consulted", "hold",
+                  "approvals", "flags", "costs", "contribution", "margin_pct", "next_step", "key_dates"}
+
+    def check(view, extra=()):
+        raw = json.dumps(view, default=str)
+        assert not hotel_only & set(_keys(view)), hotel_only & set(_keys(view))
+        for f in [gbp(rates["autonomous_floor"]), gbp(rates["absolute_min"]), gbp(costs["twin"]),
+                  "margin", "Seller's case", manager["summary"], *extra]:
+            assert f not in raw, f
+
+    view = e.deal_view(n["id"], for_="buyer")
+    check(view)
+    assert [v["n"] for v in view["versions"]] == [1]                  # v2 is not sent yet
+    assert view["waiting_on"] == "hotel"
+    e.decide_approval(manager["id"], "approve", "hotel_manager")
+    s.run()
+    view = e.deal_view(n["id"], for_="buyer")
+    check(view)
+    assert view["versions"][-1]["n"] == 2 and view["versions"][-1]["pricing"]["deposit"] == 384000
+    r = buyer_turn(e, "Northstar")
+    e.decide_approval(r["approval_id"], "approve", "organizer")
+    s.run()
+    pay(e, n)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()                                                           # refund over £500 waits for the manager
+    refund = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    e.decide_approval(refund["id"], "reject", "hotel_manager", "check with finance")
+    s.run()
+    view = e.deal_view(n["id"], for_="buyer")
+    check(view, extra=[refund["summary"], "check with finance", "escalated"])
+    assert view["finance"]["refund_owed"] == 52800                    # the buyer still sees what it is owed
+    assert view["versions"][-1]["reduction"]["refund_due"] == 52800
