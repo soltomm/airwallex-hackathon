@@ -114,6 +114,25 @@ pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }
 .ev .what { font-weight: 600; } .ev .detail { margin: 2px 0 0; overflow-wrap: anywhere; } .ev .at { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (max-width: 760px) { .ev { grid-template-columns: minmax(0, 1fr) auto; } .ev .body { grid-column: 1 / -1; grid-row: 2; } }
 
+/* AI agent tab */
+.run-h { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; margin: 16px 0 4px; font-size: 12.5px; color: var(--muted); }
+.run-h:first-of-type { margin-top: 10px; } .run-h b { color: var(--fg); font-weight: 600; }
+details.ag { padding: 0; } details.ag > summary { list-style: none; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 0; align-items: baseline; }
+details.ag > summary::-webkit-details-marker { display: none; }
+details.ag > summary .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); align-self: center; justify-self: center; }
+details.ag.no > summary .dot { background: var(--bad); }
+details.ag .ttl { font-weight: 600; } details.ag .ttl .small { font-weight: 400; }
+details.ag .one { grid-column: 2; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.ag[open] .one { white-space: normal; overflow-wrap: anywhere; color: var(--fg); }
+details.ag .at { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+details.ag > summary::after { content: '›'; grid-column: 3; grid-row: 2; justify-self: end; color: var(--muted); transition: transform .15s; }
+details.ag[open] > summary::after { transform: rotate(90deg); }
+.ag-body { margin: 0 0 12px 28px; font-size: 13px; } .ag-body .label { margin: 10px 0 4px; }
+.ag-body ul { margin: 0; padding-left: 18px; } .ag-body li { margin: 2px 0; overflow-wrap: anywhere; }
+.ag-body dl.kv dd { overflow-wrap: anywhere; } .ag-body pre { margin: 0; }
+.ag-reads { font-size: 12.5px; color: var(--muted); padding: 4px 0 2px 28px; }
+@media (max-width: 760px) { .ag-body { margin-left: 0; } }
+
 /* availability page */
 .page { max-width: 1240px; margin: 0 auto; padding: 18px 18px 40px; }
 .page h2 { margin: 0; font-size: 20px; } .page .lede { margin: 4px 0 16px; color: var(--muted); max-width: 70ch; }
@@ -179,7 +198,7 @@ const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) 
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
 const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
-let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false;
+let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false, agentOpen = new Set();
 
 function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
@@ -358,7 +377,7 @@ function offerCard(d) {
   }
   return h;
 }
-const TABS = [['conv', 'Conversation'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
+const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
   if (tab === 'conv') {
     // Newest first. The latest two messages are shown in full; earlier ones are folded away.
@@ -368,6 +387,7 @@ function tabBody(d) {
       + (older.length ? `<details class="earlier" id="earlier"${convOpen ? ' open' : ''}><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map(m => msg(m, true)).join('')}</details>` : '');
   }
   if (tab === 'act') return activityHtml(d);
+  if (tab === 'agent') return agentHtml(d);
   if (tab === 'req') {
     const r = d.requirements; if (!r) return '<p class="muted">The seller hasn\'t read this inquiry yet.</p>';
     const m = r.meeting;
@@ -408,6 +428,7 @@ function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
   document.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => { scopeAll = b.dataset.scope === 'all'; renderDeal(d); });
   if ($('earlier')) $('earlier').ontoggle = e => { convOpen = e.target.open; };
+  document.querySelectorAll('details.ag').forEach(x => x.ontoggle = () => { x.open ? agentOpen.add(x.dataset.k) : agentOpen.delete(x.dataset.k); });
   document.querySelectorAll('.msg.old .b').forEach(b => b.onclick = () => b.parentElement.classList.toggle('open'));
   document.querySelectorAll('[data-form]').forEach(b => b.onclick = () => { form = b.dataset.form || null; renderDeal(d); if (!form) { lastJSON = ''; load(); } });
   document.querySelectorAll('#deal [data-ap]').forEach(b => b.onclick = () => decide(b));
@@ -474,6 +495,52 @@ function activityHtml(d) {
     if (dayKey !== last) { h += `<div class="act-day">${day(a.at, {weekday: 'short', year: 'numeric'})}</div>`; last = dayKey; }
     const title = EVENT[a.kind] || cap(a.kind.replaceAll('_', ' '));
     h += `<div class="ev"><span><span class="chip ${c}">${esc(name)}</span></span><div class="body"><div class="what">${esc(title)}${scopeAll && a.deal_id ? ` <span class="small muted">· ${ref(a.deal_id)}</span>` : ''}</div><p class="detail">${esc(tidy(a.text))}</p></div><span class="at">${new Date(a.at).toLocaleTimeString('en-GB', {timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit'})}</span></div>`;
+  }
+  return h;
+}
+
+// ---- AI agent tab: each seller run and the actions it took; click an action for details ----------
+const TOOL = {
+  record_requirements: 'Recorded the requirements', check_systems: 'Checked hotel systems', ask_buyer: 'Asked the buyer',
+  price_terms: 'Priced terms (dry run)', propose_offer: 'Proposed an offer', send_offer: 'Sent an offer', open_checkout: 'Opened checkout',
+  check_payment: 'Checked the payment', prepare_reduction: 'Prepared a change', send_amendment: 'Sent a change', refund_excess: 'Started a refund',
+  check_refund: 'Checked the refund', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',
+  read_deal: 'Read the deal', list_queue: 'Looked at the queue'};
+const AG_READS = new Set(['read_deal', 'list_queue']);
+const ARG = {req: 'Requirements', rate: 'Rate', deposit_pct: 'Deposit %', attrition_pct: 'Attrition %', rooms_per_night: 'Rooms a night', room_type: 'Room type',
+  message: 'Message to buyer', explanation: 'Explanation', justification: 'Justification for manager', unmet: 'Not met', questions: 'Questions',
+  version: 'Version', reason: 'Reason', text: 'Note', release: 'Release'};
+const hm = iso => new Date(iso).toLocaleTimeString('en-GB', {timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit'});
+const flat = v => Array.isArray(v) ? v.map(flat).join(', ') : v && typeof v === 'object' ? Object.entries(v).map(([a, b]) => `${a.replaceAll('_', ' ')}: ${b && typeof b === 'object' && !Array.isArray(b) ? '(' + flat(b) + ')' : flat(b)}`).join(' · ') : String(v);
+const kvHtml = o => `<dl class="kv">${Object.entries(o).map(([k, v]) => `<dt>${esc(ARG[k] || cap(k.replaceAll('_', ' ')))}</dt><dd>${
+  typeof v === 'string' ? (v.length > 160 || v.includes('\n') ? `<pre>${esc(v)}</pre>` : esc(tidy(v))) : Array.isArray(v) ? esc(v.join('; ')) :
+  v && typeof v === 'object' ? esc(flat(v)) : esc(String(v))}</dd>`).join('')}</dl>`;
+function agentHtml(d) {
+  const runs = (S.agent_runs || []).slice().reverse().map(r => ({...r, steps: r.steps.map((s, i) => ({...s, k: r.id + ':' + i}))
+    .filter(s => scopeAll || s.deal_id === d.id)})).filter(r => r.steps.length);
+  const acts = runs.reduce((n, r) => n + r.steps.filter(s => !AG_READS.has(s.tool)).length, 0);
+  let h = `<div class="row" style="justify-content:space-between"><span class="small muted">What the seller agent did · newest run first · ${acts} action${acts === 1 ? '' : 's'}</span>
+    <span class="seg"><button class="${scopeAll ? '' : 'on'}" data-scope="deal">This deal</button><button class="${scopeAll ? 'on' : ''}" data-scope="all">All deals</button></span></div>`;
+  if (!runs.length) return h + '<p class="muted">The agent hasn\'t acted on this deal yet. Run the seller to start.</p>';
+  for (const r of runs) {
+    const agent = r.agent === 'claude' ? `Claude seller${r.model ? ` <span class="small">(${esc(r.model)})</span>` : ''}` : 'Rules seller';
+    h += `<div class="run-h"><b>${agent}</b><span>· ${day(r.at)} ${hm(r.at)}</span>${r.trigger ? `<span>· woke because: ${esc(r.trigger)}</span>` : ''}</div>`;
+    const reads = r.steps.filter(s => AG_READS.has(s.tool));
+    for (const s of r.steps.filter(s => !AG_READS.has(s.tool))) {
+      const fx = s.effects.filter(x => x.text !== s.summary);
+      h += `<details class="ag${s.ok ? '' : ' no'}" data-k="${s.k}"${agentOpen.has(s.k) ? ' open' : ''}><summary><span class="dot"></span>
+        <span class="ttl">${esc(TOOL[s.tool] || cap(s.tool.replaceAll('_', ' ')))}${scopeAll && s.ref ? ` <span class="small muted">· ${s.ref}</span>` : ''}${s.ok ? '' : ' <span class="chip bad">refused</span>'}</span>
+        <span class="at">${hm(s.at)}</span><span class="one">${esc(tidy(s.summary))}</span></summary><div class="ag-body">
+        ${s.error ? `<div class="label">Why it was refused</div><div style="color:var(--bad)">${esc(s.error)}</div>` : ''}
+        ${fx.length ? `<div class="label">What else happened</div><ul>${fx.map(x => `<li>${x.actor === 'system' ? '<span class="chip">System</span> ' : ''}${esc(tidy(x.text))}</li>`).join('')}</ul>` : ''}
+        ${Object.keys(s.args).length && s.tool !== 'log_reasoning' ? `<div class="label">Inputs</div>${kvHtml(s.args)}` : ''}
+        ${s.result ? `<div class="label">Result</div>${kvHtml(s.result)}` : ''}
+        <div class="small muted" style="margin-top:8px">Tool <code>${esc(s.tool)}</code> · scenario time ${when(s.at)} · real time ${when(s.real_at)}</div></div></details>`;
+    }
+    if (reads.length) {
+      const nd = reads.filter(s => s.tool === 'read_deal').length, nq = reads.length - nd;
+      h += `<div class="ag-reads">Also ${[nd && `read the deal ${nd}×`, nq && `looked at the queue ${nq}×`].filter(Boolean).join(' and ')}</div>`;
+    }
   }
   return h;
 }

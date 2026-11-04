@@ -145,7 +145,7 @@ class Engine:
                             for room, mr in h["meeting_rooms"].items()},
                 "breakfast": {m: {"held": 0, "booked": 0} for m in self._mornings(h["nights"])},
                 "emails": {}, "deals": {}, "holds": {}, "approvals": {}, "operations": {}, "ledger": [],
-                "activity": [], "events_seen": prior_events[-500:], "delayed_notifications": [],
+                "activity": [], "agent_runs": [], "events_seen": prior_events[-500:], "delayed_notifications": [],
                 "reconcile_log": [],
                 "sim": {"delay_refund_notifications": True, "fail_next_commit": False},
                 "followups_at_reset": len(followups),
@@ -448,6 +448,29 @@ class Engine:
         with self.lock:
             self.log(deal_id and self.deal(deal_id)["id"], actor, "reasoning", text)
             self._save()
+
+    # ---- agent trace (see trace.py): presenter-side record of each seller run and its tool calls
+    def agent_run_start(self, agent: str, trigger: str = "", model: str | None = None) -> dict:
+        with self.lock:
+            run = {"id": "ar_" + uuid.uuid4().hex[:8], "agent": agent, "model": model, "trigger": trigger,
+                   "at": self.now(), "real_at": _iso(datetime.now(timezone.utc)), "steps": []}
+            runs = self.s.setdefault("agent_runs", [])
+            runs.append(run)
+            del runs[:-60]
+            return run
+
+    def agent_step(self, run: dict, step: dict):
+        with self.lock:
+            run["steps"].append(step)
+
+    def agent_run_end(self, run: dict):
+        with self.lock:
+            runs = self.s.get("agent_runs", [])
+            if not run["steps"]:            # woke up, found nothing to do: not worth a line
+                runs[:] = [r for r in runs if r is not run]
+                return
+            if any(r is run for r in runs):
+                self._save()
 
     # ================================================================ offers
     def build_terms(self, d: dict, rate: int, deposit_pct: int, attrition_pct: int,
@@ -1470,7 +1493,8 @@ class Engine:
                     "meeting": self.s["meeting"], "breakfast": self.s["breakfast"],
                     "breakfast_capacity": self.hotel["breakfast"]["group_capacity_per_day"], "deals": deals,
                     "approvals": list(self.s["approvals"].values()), "operations": ops, "ledger": self.s["ledger"],
-                    "activity": self.s["activity"][-200:], "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
+                    "activity": self.s["activity"][-200:],
+                    "agent_runs": copy.deepcopy(self.s.get("agent_runs", [])[-40:]), "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
                     "delayed_notifications": len(self.s["delayed_notifications"]),
                     "reconcile_log": self.s["reconcile_log"][-30:], "provider": self.provider.name,
                     "key_dates": calc.key_dates(self.hotel, self.policy)}

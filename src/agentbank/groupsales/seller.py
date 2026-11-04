@@ -16,6 +16,7 @@ import re
 from .calc import gbp
 from .engine import Engine, Refused
 from .extract import extract
+from .trace import Traced
 
 SELLER_MODEL = os.environ.get("GS_SELLER_MODEL", "claude-opus-5-5")
 MAX_TOOL_CALLS = 24
@@ -35,7 +36,15 @@ class RulesSeller:
     def __init__(self, engine: Engine):
         self.e = engine
 
-    def run(self, max_steps: int = 30) -> list[str]:
+    def run(self, max_steps: int = 30, trigger: str = "") -> list[str]:
+        raw, self.e = self.e, Traced(self.e, "rules", trigger, reads=False)
+        try:
+            return self._run(max_steps, raw)
+        finally:
+            self.e.finish()
+            self.e = raw
+
+    def _run(self, max_steps: int, raw: Engine) -> list[str]:
         done = []
         explained = set()
         for _ in range(max_steps):
@@ -58,8 +67,8 @@ class RulesSeller:
                 msg = self.step(pick["deal_id"])
             except Refused as err:
                 msg = f"{pick['ref']}: refused: {err}"
-                self.e.note(pick["deal_id"], f"Engine refused: {err}")
-                self.e.deal_view(pick["deal_id"], mark_read=True)
+                raw.note(pick["deal_id"], f"Engine refused: {err}")
+                raw.deal_view(pick["deal_id"], mark_read=True)
             done.append(msg)
             if self._fingerprint(pick["deal_id"]) == before:
                 break   # no progress: stop rather than loop
@@ -500,6 +509,14 @@ class ClaudeSeller:
         raise Refused(f"unknown tool {name}")
 
     def run(self, trigger: str = "new activity") -> list[str]:
+        raw, self.e = self.e, Traced(self.e, "claude", trigger, model=self.model)
+        try:
+            return self._run(trigger, raw)
+        finally:
+            self.e.finish()
+            self.e = raw
+
+    def _run(self, trigger: str, raw: Engine) -> list[str]:
         import anthropic
         messages = [{"role": "user", "content": f"Wake-up: {trigger}. Scenario time {self.e.now()}. "
                                                  "Work the queue until nothing is actionable."}]
@@ -512,10 +529,10 @@ class ClaudeSeller:
                     tools=TOOLS, messages=messages, output_config={"effort": "medium"},
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default")
             except anthropic.APIStatusError as err:
-                self.e.note(None, f"Seller model call failed ({err.status_code}: {str(err.message)[:200]}); falling back to rules for this run.")
-                return out + RulesSeller(self.e).run()
+                raw.note(None, f"Seller model call failed ({err.status_code}: {str(err.message)[:200]}); falling back to rules for this run.")
+                return out + RulesSeller(raw).run(trigger="Claude seller unavailable: " + trigger)
             if resp.stop_reason == "refusal":
-                self.e.note(None, "Seller model declined this turn; nothing was changed.")
+                raw.note(None, "Seller model declined this turn; nothing was changed.")
                 break
             messages.append({"role": "assistant", "content": resp.content})
             text = " ".join(b.text for b in resp.content if b.type == "text").strip()
@@ -533,7 +550,7 @@ class ClaudeSeller:
                     results.append({"type": "tool_result", "tool_use_id": b.id,
                                     "content": json.dumps(res, default=str)[:12000]})
                 except Refused as err:
-                    self.e.note(b.input.get("deal_id"), f"Engine refused {b.name}: {err}")
+                    raw.note(b.input.get("deal_id"), f"Engine refused {b.name}: {err}")
                     results.append({"type": "tool_result", "tool_use_id": b.id, "is_error": True,
                                     "content": f"Refused: {err}"})
             messages.append({"role": "user", "content": results})

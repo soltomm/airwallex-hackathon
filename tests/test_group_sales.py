@@ -911,3 +911,66 @@ def test_payment_confirmation_wakes_the_seller(eng):
     assert n["status"] == "confirmed" and woken == ["payment"]
     s.run()
     assert n["unread"] is False and e.next_step(n) == "confirmed"
+
+
+# ---- AI Agent tab: the record of what the seller agent did -----------------------------------------
+def test_agent_trace_records_what_the_seller_did(eng):
+    """Each seller run is recorded with its tool calls, inputs, results and the activity they caused."""
+    e = eng
+    s, n = run_to_confirmed(e)
+    runs = e.snapshot()["agent_runs"]
+    assert runs and all(r["steps"] and r["agent"] == "rules" for r in runs)       # runs with nothing to do are dropped
+    steps = [x for r in runs for x in r["steps"] if x["deal_id"] == n["id"]]
+    tools = [x["tool"] for x in steps]
+    for t in ("record_requirements", "check_systems", "ask_buyer", "price_terms", "propose_offer", "send_offer", "open_checkout"):
+        assert t in tools, t
+    assert all(x["ok"] and x["summary"] and x["ref"] == "GS-1001" for x in steps)
+    v2 = next(x for x in steps if x["tool"] == "propose_offer" and x["args"]["attrition_pct"] == 20)
+    assert v2["args"]["rate"] == "£220" and v2["args"]["deposit_pct"] == 40
+    assert v2["summary"].startswith("Drafted v2") and v2["result"]["status"] == "pending_approval"
+    assert any(f["kind"] == "approval_requested" for f in v2["effects"])
+    dry = next(x for x in steps if x["tool"] == "price_terms" and "£3,840" in x["summary"])
+    assert "needs the manager" in dry["summary"]
+    before = len(e.s["agent_runs"])
+    s.run()                                                          # nothing actionable: no new run recorded
+    assert len(e.s["agent_runs"]) == before
+    assert "agent_runs" not in json.dumps(e.deal_view(n["id"], for_="buyer"))
+    e.reset()
+    assert e.snapshot()["agent_runs"] == []
+
+
+class _Block:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class _FakeClaude:
+    """Stands in for the Anthropic client: replays scripted responses."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.beta = self
+        self.messages = self
+
+    def create(self, **kw):
+        return self.responses.pop(0)
+
+
+def test_agent_trace_records_claude_tool_calls_and_refusals(eng):
+    e = eng
+    n = deal_by(e, "Northstar")
+    before = json.dumps(n["versions"])
+    fake = _FakeClaude([
+        _Block(stop_reason="tool_use", content=[
+            _Block(type="text", text="Checking the queue, then trying to send an offer that doesn't exist."),
+            _Block(type="tool_use", id="t1", name="list_queue", input={}),
+            _Block(type="tool_use", id="t2", name="send_offer", input={"deal_id": "GS-1001", "version": 9})]),
+        _Block(stop_reason="end_turn", content=[])])
+    ClaudeSeller(e, client=fake, model="test-model").run("unit test")
+    run = e.s["agent_runs"][-1]
+    assert run["agent"] == "claude" and run["model"] == "test-model" and run["trigger"] == "unit test"
+    tools = [(x["tool"], x["ok"]) for x in run["steps"]]
+    assert tools == [("log_reasoning", True), ("list_queue", True), ("send_offer", False)]
+    bad = run["steps"][-1]
+    assert bad["summary"].startswith("Refused") and bad["error"] and bad["ref"] == "GS-1001" and bad["args"] == {"version": 9}
+    assert json.dumps(n["versions"]) == before                       # recording changed nothing the engine allows

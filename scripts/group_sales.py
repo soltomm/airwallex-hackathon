@@ -92,7 +92,7 @@ class Runner:
                                     "seller until tomorrow.", actor="system")
                 self.busy = f"seller ({mode})"
                 seller = ClaudeSeller(engine) if mode == "claude" else RulesSeller(engine)
-                self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run()
+                self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
                 for d in list(engine.s["deals"].values()):

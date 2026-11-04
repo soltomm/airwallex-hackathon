@@ -13,6 +13,7 @@ src/agentbank/groupsales/
                 payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
   seller.py     ClaudeSeller (tools over the engine) and RulesSeller (deterministic, same tools)
+  trace.py      record of each seller run and its tool calls, for the dashboard's AI Agent tab
   buyer.py      buyer moves from the private brief (presenter mode) and an optional Claude buyer agent
   extract.py    rule-based RFP extraction
 scripts/group_sales.py   server: dashboard, API, agent runner, payment page, webhooks
@@ -55,7 +56,9 @@ Each deal page has a coloured **next step** card with the buttons for that step:
 
 Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo controls**.
 The **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
-The **Activity** tab lists what each agent and person did, newest first. The **Availability** button in
+The **AI Agent** tab shows each seller run and the actions it took, one line each; click an action for its
+inputs, result and what it caused (a refused action is marked in red). The **Activity** tab lists what
+each agent and person did, newest first. The **Availability** button in
 the header opens a page with rooms, the Thames Room and breakfast by night, and who is holding them.
 
 1. **Demo controls → Reset scenario → Yes, reset**, then **Run seller** on the card. Northstar gets three questions.
@@ -137,7 +140,7 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (35 tests, no network, no keys; run with
+`tests/test_group_sales.py` (37 tests, no network, no keys; run with
 `PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
 
 - the spec's figures and the full demo story;
@@ -160,6 +163,8 @@ approved refund.
   never status-applied), pending refunds counted when a second reduction is priced, an approval
   binding one exact amount, a rejected authorization, a failed refund, a timeout during refund
   creation, duplicate and out-of-order provider events, an old event after a reset;
+- the AI Agent record: every seller run with its tool calls, inputs, results and effects; refused calls
+  recorded without changing anything; empty runs dropped; cleared on reset;
 - the server: webhook signatures (bad, stale, tampered and missing rejected; valid accepted) and the
   access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
 
