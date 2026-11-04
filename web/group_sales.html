@@ -288,7 +288,7 @@ function buyerPanel(d, n) {
     if (sug) h += `<p class="small muted">Suggested reply, from ${esc(d.company)}'s private brief:</p><div class="quote">${esc(sug.text)}</div>`;
     else if (open && v.kind === 'offer' && d.company.startsWith('Summit')) h += `<p class="small muted">Summit's brief says it waits for its organizer. Accept when you want to move it on.</p>`;
     h += '<div class="row">';
-    if (sug) h += `<button class="btn-buyer" data-act="sendSug">${SUG_LABEL[sug.action] || 'Send'}</button>`;
+    if (sug) h += `<button class="btn-buyer" data-act="sendSug">${sug.action === 'accept' && v ? 'Accept v' + v.n : SUG_LABEL[sug.action] || 'Send'}</button>`;
     if (open && !(sug && sug.action === 'accept')) h += `<button class="${sug ? '' : 'btn-buyer'}" data-act="accept">Accept v${v.n}</button>`;
     if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
     if (d.status === 'needs_info' && !sug) h += `<button data-form="answers">Answer…</button>`;
