@@ -47,13 +47,16 @@ header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); 
 
 .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 320px; gap: 16px; padding: 4px 18px 40px; align-items: start; }
 @media (max-width: 1180px) { .layout { grid-template-columns: 230px minmax(0, 1fr); } .side { grid-column: 1 / -1; } }
-@media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 4px 12px 40px; } header, .rooms { padding-left: 12px; padding-right: 12px; } }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 4px 12px 40px; } header, .rooms, #demo { padding-left: 12px; padding-right: 12px; }
+  dl.kv { grid-template-columns: minmax(0, 1fr); gap: 0 0; } dl.kv dt { margin-top: 6px; } .title h2 { font-size: 18px; } }
+html, body { max-width: 100%; overflow-x: hidden; }
+.layout > * { min-width: 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
 .q { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); margin-bottom: 8px; cursor: pointer; }
 .q.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.q .t { display: flex; justify-content: space-between; gap: 6px; font-weight: 600; }
+.q .t { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; font-weight: 600; }
 .q .s { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .q .w { font-size: 12.5px; margin-top: 6px; }
 .chip { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 500; background: var(--sunk); color: var(--muted); white-space: nowrap; }
@@ -92,6 +95,12 @@ header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); 
 .msg { margin: 0 0 12px; } .msg .h { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
 .msg .b { white-space: pre-wrap; padding: 8px 10px; border-radius: 10px; background: var(--sunk); }
 .msg.buyer .b { background: var(--buyer-soft); } .msg.seller .b { background: var(--accent-soft); }
+.msg .b, .quote, .feed .txt, dl.kv dd, pre, code { overflow-wrap: anywhere; }
+.msg.old .b { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.msg.old.open .b { display: block; }
+.earlier { border: 0; padding: 0; margin: 0 0 12px; } .earlier > summary { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+.confirm { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 10px; font-size: 13px; }
+.confirm .row { margin-top: 6px; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; } dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
 table.t { width: 100%; border-collapse: collapse; font-size: 13px; } table.t th { text-align: left; color: var(--muted); font-weight: 500; }
 table.t th, table.t td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; } table.t .r { text-align: right; font-variant-numeric: tabular-nums; }
@@ -131,7 +140,9 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
     <button id="releaseN">Deliver held notifications</button>
     <label><input type="checkbox" id="failCommit"> Fail the next booking commit</label></div>
   <div><h3>Inbox</h3><button id="paste">Paste a new RFP…</button>
-    <h3 style="margin-top:14px">Start over</h3><button class="btn-bad" id="reset">Reset scenario</button></div>
+    <h3 style="margin-top:14px">Start over</h3><button class="btn-bad" id="reset">Reset scenario</button>
+    <div class="confirm" id="resetAsk" hidden>Reset the hotel scenario? Deals, holds and the ledger start over; Airwallex records are kept.
+      <div class="row"><button class="btn-bad" id="resetYes">Yes, reset</button><button class="btn-ghost" id="resetNo">Cancel</button></div></div></div>
 </div>
 <div class="rooms" id="rooms"></div>
 <div class="layout">
@@ -157,7 +168,7 @@ const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) 
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
 const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
-let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null;
+let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false;
 
 function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
@@ -178,6 +189,8 @@ const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class=
 const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : null;
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
 const ROLE = {hotel_manager: 'Hotel manager', organizer: "Buyer's organizer"};
+const cap = t => { t = String(t || '').trim(); return t ? t[0].toUpperCase() + t.slice(1) : t; };
+const sentences = list => (list || []).map(x => cap(x).replace(/[.;]+$/, '')).filter(Boolean).map(x => x + '.').join(' ');
 const typing = () => { const a = document.activeElement; return a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.closest('#deal'); };
 
 async function load() {
@@ -215,7 +228,7 @@ function render() {
       <div class="s">${d.ref}${v ? ' · ' + gbp(v.pricing.total) : ''}${hrs != null && hrs > 0 && !d.booking ? ` · reply in ${hrs}h` : ''}</div>
       <div class="w"><span class="chip ${({you: 'warn', buyer: 'buyer', done: 'ok', bad: 'bad'})[n.cls] || ''}">${esc(n.short)}</span></div></div>`;
   }).join('') || '<div class="muted small">No inquiries.</div>';
-  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; render(); });
+  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; convOpen = false; render(); });
   renderDeal(S.deals.find(d => d.id === sel));
   renderSide();
 }
@@ -242,7 +255,7 @@ function nextCard(d) {
   if (n.ap) {
     const a = n.ap;
     const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: `Approve change v${a.version}?`}[a.subject] || 'Approve?';
-    h += `<h3>${what}</h3><p>${esc(a.reasons.join('; '))}.</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
+    h += `<h3>${what}</h3><p>${esc(sentences(a.reasons))}</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
       <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div>`;
   } else if (n.pay) {
     h += `<h3>Pay the ${gbp(v && v.pricing.deposit)} deposit</h3><p>On Airwallex's hosted page, use test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
@@ -300,10 +313,17 @@ function formHtml(d, v) {
 
 // ---- deal ------------------------------------------------------------------------------------
 function stepsOf(d) {
-  const f = d.finance_view, am = d.versions.filter(v => v.kind === 'amendment');
-  const s = [['Inquiry', true], ['Questions', d.thread.some(m => m.questions) || d.versions.length > 0], ['Offer', d.versions.length > 0],
-    ['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]];
-  if (am.length) s.push(['Change', am.some(v => v.status === 'accepted')], ['Refund', f.refunded > 0]);
+  // Each step is done or not; the highlighted one is the first step not done, so a later step is
+  // never shown as current while an earlier one (e.g. open questions) is still outstanding.
+  const f = d.finance_view, am = d.versions.filter(v => v.kind === 'amendment'), offers = d.versions.filter(v => v.kind === 'offer');
+  const asked = d.thread.some(m => m.questions), sent = offers.some(v => v.sent_at);
+  const s = [['Inquiry', true]];
+  if (asked) s.push(['Questions', d.status !== 'needs_info' || offers.length > 0]);
+  s.push(['Offer', sent], ['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]);
+  if (am.length || d.thread.some(m => m.action === 'change_request')) {
+    s.push(['Change', am.some(v => v.status === 'accepted')]);
+    if (am.some(v => v.reduction && v.reduction.refund_due > 0)) s.push(['Refund', f.refunded > 0 && !f.refund_owed]);
+  }
   const now = s.findIndex(x => !x[1]);
   return '<div class="steps">' + s.map(([l, ok], i) => `<span class="${ok ? 'done' : i === now ? 'now' : ''}">${ok ? '✓ ' : ''}${l}</span>`).join('') + '</div>';
 }
@@ -318,7 +338,7 @@ function offerCard(d) {
     <div class="facts"><span>Deposit <b>${t.deposit_pct}% · ${gbp(p.deposit)}</b></span><span>Free release <b>${t.attrition_pct}%</b> · ${p.allowance_remaining} of ${p.attrition_allowance} room-nights left</span>
       <span>${gbp(p.per_room_night_incl_breakfast)} per room-night incl. breakfast</span>${v.expires_at && !d.booking ? `<span>Held until <b>${when(v.expires_at)}</b></span>` : ''}</div>`;
   if (v.unmet && v.unmet.length) h += `<p class="small" style="margin:10px 0 0"><b>Differs from the request:</b> ${esc(v.unmet.join('; '))}</p>`;
-  h += `<div class="hotel">Hotel only: margin ${p.margin_all_rooms.margin_pct}% (${p.margin_full_release.margin_pct}% if all free room-nights are released)${v.hotel_check && v.hotel_check.approvals.length ? ' · approval needed for: ' + esc(v.hotel_check.approvals.join('; ')) : ''}</div></div>`;
+  h += `<div class="hotel">Hotel only: margin ${p.margin_all_rooms.margin_pct}% (${p.margin_full_release.margin_pct}% if all free room-nights are released)${v.hotel_check && v.hotel_check.approvals.length ? ' · Approval needed: ' + esc(sentences(v.hotel_check.approvals)) : ''}</div></div>`;
   if (f.received || f.refund_owed) {
     const due = f.schedule ? f.schedule.filter(x => x.amount) : [];
     h += `<div class="card"><div class="label">Money</div><div class="tiles">
@@ -332,7 +352,13 @@ function offerCard(d) {
 }
 const TABS = [['conv', 'Conversation'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
-  if (tab === 'conv') return d.thread.map(m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`).join('');
+  if (tab === 'conv') {
+    // Newest first. The latest two messages are shown in full; earlier ones are folded away.
+    const msg = (m, old) => `<div class="msg ${m.from}${old ? ' old' : ''}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
+    const all = d.thread.slice().reverse(), recent = all.slice(0, 2), older = all.slice(2);
+    return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>` + recent.map(m => msg(m)).join('')
+      + (older.length ? `<details class="earlier" id="earlier"${convOpen ? ' open' : ''}><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map(m => msg(m, true)).join('')}</details>` : '');
+  }
   if (tab === 'req') {
     const r = d.requirements; if (!r) return '<p class="muted">The seller hasn\'t read this inquiry yet.</p>';
     const m = r.meeting;
@@ -371,6 +397,8 @@ function renderDeal(d) {
 }
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
+  if ($('earlier')) $('earlier').ontoggle = e => { convOpen = e.target.open; };
+  document.querySelectorAll('.msg.old .b').forEach(b => b.onclick = () => b.parentElement.classList.toggle('open'));
   document.querySelectorAll('[data-form]').forEach(b => b.onclick = () => { form = b.dataset.form || null; renderDeal(d); if (!form) { lastJSON = ''; load(); } });
   document.querySelectorAll('#deal [data-ap]').forEach(b => b.onclick = () => decide(b));
   const act = (action, text, payload) => api(`/api/buyer/${d.id}`, {token: d.buyer_token, action, text, payload});
@@ -412,7 +440,7 @@ const ICON = {seller: '🛎', system: '⚙︎', hotel_manager: '✓', organizer:
 function renderSide() {
   const pend = S.approvals.filter(a => a.status === 'pending');
   $('apCard').style.display = pend.length ? '' : 'none';
-  $('aps').innerHTML = pend.map(a => `<div class="ap"><b>${ROLE[a.approver]}</b> · ${a.ref}<div style="margin:3px 0 8px">${esc(a.reasons.join('; '))}${a.amount ? ' (' + gbp(a.amount) + ')' : ''}</div>
+  $('aps').innerHTML = pend.map(a => `<div class="ap"><b>${ROLE[a.approver]}</b> · ${a.ref}<div style="margin:3px 0 8px">${esc(sentences(a.reasons))}${a.amount ? ' Amount ' + gbp(a.amount) + '.' : ''}</div>
     <div class="row"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div></div>`).join('');
   document.querySelectorAll('#aps [data-ap]').forEach(b => b.onclick = () => decide(b));
   $('feedScope').textContent = scopeAll ? 'All deals' : 'This deal';
@@ -437,7 +465,14 @@ $('jump').onclick = () => api('/api/clock', {to: '2027-01-20T09:00:00+00:00'}).t
 $('delayN').onchange = e => api('/api/sim', {delay_refund_notifications: e.target.checked}).then(load);
 $('failCommit').onchange = e => api('/api/sim', {fail_next_commit: e.target.checked}).then(load);
 $('releaseN').onclick = () => api('/api/notifications/release', {}).then(r => { toast(r.results.map(x => x.result).join('; ') || 'Delivered'); load(); });
-$('reset').onclick = () => { if (confirm('Reset the hotel scenario? Airwallex records are kept.')) api('/api/reset', {}).then(() => { sel = null; tab = 'conv'; form = null; lastJSON = ''; load(); }); };
+const askReset = on => { $('resetAsk').hidden = !on; $('reset').hidden = on; if (on) $('resetYes').focus(); };
+$('reset').onclick = () => askReset(true);
+$('resetNo').onclick = () => askReset(false);
+$('resetYes').onclick = async () => {
+  $('resetYes').disabled = true;
+  try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; convOpen = false; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
+  catch (e) {} finally { $('resetYes').disabled = false; }
+};
 $('paste').onclick = () => $('dlg').showModal();
 $('rfpSend').onclick = async e => { e.preventDefault(); const r = await api('/api/inbox', {from: $('rfpFrom').value, subject: $('rfpSubj').value, body: $('rfpBody').value}); $('dlg').close(); sel = r.deal_id; lastJSON = ''; load(); };
 load(); setInterval(load, 1500);

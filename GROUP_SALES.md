@@ -54,8 +54,9 @@ Each deal page has a coloured **next step** card with the buttons for that step:
 - grey: the seller agent or Airwallex is working
 
 Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo controls**.
+The **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
 
-1. **Demo controls → Reset scenario**, then **Run seller** on the card. Northstar gets three questions.
+1. **Demo controls → Reset scenario → Yes, reset**, then **Run seller** on the card. Northstar gets three questions.
    Summit gets a quote: **£4,920, deposit £1,476**. The activity feed explains why the seller moved to
    Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
 2. **Northstar → Send answers.** The seller quotes v1: **£9,600**, 30% deposit, 10% attrition.
