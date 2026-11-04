@@ -47,6 +47,9 @@ header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); 
   dl.kv { grid-template-columns: minmax(0, 1fr); gap: 0 0; } dl.kv dt { margin-top: 6px; } .title h2 { font-size: 18px; } }
 html, body { max-width: 100%; overflow-x: hidden; }
 .layout > * { min-width: 0; }
+.side-btn { width: 100%; margin-top: 2px; padding: 10px 12px; border-radius: 12px; text-align: left; font-weight: 600; white-space: normal; display: flex; flex-direction: column; gap: 2px; }
+.side-btn .small { font-weight: 400; }
+.page .back { padding-left: 0; margin-bottom: 8px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
@@ -158,7 +161,6 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <span class="pill" id="agent"></span>
   <span class="spacer"></span>
   <span class="small muted" id="pay"></span>
-  <button id="availBtn">Availability</button>
   <button id="demoBtn">Demo controls ▾</button>
 </header>
 <div id="demo">
@@ -179,7 +181,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
       <div class="row"><button class="btn-bad" id="resetYes">Yes, reset</button><button class="btn-ghost" id="resetNo">Cancel</button></div></div></div>
 </div>
 <div class="layout" id="desk">
-  <aside><div class="label">Inquiries</div><div id="queue"></div></aside>
+  <aside><div class="label">Inquiries</div><div id="queue"></div><button id="availBtn" class="side-btn">Availability<span class="small muted">Rooms, Thames Room and breakfast by night</span></button></aside>
   <main id="deal"><div class="empty">Loading…</div></main>
 </div>
 <section class="page" id="avail" hidden></section>
@@ -562,7 +564,7 @@ function availHtml() {
     const held = d.hold && ['active', 'expired_payment_pending'].includes(d.hold.status);
     return held ? [`<tr><td>${esc(d.company)}</td><td><span class="chip warn">${d.hold.status === 'active' ? 'Held' : 'Held, payment unclear'}</span></td><td>${perNight(d.hold.rooms)} ${esc(d.hold.room_type)} rooms a night</td><td>${d.hold.status === 'active' ? 'until ' + when(d.hold.expires_at) : 'manager review'}</td></tr>`] : [];
   }).join('');
-  return `<h2>Availability</h2><p class="lede">What Harbour House can still sell for the 10–13 March stay. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released.</p>
+  return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Harbour House can still sell for the 10–13 March stay. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released.</p>
     <div class="key"><span><i class="bk"></i>Booked</span><span><i class="hd"></i>Held by an open offer</span><span><i></i>Free</span></div>
     <div class="nights">${nights}</div>
     <div class="two"><div class="card"><div class="label">Thames Room</div><dl class="kv">${meeting}</dl></div><div class="card"><div class="label">Group breakfast</div><dl class="kv">${breakfast}</dl></div></div>
@@ -571,11 +573,11 @@ function availHtml() {
 function showView() {
   const on = location.hash === '#availability';
   $('avail').hidden = !on; $('desk').hidden = on;
-  $('availBtn').textContent = on ? '← Back to deals' : 'Availability';
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', showView);
-$('availBtn').onclick = () => { location.hash = location.hash === '#availability' ? '' : 'availability'; };
+$('availBtn').onclick = () => { location.hash = 'availability'; };
+$('avail').onclick = e => { if (e.target.closest('#availBack')) location.hash = ''; };
 
 $('demoBtn').onclick = () => { const o = $('demo').classList.toggle('open'); $('demoBtn').textContent = o ? 'Demo controls ▴' : 'Demo controls ▾'; };
 $('runSeller').onclick = () => api('/api/seller/run', {}).then(load);

@@ -58,8 +58,8 @@ Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes)
 The **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
 The **AI Agent** tab shows each seller run and the actions it took, one line each; click an action for its
 inputs, result and what it caused (a refused action is marked in red). The **Activity** tab lists what
-each agent and person did, newest first. The **Availability** button in
-the header opens a page with rooms, the Thames Room and breakfast by night, and who is holding them.
+each agent and person did, newest first. The **Availability** button under
+the inquiries list opens a page with rooms, the Thames Room and breakfast by night, and who is holding them.
 
 1. **Demo controls → Reset scenario → Yes, reset**, then **Run seller** on the card. Northstar gets three questions.
    Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the seller moved
