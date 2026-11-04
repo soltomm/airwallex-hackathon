@@ -118,6 +118,9 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
 
 ## Verified live (Airwallex sandbox, 2026-11-02)
 
+Changes made after this run (the privacy fix, the two refund fixes and the dashboard polish on
+`group-sales-next`) were tested offline only.
+
 The full story ran against the sandbox with the rules seller, paying through hosted checkout in Chrome:
 - Deposit Payment Intent `int_sgpvzhfh9hnsz4b1uwl`, £3,840.00 GBP, SUCCEEDED; checked on return,
   booking confirmed.
@@ -132,13 +135,31 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (18 tests, no network) covers the spec's figures, the full demo story,
-cumulative attrition (including releasing nine room-nights, releases after the deadline and releases
-after the first installment), refund authority, stale approvals and wrong approvers, hard limits,
-overselling, duplicate emails and threading, out-of-scope requests, a refund left unresolved, a
-rejected refund authorization, a failed refund, a timeout during refund creation, hold expiry during
-checkout, a successful payment followed by a booking-commit failure, duplicate and out-of-order
-provider events, an old event after a reset, and recovery after a restart.
+`tests/test_group_sales.py` (34 tests, no network, no keys; run with
+`PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
+
+- the spec's figures and the full demo story;
+- cumulative attrition (including releasing nine room-nights, releases after the deadline and after
+  the first installment);
+- privacy in both directions: the seller's tools and the shared thread never show the buyer's
+  mandate, deposit limits or organizer reasons (only that buyer-side authorization is pending), and
+  the buyer view never shows floors, costs, margins, hotel checks, records, flags, unsent versions or
+  manager approval summaries;
+- authority: stale approvals and wrong approvers, hard limits, a 20-29% deposit needing the manager
+  and refused alongside attrition above 10% or a below-floor rate, a below-floor rate needing
+  approval and a 40% deposit, a package below the 40% margin floor refused, and instructions inside
+  a pasted RFP changing nothing;
+- inventory and holds: no overselling, negotiated versions reusing the same hold and expiry, hold
+  expiry during checkout (unpaid: cancelled and released; processing or unknown: kept and flagged
+  for the manager), and a renewed offer after expiry needing a fresh hold and new acceptance;
+- payments: a timeout creating the deposit intent recovered by lookup with no second intent, a
+  successful payment followed by a booking-commit failure, recovery after a restart;
+- refunds: the £500 authority, an unresolved refund blocking a new one (including one stored but
+  never status-applied), pending refunds counted when a second reduction is priced, an approval
+  binding one exact amount, a rejected authorization, a failed refund, a timeout during refund
+  creation, duplicate and out-of-order provider events, an old event after a reset;
+- the server: webhook signatures (bad, stale, tampered and missing rejected; valid accepted) and the
+  access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
 
 ## Not in this build
 
