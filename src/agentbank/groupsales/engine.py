@@ -1045,8 +1045,10 @@ class Engine:
             if not release:
                 raise Refused("nothing to release")
             fin = self.finance(d)
+            # Measure against what the hotel keeps: receipts net of refunds made AND refunds already owed
+            # (pending or not yet started), so a second reduction never refunds the first one again.
             ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
-                                         fin["net_received"])
+                                         fin["net_received"] - fin["refund_owed"])
             for v in d["versions"]:
                 if v["kind"] == "amendment" and v["status"] in ("draft", "pending_approval", "approved", "sent"):
                     v["status"] = "superseded"
@@ -1142,7 +1144,9 @@ class Engine:
             if owed <= 0:
                 raise Refused("no refund is owed")
             for o in self._refund_ops(d):
-                if o["status"] in ("submitting", "unknown") or o.get("provider_status") == "RECEIVED":
+                # Anything not yet completed or failed is unresolved, including a refund stored as created
+                # whose status was never applied (e.g. the process stopped right after the provider call).
+                if o["status"] in ("submitting", "unknown", "created", "pending") or o.get("provider_status") == "RECEIVED":
                     raise Refused(f"refund {o.get('provider_id') or o['id']} is unresolved "
                                   f"({o.get('provider_status') or o['status']}): check it with check_refund before "
                                   "any new refund")
