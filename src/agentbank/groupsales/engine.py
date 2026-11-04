@@ -971,10 +971,15 @@ class Engine:
             op = self._deposit_op(d)
             if not op:
                 raise Refused("no checkout opened")
+            before = (d["status"], op["status"])
             self._verify_deposit(d, op, source)
             self._save()
-            return {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
-                    "booking": d.get("booking"), "deal_status": d["status"]}
+            changed = (d["status"], op["status"]) != before
+            out = {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
+                   "booking": d.get("booking"), "deal_status": d["status"]}
+        if changed:
+            self._wake("payment")   # a confirmed booking (or an exception) is new input for the seller
+        return out
 
     def _verify_deposit(self, d, op, source: str):
         if op["status"] in ("submitting", "unknown"):
@@ -1323,7 +1328,9 @@ class Engine:
             self.s["reconcile_log"].append({"at": self.now(), "event": eid, "name": name, "result": result})
             self.log(None, "system", "webhook", f"Provider event {name} {eid}: {result}")
             self._save()
-            return {"event": eid, "result": result}
+        if result != "ignored" and "earlier run" not in result:
+            self._wake("provider event")
+        return {"event": eid, "result": result}
 
     # ================================================================ escalation / handoff
     def escalate(self, deal_id: str, reason: str, message: str = "", actor: str = "seller") -> dict:

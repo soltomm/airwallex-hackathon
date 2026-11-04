@@ -897,3 +897,17 @@ def test_access_token_gate(server, monkeypatch):
     assert _req(mod, "/", headers={"Cookie": "gs_k=demo-token"})[0] == 200
     monkeypatch.setattr(mod, "ACCESS", "")
     assert _req(mod, "/api/state")[0] == 200                                      # no token configured: open (local use)
+
+
+def test_payment_confirmation_wakes_the_seller(eng):
+    """Returning from checkout confirms the booking; the seller must be woken to see it (no manual Run seller)."""
+    e = eng
+    s, n = _to_checkout(e)
+    woken = []
+    e.listeners.append(woken.append)
+    e.check_payment(n["id"])                                         # not paid yet: nothing changed
+    assert woken == []
+    pay(e, n)
+    assert n["status"] == "confirmed" and woken == ["payment"]
+    s.run()
+    assert n["unread"] is False and e.next_step(n) == "confirmed"
