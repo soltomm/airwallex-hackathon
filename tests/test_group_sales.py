@@ -781,3 +781,119 @@ def test_refund_approval_binds_one_amount(eng):
     n["finance"]["refund_owed"] = 52800                               # back to the approved amount: that one works
     r = e.refund_excess(n["id"])
     assert r.get("refund_id") and e._refund_ops(n)[0]["amount"] == 52800
+
+
+# ------------------------------------------------------------------------------ the server: webhooks and access
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import importlib.util  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+from http.server import ThreadingHTTPServer  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+SERVER = Path(__file__).resolve().parents[1] / "scripts" / "group_sales.py"
+
+
+@pytest.fixture(scope="module")
+def server(tmp_path_factory):
+    """The real request handler on a local port, with simulated payments and the rules seller."""
+    with pytest.MonkeyPatch.context() as mp:
+        for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWX_CLIENT_ID", "AWX_API_KEY", "GS_ACCESS_TOKEN",
+                  "AWX_WEBHOOK_SECRET", "DATABASE_URL"):
+            mp.delenv(k, raising=False)
+        mp.setenv("PAYMENTS", "simulated")
+        mp.setenv("SELLER_MODE", "rules")
+        mp.setenv("GS_VAR", str(tmp_path_factory.mktemp("gsvar")))
+        spec = importlib.util.spec_from_file_location("group_sales_server", SERVER)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    mod.runner.settings["auto_seller"] = False
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    mod.base = f"http://127.0.0.1:{srv.server_address[1]}"
+    yield mod
+    srv.shutdown()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+
+
+def _req(mod, path, body=None, headers=None, method=None):
+    data = body if isinstance(body, bytes) or body is None else json.dumps(body).encode()
+    r = urllib.request.Request(mod.base + path, data=data, headers=headers or {}, method=method)
+    try:
+        with _OPENER.open(r, timeout=10) as resp:
+            return resp.status, dict(resp.headers), resp.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read().decode()
+
+
+def _signed(event, secret, ts=None):
+    raw = json.dumps(event).encode()
+    ts = str(ts if ts is not None else int(time.time() * 1000))
+    return raw, {"Content-Type": "application/json", "x-timestamp": ts,
+                 "x-signature": hmac.new(secret.encode(), ts.encode() + raw, hashlib.sha256).hexdigest()}
+
+
+def test_webhook_signature_checked(server, monkeypatch):
+    mod = server
+    monkeypatch.setattr(mod, "ACCESS", "")
+    monkeypatch.setenv("AWX_WEBHOOK_SECRET", "whsec_demo")
+    seen = mod.engine.s["events_seen"]
+    raw, h = _signed({"id": "evt_forged", "name": "payment_intent.succeeded", "data": {"object": {"id": "int_x"}}},
+                     "wrong-secret")
+    assert _req(mod, "/webhooks/airwallex", raw, h)[0] == 401
+    raw, h = _signed({"id": "evt_stale", "name": "refund.accepted"}, "whsec_demo", ts=int(time.time() * 1000) - 600000)
+    assert _req(mod, "/webhooks/airwallex", raw, h)[0] == 401                     # outside the 5-minute window
+    raw, h = _signed({"id": "evt_tampered", "name": "refund.accepted"}, "whsec_demo")
+    assert _req(mod, "/webhooks/airwallex", raw + b" ", h)[0] == 401              # body changed after signing
+    assert _req(mod, "/webhooks/airwallex", raw, {"Content-Type": "application/json"})[0] == 401
+    assert not {"evt_forged", "evt_stale", "evt_tampered"} & set(seen)
+    raw, h = _signed({"id": "evt_good", "name": "refund.accepted", "data": {"object": {"id": "rfd_none"}}}, "whsec_demo")
+    code, _, body = _req(mod, "/webhooks/airwallex", raw, h)
+    assert code == 200 and json.loads(body) == {"received": True}
+    for _ in range(50):
+        if "evt_good" in mod.engine.s["events_seen"]:
+            break
+        time.sleep(0.05)
+    assert "evt_good" in mod.engine.s["events_seen"]
+    monkeypatch.delenv("AWX_WEBHOOK_SECRET")
+    raw, h = _signed({"id": "evt_nosecret"}, "")
+    assert _req(mod, "/webhooks/airwallex", raw, h)[0] == 401                     # no secret configured: refuse all
+
+
+def test_access_token_gate(server, monkeypatch):
+    mod = server
+    monkeypatch.setattr(mod, "ACCESS", "demo-token")
+    monkeypatch.delenv("AWX_WEBHOOK_SECRET", raising=False)
+    run_id = mod.engine.s["run_id"]
+    # Open paths: health, the buyer's payment page (it has its own buyer token) and provider webhooks.
+    assert _req(mod, "/healthz")[0] == 200
+    code, _, body = _req(mod, "/pay/GS-1001?t=wrong")
+    assert code == 403 and "Not authorized" in body                               # past the gate, stopped by the buyer token
+    d = mod.engine.deal("GS-1001")
+    assert _req(mod, f"/pay/GS-1001?t={d['buyer_token']}")[0] == 200
+    code, _, body = _req(mod, "/webhooks/airwallex", b"{}", {"Content-Type": "application/json"})
+    assert code == 401 and "bad signature" in body                                # reached the webhook's own check
+    # Everything else needs the token.
+    for path in ("/", "/api/state", "/api/buyer/GS-1001/suggest"):
+        assert _req(mod, path)[0] == 401, path
+        assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
+    for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001"):
+        code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
+        assert code == 401 and "access token required" in body, path
+    assert mod.engine.s["run_id"] == run_id                                       # the refused reset changed nothing
+    code, h, _ = _req(mod, "/?k=demo-token")
+    assert code == 303 and "gs_k=demo-token" in h.get("Set-Cookie", "") and "HttpOnly" in h["Set-Cookie"]
+    assert _req(mod, "/api/state", headers={"Cookie": "gs_k=demo-token"})[0] == 200
+    assert _req(mod, "/", headers={"Cookie": "gs_k=demo-token"})[0] == 200
+    monkeypatch.setattr(mod, "ACCESS", "")
+    assert _req(mod, "/api/state")[0] == 200                                      # no token configured: open (local use)
