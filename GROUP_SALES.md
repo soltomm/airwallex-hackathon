@@ -214,9 +214,11 @@ bugs, now fixed with regression tests:
 - an organizer approving after the offer had lapsed left the approval marked approved in memory but
   not on disk, with no acceptance recorded; it is now refused as stale before anything changes.
 
-Last full run: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about 8 minutes). They
-ended with 772 confirmed bookings, 91 refunds, 82 changes in manager review, and deals handed to a
-person or declined.
+Last full runs: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about 8 minutes),
+ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review. Then 5,000 of
+5,000 new cases passed (seeds 1000-3499 per seller, 100 steps each, about 70 minutes), ending with
+4,156 confirmed bookings, 470 refunds, 17 refunds failed and handled, and 43 payments received with
+a booking exception, plus deals handed to a person or declined.
 
 ### Browser check of the demo script
 

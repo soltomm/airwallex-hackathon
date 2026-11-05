@@ -1,6 +1,6 @@
 # Live checks before merging `group-sales-next`
 
-Everything on this branch was tested offline: the unit tests, 1,000+ randomized scenarios and a
+Everything on this branch was tested offline: the unit tests, 6,000 randomized scenarios and a
 browser run of the demo script, all with simulated payments and the rules seller. These checks need
 real keys. Do them before merging PR #1 into `group-sales`, which redeploys the live demo.
 
