@@ -140,7 +140,7 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (37 tests, no network, no keys; run with
+`tests/test_group_sales.py` (39 tests, no network, no keys; run with
 `PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
 
 - the spec's figures and the full demo story;
@@ -167,6 +167,50 @@ approved refund.
   recorded without changing anything; empty runs dropped; cleared on reset;
 - the server: webhook signatures (bad, stale, tampered and missing rejected; valid accepted) and the
   access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
+
+### Randomized scenarios
+
+`tests/fuzz_group_sales.py` checks the rules against requests nobody wrote by hand. Each case (a seed)
+starts a fresh hotel and takes a random walk of 60-80 steps:
+
+- **Requests:** new RFPs with random sizes, room types, dates (some outside the stay), budgets,
+  meeting rooms, unsupported extras, injected instructions and duplicate emails.
+- **Moves:** seller runs; buyer answers, counteroffers, acceptances (sometimes of an old version or
+  with a wrong token), change requests and declines; approvals by the right and the wrong person.
+- **Money and time:** good and declined cards, return-page and webhook confirmations, provider
+  timeouts and failures, clock jumps, held and replayed notifications, events from earlier runs.
+- **Restarts and resets.**
+
+Two sellers drive it:
+
+- **rules:** the demo's own seller;
+- **chaos:** random, schema-valid calls to the Claude seller's tools, standing in for an agent that
+  misreads or is manipulated.
+
+After every step it checks:
+
+- inventory adds up to the holds and bookings on file, and is never oversold;
+- every sent offer is within the hard limits and carries the manager approval it needs;
+- an acceptance beyond a buyer's mandate has the organizer's approval;
+- every booking has a verified payment and a ledger receipt;
+- there is one payment intent per checkout, and refunds never exceed receipts or the capture;
+- refunds above £500 are authorized, and at most one refund is unresolved at a time;
+- neither side sees the other's private data;
+- the state survives a restart, and nothing fails except as a refusal.
+
+```bash
+PYTHONPATH=src python tests/fuzz_group_sales.py --cases 500             # prints coverage and any failures
+PYTHONPATH=src python tests/fuzz_group_sales.py --seed 72 --sellers rules -v   # replay one case step by step
+ANTHROPIC_API_KEY=... PYTHONPATH=src python tests/fuzz_group_sales.py --cases 10 --claude   # live Claude seller
+```
+
+The normal suite runs 15 cases per seller (`tests/test_group_sales_fuzz.py`; set `FUZZ_CASES` for
+more). Planted bugs are caught within the first two seeds: authority checks removed, an inventory leak
+on booking, a booking without payment, hotel flags in the buyer view. The first runs found two real
+bugs, now fixed with regression tests:
+
+- a change request for more rooms than were booked crashed the seller, and blocked it for every deal;
+- the rules seller crashed if questions had gone out before the inquiry was read.
 
 ## Not in this build
 

@@ -974,3 +974,32 @@ def test_agent_trace_records_claude_tool_calls_and_refusals(eng):
     bad = run["steps"][-1]
     assert bad["summary"].startswith("Refused") and bad["error"] and bad["ref"] == "GS-1001" and bad["args"] == {"version": 9}
     assert json.dumps(n["versions"]) == before                       # recording changed nothing the engine allows
+
+
+# ---- found by the randomized scenarios (tests/fuzz_group_sales.py) --------------------------------
+def test_change_request_beyond_the_booking_is_handed_to_a_person(eng):
+    """Asking to release more rooms than are booked used to crash the seller run (ValueError) for every deal."""
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    with pytest.raises(Refused, match="cannot be applied"):
+        e.prepare_reduction(n["id"], rooms_per_night=99)
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please drop 99 rooms a night.", {"rooms_per_night": 99})
+    s.run()                                                          # no crash
+    assert n["handoff"] and "cannot be applied" in n["handoff"]["reason"]
+    assert n["status"] == "confirmed" and n["booking"]["rooms"] == {night: 12 for night in H["nights"]}
+    assert n["thread"][-1]["from"] == "seller" and "current booking stays as agreed" in n["thread"][-1]["text"]
+    assert not n["unread"]                                            # the next run does not trip on it again
+
+
+def test_rules_seller_reads_the_inquiry_if_questions_went_out_first(eng):
+    """Another seller (e.g. Claude before a fallback) asked questions before recording requirements."""
+    e = eng
+    n = deal_by(e, "Northstar")
+    e.ask_buyer(n["id"], ["payer?"], "Who is the legal payer, and which meeting layout do you need?")
+    assert n["status"] == "needs_info" and n["requirements"] is None
+    e.buyer_action(n["id"], n["buyer_token"], "reply", "Classroom; Northstar Analytics Demo Ltd pays; budget incl. taxes.",
+                   {"answers": {"meeting_layout": "classroom", "payer": "Northstar Analytics Demo Ltd",
+                                "budget_includes_taxes": True}})
+    RulesSeller(e).run()                                             # used to crash on requirements None
+    assert n["requirements"]["rooms"] == 12 and n["versions"] and n["versions"][-1]["pricing"]["total"] == 960000

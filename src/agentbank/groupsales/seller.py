@@ -117,6 +117,10 @@ class RulesSeller:
                 return f"{ref}: asked {len(qs)} questions"
             return self._quote(deal_id)
         if st == "needs_info" and d["unread"]:
+            if not d["requirements"]:
+                # Questions went out before the inquiry was read (another seller asked them): read it first.
+                first = d["thread"][0]
+                e.record_requirements(deal_id, extract(d["subject"], first["text"], d["sender"]))
             m = _latest_buyer_msg(d)
             answers = (m.get("payload") or {}).get("answers") or self._answers_from_text(m["text"])
             upd = {}
@@ -181,7 +185,13 @@ class RulesSeller:
                     e.note(deal_id, "Change request unclear; asking a person to follow up.")
                     e.escalate(deal_id, "change request could not be interpreted")
                     return f"{ref}: escalated change"
-                r = e.prepare_reduction(deal_id, rooms_per_night=n, release=p.get("release"))
+                try:
+                    r = e.prepare_reduction(deal_id, rooms_per_night=n, release=p.get("release"))
+                except Refused as err:
+                    e.escalate(deal_id, f"change request cannot be applied as asked: {err}",
+                               message="Thank you. We can't apply this change to your booking as requested, so a "
+                                       "member of our team will contact you. Your current booking stays as agreed.")
+                    return f"{ref}: escalated change ({err})"
                 return f"{ref}: reduction prepared ({r['status']})"
             return f"{ref}: read"
         if st == "amendment_approved":

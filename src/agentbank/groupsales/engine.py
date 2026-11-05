@@ -1075,8 +1075,11 @@ class Engine:
             fin = self.finance(d)
             # Measure against what the hotel keeps: receipts net of refunds made AND refunds already owed
             # (pending or not yet started), so a second reduction never refunds the first one again.
-            ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
-                                         fin["net_received"] - fin["refund_owed"])
+            try:
+                ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
+                                             fin["net_received"] - fin["refund_owed"])
+            except ValueError as err:   # e.g. more rooms than are booked, or a night not in the booking
+                raise Refused(f"this change cannot be applied to the booking: {err}") from None
             for v in d["versions"]:
                 if v["kind"] == "amendment" and v["status"] in ("draft", "pending_approval", "approved", "sent"):
                     v["status"] = "superseded"
