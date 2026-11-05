@@ -1003,3 +1003,17 @@ def test_rules_seller_reads_the_inquiry_if_questions_went_out_first(eng):
                                 "budget_includes_taxes": True}})
     RulesSeller(e).run()                                             # used to crash on requirements None
     assert n["requirements"]["rooms"] == 12 and n["versions"] and n["versions"][-1]["pricing"]["total"] == 960000
+
+
+def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng):
+    """Found by the randomized scenarios: approving after the offer lapsed left a half-made decision in memory."""
+    e = eng
+    s, n, r = _to_organizer(e)
+    appr = e.s["approvals"][r["approval_id"]]
+    e.advance_clock(hours=25)                                         # the offer and its hold expire
+    assert n["versions"][-1]["status"] == "expired"
+    with pytest.raises(Refused, match="stale"):
+        e.decide_approval(appr["id"], "approve", "organizer")
+    assert appr["status"] == "stale" and not n.get("accepted_version")
+    reloaded = Engine(e.var, e.provider)                               # what is on disk matches memory
+    assert reloaded.s["approvals"][appr["id"]]["status"] == "stale"

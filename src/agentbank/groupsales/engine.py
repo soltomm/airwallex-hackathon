@@ -451,25 +451,22 @@ class Engine:
 
     # ---- agent trace (see trace.py): presenter-side record of each seller run and its tool calls
     def agent_run_start(self, agent: str, trigger: str = "", model: str | None = None) -> dict:
-        with self.lock:
-            run = {"id": "ar_" + uuid.uuid4().hex[:8], "agent": agent, "model": model, "trigger": trigger,
-                   "at": self.now(), "real_at": _iso(datetime.now(timezone.utc)), "steps": []}
-            runs = self.s.setdefault("agent_runs", [])
-            runs.append(run)
-            del runs[:-60]
-            return run
+        # The run joins the record only with its first step: a wake-up that finds nothing to do leaves no line
+        # (and nothing that a save in between could persist and a later removal leave behind).
+        return {"id": "ar_" + uuid.uuid4().hex[:8], "agent": agent, "model": model, "trigger": trigger,
+                "at": self.now(), "real_at": _iso(datetime.now(timezone.utc)), "steps": []}
 
     def agent_step(self, run: dict, step: dict):
         with self.lock:
+            runs = self.s.setdefault("agent_runs", [])
+            if not any(r is run for r in runs):
+                runs.append(run)
+                del runs[:-60]
             run["steps"].append(step)
 
     def agent_run_end(self, run: dict):
         with self.lock:
-            runs = self.s.get("agent_runs", [])
-            if not run["steps"]:            # woke up, found nothing to do: not worth a line
-                runs[:] = [r for r in runs if r is not run]
-                return
-            if any(r is run for r in runs):
+            if any(r is run for r in self.s.get("agent_runs", [])):
                 self._save()
 
     # ================================================================ offers
@@ -653,7 +650,10 @@ class Engine:
             # A request whose object changed since it was raised is stale, whatever the decision.
             if a["version"] is not None:
                 v = self._version(d, a["version"])
-                if v["hash"] != a["hash"] or v["status"] in ("superseded",):
+                # An acceptance can only be authorized while that offer is still the one on the table;
+                # checked here, before anything changes, so a refusal leaves no half-made decision.
+                lapsed_offer = a["subject"] == "acceptance" and (v["status"] != "sent" or v is not d["versions"][-1])
+                if v["hash"] != a["hash"] or v["status"] in ("superseded",) or lapsed_offer:
                     a["status"] = "stale"
                     self.log(d["id"], "system", "approval_stale", f"Approval {a['id']} is stale: v{a['version']} changed.")
                     self._save()

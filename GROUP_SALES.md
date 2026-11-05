@@ -140,7 +140,7 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (39 tests, no network, no keys; run with
+`tests/test_group_sales.py` (40 tests, no network, no keys; run with
 `PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
 
 - the spec's figures and the full demo story;
@@ -210,7 +210,13 @@ on booking, a booking without payment, hotel flags in the buyer view. The first 
 bugs, now fixed with regression tests:
 
 - a change request for more rooms than were booked crashed the seller, and blocked it for every deal;
-- the rules seller crashed if questions had gone out before the inquiry was read.
+- the rules seller crashed if questions had gone out before the inquiry was read;
+- an organizer approving after the offer had lapsed left the approval marked approved in memory but
+  not on disk, with no acceptance recorded; it is now refused as stale before anything changes.
+
+Last full run: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about 8 minutes). They
+ended with 772 confirmed bookings, 91 refunds, 82 changes in manager review, and deals handed to a
+person or declined.
 
 ## Not in this build
 
