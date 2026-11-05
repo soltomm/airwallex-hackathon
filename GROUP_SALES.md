@@ -218,6 +218,20 @@ Last full run: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about
 ended with 772 confirmed bookings, 91 refunds, 82 changes in manager review, and deals handed to a
 person or declined.
 
+### Browser check of the demo script
+
+`scripts/e2e_demo.js` clicks through the demo script in a real browser against a running server with
+simulated payments, and checks 26 points: every spec figure, the AI Agent tab, Availability, the
+late notification, 375 px width on every tab, and no JavaScript errors or browser dialogs. It resets
+the scenario first. It needs Playwright for Node (`npm i playwright`).
+
+```bash
+PAYMENTS=simulated SELLER_MODE=rules GS_VAR=var/e2e PYTHONPATH=src python scripts/group_sales.py &
+node scripts/e2e_demo.js                                   # or BASE=<url> TOKEN=<access token>
+```
+
+The checks that need real keys, and a hand-off prompt for running them, are in `docs/LIVE_CHECKS.md`.
+
 ## Not in this build
 
 Kit 10 (Merchant Onboarding). Payments for extra rooms, other dates, upgrades, custom services, split

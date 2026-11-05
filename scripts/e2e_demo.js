@@ -1,0 +1,175 @@
+// End-to-end check of the demo script in GROUP_SALES.md, clicking the dashboard's own buttons in a real
+// browser. Run it against a server with simulated payments (the hosted page is the simulated one):
+//
+//   PAYMENTS=simulated SELLER_MODE=rules GS_VAR=var/e2e PYTHONPATH=src python scripts/group_sales.py &
+//   node scripts/e2e_demo.js                                  # BASE defaults to http://localhost:8010
+//   BASE=https://harbour-house-preview.onrender.com TOKEN=... node scripts/e2e_demo.js
+//
+// Needs Playwright for Node (npm i playwright; npx playwright install chromium). It resets the
+// scenario first, so don't point it at a demo someone is presenting. Exit code 1 if any check fails.
+const { chromium } = require('playwright');
+
+const BASE = (process.env.BASE || 'http://localhost:8010').replace(/\/$/, '');
+const TOKEN = process.env.TOKEN || '';
+const SHOTS = process.env.SHOTS || '';            // a folder to save a screenshot per step, if set
+const results = [];
+const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : '  — ' + detail}`); };
+
+(async () => {
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  const errors = [], dialogs = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
+
+  const state = () => page.evaluate(() => fetch('/api/state').then(r => r.json()));
+  const deal = async name => (await state()).deals.find(d => d.company.startsWith(name));
+  // Wait until the seller agent is idle and the deal is in one of the given states.
+  const settle = async (name, statuses, ms = 30000) => {
+    const t0 = Date.now(); let d;
+    while (Date.now() - t0 < ms) {
+      const s = await state(); d = s.deals.find(x => x.company.startsWith(name));
+      if (!s.runner.busy && (!statuses || statuses.includes(d.status))) { await page.waitForTimeout(700); return d; }
+      await page.waitForTimeout(300);
+    }
+    throw new Error(`${name} stuck in ${d && d.status}, expected ${statuses}`);
+  };
+  const open = async name => { await page.click(`#queue >> text=${name}`); await page.waitForTimeout(400); };
+  const tab = async key => { await page.click(`[data-tab=${key}]`); await page.waitForTimeout(300); };
+  const card = () => page.innerText('#deal');
+  const click = async (sel) => { await page.click(sel); await page.waitForTimeout(500); };
+  const demo = async on => {                                         // open or close Demo controls
+    if ((await page.$eval('#demo', el => el.classList.contains('open'))) !== on) await click('#demoBtn');
+  };
+  const shot = async n => SHOTS && page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
+
+  try {
+    await page.goto(`${BASE}/${TOKEN ? '?k=' + encodeURIComponent(TOKEN) : ''}`);
+    await page.waitForSelector('#queue .q', { timeout: 60000 });   // a sleeping free server can take a minute
+
+    // 1. Reset, run the seller: Northstar gets questions, Summit a quote.
+    await demo(true); await click('#reset'); await click('#resetYes'); await demo(false);
+    check('reset asks inline, no browser dialog', dialogs.length === 0);
+    await page.waitForTimeout(800);
+    await open('Northstar'); await click('#deal [data-act=run]');
+    let n = await settle('Northstar', ['needs_info']);
+    const s1 = await settle('Summit', ['offer_sent']);
+    check('Summit quoted £4,920 with a £1,476 deposit', s1.versions[0].pricing.total === 492000 && s1.versions[0].pricing.deposit === 147600);
+    check('Northstar asked three questions', (n.thread.find(m => m.questions) || {}).questions?.length === 3);
+    await tab('agent');
+    let txt = await card();
+    check('AI Agent tab lists Northstar actions', /Recorded the requirements/.test(txt) && /Asked the buyer/.test(txt), txt.slice(0, 200));
+    check('AI Agent tab shows only this deal', !/Summit/.test(txt));
+    await page.click('details.ag'); await page.waitForTimeout(2500);   // a refresh must not close it
+    check('an opened AI Agent action stays open across refreshes', await page.$$eval('details.ag[open]', x => x.length) === 1);
+    await open('Summit'); await tab('agent');
+    check('Summit AI Agent tab shows its offer', /Proposed an offer/.test(await card()));
+    await shot('1-quotes');
+
+    // 2-3. Answers, v1; counteroffer, v2 at £3,840 deposit for the manager.
+    await open('Northstar'); await tab('conv');
+    await click('#deal [data-act=sendSug]');                         // Send answers
+    n = await settle('Northstar', ['offer_sent']);
+    const v1 = n.versions[n.versions.length - 1];
+    check('v1 £9,600, 30% deposit, 10% attrition', v1.pricing.total === 960000 && v1.terms.deposit_pct === 30 && v1.terms.attrition_pct === 10);
+    await click('#deal [data-act=sendSug]');                         // Send counteroffer
+    n = await settle('Northstar', ['pending_approval']);
+    const v2 = n.versions[n.versions.length - 1];
+    check('v2 keeps £220 and asks 40% (£3,840)', v2.terms.rate === 22000 && v2.pricing.deposit === 384000);
+    await click('#deal [data-ap][data-d=approve]');                  // hotel manager
+    n = await settle('Northstar', ['offer_sent']);
+    check('the buyer card offers "Accept v2"',
+          await page.waitForSelector('#deal button:has-text("Accept v2")', { timeout: 10000 }).then(() => true, () => false));
+    await shot('2-v2');
+
+    // 4. Accept v2: over Northstar's limits, so the organizer approves; checkout opens.
+    await page.click('#deal button:has-text("Accept v2")'); await page.waitForTimeout(600);
+    n = await settle('Northstar', ['acceptance_pending_organizer']);
+    const accMsg = n.thread.filter(m => m.from === 'buyer').pop().text;
+    check('the accept message states no limits', !/£3,000|30% limit|budget/.test(accMsg), accMsg);
+    await click('#deal [data-ap][data-d=approve]');                  // organizer
+    n = await settle('Northstar', ['awaiting_payment']);
+
+    // 5. Pay on the (simulated) hosted page; returning confirms the booking.
+    const [pay] = await Promise.all([ctx.waitForEvent('page'), page.click('#deal button:has-text("Open payment page")')]);
+    await pay.waitForLoadState();
+    await pay.click('text=Pay deposit'); await pay.waitForLoadState();
+    await pay.click('button:has-text("Pay")'); await pay.waitForLoadState();
+    await pay.waitForTimeout(800);
+    check('return page shows the booking confirmed', /confirmed/i.test(await pay.innerText('body')));
+    await pay.close();
+    n = await settle('Northstar', ['confirmed']);
+    check('booking confirmed after the verified £3,840 payment', n.booking && n.booking.status === 'confirmed' && n.finance_view.received === 384000);
+
+    // 6. Jump to 20 Jan: Summit lapses; Northstar reduces to v3 £8,280 with £528 owed.
+    await page.waitForTimeout(500);
+    await click('#deal [data-act=jump]');
+    await settle('Summit', ['expired']);
+    check('Summit lapsed at the jump', (await deal('Summit')).status === 'expired');
+    await open('Northstar');
+    await click('#deal [data-act=sendSug]');                         // Send change request
+    n = await settle('Northstar', ['amendment_sent']);
+    await page.click('#deal button:has-text("Accept v3")'); await page.waitForTimeout(600);
+    n = await settle('Northstar', ['refund_awaiting_approval']);
+    const v3 = n.versions[n.versions.length - 1];
+    check('v3 £8,280 with £528 owed', v3.pricing.total === 828000 && n.finance.refund_owed === 52800);
+
+    // 7. Approve the £528 refund; the seller creates it and checks it; the ledger updates once.
+    await click('#deal [data-ap][data-d=approve]');
+    const t0 = Date.now();
+    while (Date.now() - t0 < 30000) {                                 // the refund settles; "Check now" if waiting
+      n = await deal('Northstar');
+      if (n.status === 'confirmed') break;
+      const btn = await page.$('#deal [data-act=chkRef]');
+      if (btn) await btn.click();
+      await page.waitForTimeout(1500);
+    }
+    n = await settle('Northstar', ['confirmed']);
+    let s = await state();
+    const refunds = s.operations.filter(o => o.deal_id === n.id && o.kind === 'refund');
+    check('exactly one £528 refund, completed', refunds.length === 1 && refunds[0].amount === 52800 && refunds[0].status === 'completed');
+
+    // 8. Deliver the held notification: a duplicate, nothing changes. Final figures.
+    const ledgerBefore = s.ledger.length;
+    await demo(true); await click('#releaseN'); await demo(false);
+    s = await state(); n = s.deals.find(d => d.company.startsWith('Northstar'));
+    check('late notification changes nothing', s.ledger.length === ledgerBefore);
+    check('£3,312 net received, £4,968 still due', n.finance_view.net_received === 331200 && n.finance_view.still_due === 496800,
+          JSON.stringify(n.finance_view));
+    check('10 twins a night', Object.values(n.booking.rooms).every(r => r === 10));
+    await tab('money');
+    txt = await card();
+    check('Payments tab shows £3,312 and £4,968', /£3,312/.test(txt) && /£4,968/.test(txt));
+    await tab('agent');
+    check('AI Agent tab shows the refund started and checked', /Started a refund/.test(await card()) && /Checked the refund/.test(await card()));
+    await shot('3-final');
+
+    // 9. Availability button under the inquiries, and back.
+    await click('#availBtn');
+    check('Availability page opens from the left column', await page.isVisible('#avail') && !(await page.isVisible('#desk')));
+    await click('#availBack');
+    check('Back to deals returns', await page.isVisible('#desk'));
+
+    // 10. Phone width: no sideways scroll on any tab of either deal.
+    await page.setViewportSize({ width: 375, height: 800 });
+    let wide = [];
+    for (const name of ['Northstar', 'Summit']) {
+      await open(name);
+      for (const k of ['conv', 'agent', 'act', 'req', 'rec', 'hist', 'money', 'ops']) {
+        await tab(k);
+        if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) wide.push(`${name}/${k}`);
+      }
+    }
+    check('no horizontal scroll at 375px', wide.length === 0, wide.join(', '));
+  } catch (e) {
+    check('run completed', false, e.message);
+    await shot('error');
+  }
+  check('no JavaScript errors', errors.length === 0, errors.join(' | '));
+  check('no browser dialogs', dialogs.length === 0, dialogs.join(' | '));
+  await browser.close();
+  const failed = results.filter(r => !r.ok);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  process.exit(failed.length ? 1 : 0);
+})();
