@@ -309,8 +309,8 @@ class RulesSeller:
         pr, t = p["pricing"], p["terms"]
         lines = "\n".join(f"- {l['item']}: {l['qty']} x {gbp(l['unit'])} = {gbp(l['amount'])}" for l in pr["lines"])
         kd = self.e.policy
-        from .calc import key_dates
-        dates = key_dates(self.e.hotel, kd)
+        from .calc import arrival_of, key_dates
+        dates = key_dates(arrival_of(t), kd)
         body = (f"Itemized offer for {d['company']}:\n{lines}\nTotal {gbp(pr['total'])} (GBP, taxes included). "
                 f"Deposit {t['deposit_pct']}% = {gbp(pr['deposit'])} on signing; cumulative 50% by "
                 f"{dates['first_installment_due']}, 100% by {dates['final_installment_due']}. Attrition {t['attrition_pct']}% "

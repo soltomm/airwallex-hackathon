@@ -79,8 +79,35 @@ def test_spec_figures():
     r = calc.evaluate_reduction(northstar_terms(), {n: 2 for n in H["nights"]}, "2027-01-20", H, POL, RMS, 384000)
     assert (r["new_pricing"]["total"], r["revised_deposit"], r["refund_due"], r["remaining_after"]) == (828000, 331200, 52800, 1)
     assert r["new_pricing"]["margin_all_rooms"]["costs"] == 271200
-    sched = calc.schedule(828000, 40, 331200, H, POL, "2027-01-11")
+    sched = calc.schedule(828000, 40, 331200, "2027-03-10", POL, "2027-01-11")
     assert [x["amount"] for x in sched] == [0, 82800, 414000]
+
+
+def june_terms():
+    """Northstar's contract moved to a 10-13 June 2027 stay: same rooms, different arrival."""
+    t = northstar_terms()
+    nights = ("2027-06-10", "2027-06-11", "2027-06-12")
+    return {**t, "rooms": {n: 12 for n in nights}, "released": {n: 0 for n in nights},
+            "breakfast": {m: 24 for m in ("2027-06-11", "2027-06-12", "2027-06-13")},
+            "meeting": {**t["meeting"], "date": "2027-06-11"}}
+
+
+def test_deadlines_follow_the_contract_arrival():
+    assert calc.arrival_of(june_terms()) == "2027-06-10"
+    assert calc.key_dates("2027-06-10", POL) == {
+        "arrival": "2027-06-10", "release_deadline": "2027-05-27", "rooming_list_due": "2027-05-20",
+        "first_installment_due": "2027-05-11", "final_installment_due": "2027-06-03"}
+    due = [x["due"] for x in calc.schedule(960000, 40, 384000, "2027-06-10", POL, "2027-01-11")]
+    assert due == ["2027-01-11", "2027-05-11", "2027-06-03"]
+
+
+def test_reduction_deadlines_follow_the_contract_arrival():
+    # 20 March is past a March stay's release deadline (24 Feb) but well before a June stay's (27 May).
+    r = calc.evaluate_reduction(june_terms(), {"2027-06-10": 2}, "2027-03-20", H, POL, RMS, 384000)
+    assert r["before_release_deadline"] and r["before_first_installment"] and not r["needs_manager_review"]
+    assert r["refund_mode"] == "automatic"
+    r = calc.evaluate_reduction(june_terms(), {"2027-06-10": 2}, "2027-05-28", H, POL, RMS, 384000)
+    assert not r["before_release_deadline"] and "after the room-release deadline (2027-05-27)" in r["review_reasons"]
 
 
 def test_summit_offer():

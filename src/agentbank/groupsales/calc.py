@@ -114,8 +114,14 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
 
 # ---- dates ---------------------------------------------------------------------------------
 
-def key_dates(hotel: dict, policy: dict) -> dict:
-    arrival = d(hotel["arrival"])
+def arrival_of(terms: dict) -> str:
+    """A contract's arrival date: its first contracted night. Deadlines count back from this."""
+    return min(terms["rooms"])
+
+
+def key_dates(arrival: str, policy: dict) -> dict:
+    """Release, rooming-list and installment deadlines for a stay arriving on `arrival` (YYYY-MM-DD)."""
+    arrival = d(arrival)
     inst = policy["installments"]
     return {
         "arrival": arrival.isoformat(),
@@ -126,10 +132,10 @@ def key_dates(hotel: dict, policy: dict) -> dict:
     }
 
 
-def schedule(total: int, deposit_pct: int, net_received: int, hotel: dict, policy: dict,
+def schedule(total: int, deposit_pct: int, net_received: int, arrival: str, policy: dict,
              signing_date: str | None = None) -> list[dict]:
     """Remaining payment obligations, counting all earlier payments toward each cumulative target."""
-    arrival = d(hotel["arrival"])
+    arrival = d(arrival)
     milestones = [("Signing deposit", signing_date, deposit_pct)]
     for m in policy["installments"]:
         milestones.append((f"{m['cumulative_pct']}% paid", (arrival - timedelta(days=m["days_before_arrival"])).isoformat(),
@@ -154,7 +160,7 @@ def cancellation_terms(policy: dict) -> str:
 def evaluate_reduction(terms: dict, release: dict, today: str, hotel: dict, policy: dict, rms: dict,
                        net_received: int) -> dict:
     """What happens if the buyer releases `release` ({night: rooms}) on `today` under `terms`."""
-    dates = key_dates(hotel, policy)
+    dates = key_dates(arrival_of(terms), policy)
     new_released = dict(terms.get("released") or {n: 0 for n in terms["rooms"]})
     for night, n in release.items():
         if night not in terms["rooms"]:

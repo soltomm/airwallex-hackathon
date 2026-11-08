@@ -375,7 +375,7 @@ class Engine:
                 view["hold"] = self._hold_public(d)
                 view["approvals"] = [self._approval_for_seller(a) for a in self.s["approvals"].values()
                                      if a["deal_id"] == d["id"]]
-                view["key_dates"] = calc.key_dates(self.hotel, self.policy)
+                view["key_dates"] = self._key_dates(d)
                 view["clock"] = self.now()
             else:
                 w = self.waiting_on(d) or ""
@@ -479,6 +479,7 @@ class Engine:
             bf = {m: {"capacity": self.hotel["breakfast"]["group_capacity_per_day"],
                       "committed": v["held"] + v["booked"]} for m, v in self.s["breakfast"].items()}
             rates = self.rms["rates"].get(rt) if rt else self.rms["rates"]
+            req_dates = calc.key_dates(req["arrival"], self.policy) if req.get("arrival") else None
             crm = self.scenario["crm"].get(d["domain"], {"account": None, "type": "unknown sender", "credit_terms": False})
             records = [
                 {"system": "PMS", "summary": "; ".join(
@@ -498,7 +499,7 @@ class Engine:
                 {"system": "Policy", "summary": "Deposit 30% standard (up to 40%; 20-29% needs manager); attrition 10% "
                                                 "standard (to 20% with manager, needs 40% deposit); quotes/holds 24h",
                  "data": {"deposit": self.policy["deposit"], "attrition": self.policy["attrition"],
-                          "key_dates": calc.key_dates(self.hotel, self.policy)}},
+                          "key_dates": req_dates}},
             ]
             for r in records:
                 r["checked_at"] = now
@@ -508,7 +509,7 @@ class Engine:
                      [{"system": r["system"], "summary": r["summary"]} for r in records])
             self._save()
             return {"checked_at": now, "pms": pms, "meeting": meeting, "breakfast": bf, "rms": rates,
-                    "crm": crm, "key_dates": calc.key_dates(self.hotel, self.policy)}
+                    "crm": crm, "key_dates": req_dates}
 
     def ask_buyer(self, deal_id: str, questions: list[str], message: str, actor: str = "seller") -> dict:
         with self.lock:
@@ -1481,14 +1482,23 @@ class Engine:
             signing = self._version(d, d["booking"]["version"])["accepted_at"] if d.get("booking") else None
             if out["refund_owed"] or pending:
                 out["projected_after_refund"] = calc.schedule(cur["pricing"]["total"], cur["terms"]["deposit_pct"],
-                                                              out["net_received"] - out["refund_owed"], self.hotel,
+                                                              out["net_received"] - out["refund_owed"], calc.arrival_of(cur["terms"]),
                                                               self.policy, signing)
                 out["collection_blocked"] = "refund unresolved: reconcile before any further collection"
                 out["schedule"] = out["projected_after_refund"]
             else:
                 out["schedule"] = calc.schedule(cur["pricing"]["total"], cur["terms"]["deposit_pct"],
-                                                out["net_received"], self.hotel, self.policy, signing)
+                                                out["net_received"], calc.arrival_of(cur["terms"]), self.policy,
+                                                signing)
         return out
+
+    def _key_dates(self, d) -> dict | None:
+        """Deadlines for this deal's own stay: the accepted contract, else the latest version, else the
+        requested arrival. None until an arrival is known."""
+        v = self._version(d, d["accepted_version"]) if d.get("accepted_version") else (
+            d["versions"][-1] if d["versions"] else None)
+        arrival = calc.arrival_of(v["terms"]) if v else (d.get("requirements") or {}).get("arrival")
+        return calc.key_dates(arrival, self.policy) if arrival else None
 
     def waiting_on(self, d) -> str | None:
         pend = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["status"] == "pending"]
@@ -1550,7 +1560,7 @@ class Engine:
         rooms = b["rooms"]
         per_night = sorted(set(rooms.values()))
         occ = 2 if t["room_type"] == "twin" else 1
-        dates = calc.key_dates(self.hotel, self.policy)
+        dates = calc.key_dates(calc.arrival_of(t), self.policy)
         return {
             "front_office": f"{', '.join(f'{n}: {r} {t['room_type']}' for n, r in rooms.items())}; expected guests "
                             f"{max(per_night) * occ if per_night else 0}; company master bill to {t.get('payer')}; "
@@ -1586,5 +1596,4 @@ class Engine:
                     "activity": self.s["activity"][-200:],
                     "agent_runs": copy.deepcopy(self.s.get("agent_runs", [])[-40:]), "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
                     "delayed_notifications": len(self.s["delayed_notifications"]),
-                    "reconcile_log": self.s["reconcile_log"][-30:], "provider": self.provider.name,
-                    "key_dates": calc.key_dates(self.hotel, self.policy)}
+                    "reconcile_log": self.s["reconcile_log"][-30:], "provider": self.provider.name}
