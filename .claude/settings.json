@@ -13,8 +13,6 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git fetch *)",
-      "Bash(git push -u origin group-sales-next)",
-      "Bash(git push origin group-sales-next)",
       "Bash(node *)",
       "Bash(pkill -f scripts/group_sales.py)",
       "mcp__Render__get_service",
@@ -28,8 +26,6 @@
       "mcp__github__update_pull_request"
     ],
     "deny": [
-      "Bash(git push origin group-sales)",
-      "Bash(git push -u origin group-sales)",
       "Bash(git push origin main)",
       "Bash(git push -u origin main)",
       "Bash(git push origin hotel-negotiation)",
