@@ -22,7 +22,7 @@ git fetch origin && git checkout group-sales-next && git pull
 python3 -m venv .venv && .venv/bin/pip install -e '.[agent]' pytest
 cp -n .env.example .env       # fill in AWX_CLIENT_ID and AWX_API_KEY (sandbox), and ANTHROPIC_API_KEY
 set -a; source .env; set +a   # load the keys into this shell
-PYTHONPATH=src .venv/bin/python -m pytest tests -q     # expect 155 passed, 7 skipped
+PYTHONPATH=src .venv/bin/python -m pytest tests -q     # expect 163 passed, 7 skipped
 ```
 
 ## 1. Airwallex sandbox, rules seller
@@ -31,8 +31,13 @@ PYTHONPATH=src .venv/bin/python -m pytest tests -q     # expect 155 passed, 7 sk
 PAYMENTS=airwallex SELLER_MODE=rules GS_VAR=var/check-awx PYTHONPATH=src .venv/bin/python scripts/group_sales.py
 ```
 
-At http://localhost:8010, follow the demo script in `GROUP_SALES.md`. Pay with `4035 5010 0000 0008`,
-any future expiry and any CVC.
+At http://localhost:8010, follow the demo script in `GROUP_SALES.md`. The seller starts on its own after
+the reset; the buyer's moves, the organizer's sign-off and the payment are in Northstar's mailbox (the
+link on its card). Pay with `4035 5010 0000 0008`, any future expiry and any CVC.
+
+If Airwallex refuses the deposit intent, Northstar's card turns red with the error and a **Retry**
+button, and there is exactly one failed deposit attempt in the Payments tab. That is a fail for this
+check: note the error, fix the cause (key, IP whitelist), click **Retry** and carry on.
 
 Pass when:
 - the deposit Payment Intent is £3,840.00 GBP and SUCCEEDED, and the booking is confirmed on return;

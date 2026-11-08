@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import calc
+from . import calc, rules
 from .calc import gbp
 from .extract import extract, missing_info, stay_nights
 from .policy import buyer_check, hotel_check
@@ -49,6 +49,10 @@ def _dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+def cap_first(t: str) -> str:
+    return t[:1].upper() + t[1:]
+
+
 def _hash(obj) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -67,7 +71,10 @@ class Engine:
         self.store = doc(self.var / "groupsales_state.json")
         self.runs = doc(self.var / "groupsales_runs.json")
         self.followups = doc(self.var / "groupsales_followups.json")
-        self.scenario = json.loads(self.scenario_path.read_text())
+        # Hotel staff's changes to the seller's rules (rules.EDITABLE), kept apart from the scenario
+        # state so they survive a reset.
+        self.rule_store = doc(self.var / "groupsales_rules.json")
+        self.scenario = self._load_scenario()
         self.listeners: list = []          # called after state changes that should wake an agent
         saved = self.store.read()
         if saved:
@@ -132,7 +139,7 @@ class Engine:
                 self.runs.write(((self.runs.read() or []) + [{"run_id": self.s["run_id"], "state": self.s}])[-5:])
                 if followups:
                     self.followups.write((self.followups.read() or []) + followups)
-            self.scenario = json.loads(self.scenario_path.read_text())
+            self.scenario = self._load_scenario()
             h = self.hotel
             prior_events = self.s.get("events_seen", []) if self.s else []
             self.s = {
@@ -157,7 +164,75 @@ class Engine:
                 self.ingest_email(e["from"], e["subject"], e["body"], message_id=e["message_id"],
                                   received_at=e["received_at"], wake=False)
             self._save()
-            return {"run_id": self.s["run_id"], "followups": len(followups)}
+        self._wake("scenario reset: new inquiries in the inbox")   # the seller starts on its own
+        return {"run_id": self.s["run_id"], "followups": len(followups)}
+
+    # ================================================================ seller rules
+    def _load_scenario(self) -> dict:
+        return rules.apply(json.loads(self.scenario_path.read_text()), self.rule_store.read() or {})
+
+    def rules_view(self) -> dict:
+        with self.lock:
+            base = json.loads(self.scenario_path.read_text())
+            return rules.describe(self.scenario, base)
+
+    def update_rules(self, changes: dict, actor: str = "hotel manager") -> dict:
+        """Change the seller's editable rules. Applies to pricing from now on; versions already
+        created keep the terms (and hash) they were made with."""
+        with self.lock:
+            unknown = [k for k in changes if k not in rules.PATHS]
+            if unknown:
+                raise Refused(f"not an editable rule: {', '.join(unknown)}")
+            try:
+                changes = {k: int(v) for k, v in changes.items()}
+            except (TypeError, ValueError):
+                raise Refused("rule values must be whole numbers (pence for money)")
+            base = json.loads(self.scenario_path.read_text())
+            overrides = {**(self.rule_store.read() or {}), **changes}
+            candidate = rules.apply(base, overrides)
+            problems = rules.validate(candidate)
+            if problems:
+                raise Refused("; ".join(problems))
+            diff = [(p, rules.get(self.scenario, p), rules.get(candidate, p)) for p in changes
+                    if rules.get(self.scenario, p) != rules.get(candidate, p)]
+            # Store only what differs from the scenario file.
+            self.rule_store.write({p: v for p, v in overrides.items() if rules.get(base, p) != v})
+            self.scenario = candidate
+            if diff:
+                text = "; ".join(f"{rules.PATHS[p][0]} {rules._fmt(rules.PATHS[p][1], a)} → "
+                                 f"{rules._fmt(rules.PATHS[p][1], b)}" for p, a, b in diff)
+                self.log(None, actor, "rules_changed", f"Seller rules changed: {text}. Applies to new offers and "
+                         "changes; versions already made keep their terms.")
+                self._save()
+        if diff:
+            self._wake("seller rules changed")
+        return {**self.rules_view(), "saved": len(diff)}
+
+    def reset_rules(self, actor: str = "hotel manager") -> dict:
+        with self.lock:
+            current = self.rule_store.read() or {}
+            base = json.loads(self.scenario_path.read_text())
+            return self.update_rules({p: rules.get(base, p) for p in current}, actor=actor) if current \
+                else {**self.rules_view(), "saved": 0}
+
+    # ================================================================ seller pause
+    def _pause_seller(self, d: dict, what: str, error) -> None:
+        """A provider refused a money operation. Stop retrying it on every wake: hotel staff look at
+        the error and retry once it's fixed."""
+        d["seller_paused"] = {"at": self.now(), "what": what, "error": str(error)}
+        self.log(d["id"], "system", "seller_paused", f"Seller paused on {d['ref']}: {what} failed ({error}). "
+                 "Hotel staff can retry once the cause is fixed.")
+
+    def retry_seller(self, deal_id: str, actor: str = "hotel staff") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            if not d.get("seller_paused"):
+                raise Refused("the seller isn't paused on this deal")
+            p = d.pop("seller_paused")
+            self.log(d["id"], actor, "seller_retry", f"{cap_first(actor)} asked the seller to retry: {p['what']}.")
+            self._save()
+        self._wake(f"{actor} asked the seller to retry {p['what']} on {d['ref']}")
+        return {"retrying": p["what"]}
 
     @staticmethod
     def _mornings(nights: list[str]) -> list[str]:
@@ -264,6 +339,7 @@ class Engine:
                     "deal_id": d["id"], "ref": d["ref"], "company": d["company"], "status": d["status"],
                     "reply_by": d.get("reply_by"), "hours_to_deadline": hours_left,
                     "unread_buyer_input": d.get("unread", False),
+                    "seller_paused": bool(d.get("seller_paused")),
                     "waiting_on": self.waiting_on(d), "next_step": self.next_step(d),
                     "current_version": cur["n"] if cur else None,
                     "package_value": gbp(value) if value is not None else None,
@@ -893,7 +969,7 @@ class Engine:
                         op["status"] = "cancelled"
                     except Exception as e:
                         op["note"] = f"cancel at expiry failed: {e}"
-            self._release_hold(hold, "quote validity (24 scenario hours) ended")
+            self._release_hold(hold, f"quote validity ({self.policy['quote_validity_hours']} scenario hours) ended")
             hold["status"] = "expired"
             for v in d["versions"]:
                 if v["status"] in ("sent", "approved", "pending_approval") and v["kind"] == "offer":
@@ -902,7 +978,7 @@ class Engine:
                 d["status"] = "expired"
                 if not d.get("booking"):
                     d["accepted_version"] = None   # an unpaid acceptance lapses with its hold
-            self.log(d["id"], "system", "expired", "Offer and hold expired after 24 scenario hours; checkout "
+            self.log(d["id"], "system", "expired", f"Offer and hold expired after {self.policy['quote_validity_hours']} scenario hours; checkout "
                      "disabled. A renewed offer needs a fresh availability check and new acceptance.")
             d["unread"] = True
 
@@ -915,6 +991,8 @@ class Engine:
         with self.lock:
             self._sweep()
             d = self.deal(deal_id)
+            if d.get("seller_paused"):
+                raise Refused(f"paused after {d['seller_paused']['what']} failed: hotel staff must retry first")
             if not d.get("accepted_version"):
                 raise Refused("no accepted agreement")
             v = self._version(d, d["accepted_version"])
@@ -953,6 +1031,7 @@ class Engine:
             except AirwallexError as e:
                 op["status"] = "failed"
                 op["note"] = str(e)
+                self._pause_seller(d, "opening checkout", e)
                 self._save()
                 raise Refused(f"provider refused the payment intent: {e}")
             d["status"] = "awaiting_payment"
@@ -1171,6 +1250,8 @@ class Engine:
         """Refund what the buyer is owed after an accepted reduction, within authority and refundable funds."""
         with self.lock:
             d = self.deal(deal_id)
+            if d.get("seller_paused"):
+                raise Refused(f"paused after {d['seller_paused']['what']} failed: hotel staff must retry first")
             owed = d["finance"]["refund_owed"]
             if owed <= 0:
                 raise Refused("no refund is owed")
@@ -1244,6 +1325,7 @@ class Engine:
                 op["status"] = "failed"
                 op["note"] = str(e)
                 self.log(d["id"], "system", "refund_failed", f"Provider rejected refund: {e}. Amount stays owed.")
+                self._pause_seller(d, "the refund", e)
                 self._save()
                 raise Refused(f"provider rejected the refund: {e}")
             d["status"] = "refund_pending"
@@ -1413,6 +1495,8 @@ class Engine:
         if pend:
             a = pend[-1]
             return ("hotel manager" if a["approver"] == "hotel_manager" else "buyer's organizer") + f": {a['subject']} approval"
+        if d.get("seller_paused"):
+            return "hotel staff: retry after a payment-provider error"
         st = d["status"]
         if d.get("unread") and st not in ("new",):
             return "seller: new input to read"
@@ -1428,6 +1512,9 @@ class Engine:
 
     def next_step(self, d) -> str:
         st = d["status"]
+        if d.get("seller_paused"):
+            return (f"paused: {d['seller_paused']['what']} failed at the payment provider; wait for hotel staff "
+                    "to retry (do not call it again)")
         refund_appr = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["subject"] == "refund"]
         if refund_appr and d["finance"]["refund_owed"] and not any(
                 o["status"] in ("submitting", "unknown", "created", "pending") for o in self._refund_ops(d)):

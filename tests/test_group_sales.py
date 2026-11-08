@@ -1017,3 +1017,135 @@ def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng)
     assert appr["status"] == "stale" and not n.get("accepted_version")
     reloaded = Engine(e.var, e.provider)                               # what is on disk matches memory
     assert reloaded.s["approvals"][appr["id"]]["status"] == "stale"
+
+
+# ------------------------------------------------------------------------------ seller rules
+def test_rules_view_lists_editable_and_fixed_rules(eng):
+    v = eng.rules_view()
+    paths = {x["path"]: x for x in v["editable"]}
+    assert paths["rms.rates.twin.autonomous_floor"]["value"] == 21000 and v["changed"] == 0
+    assert paths["policy.seller_refund_limit"]["shown"] == "£500"
+    assert any(f["label"] == "Cancellation" for f in v["fixed"])
+
+
+def test_rule_change_binds_the_seller_and_survives_reset(eng, tmp_path):
+    e = eng
+    e.update_rules({"policy.deposit.standard_pct": 35, "rms.rates.twin.target": 23000})
+    assert e.policy["deposit"]["standard_pct"] == 35
+    assert any(a["kind"] == "rules_changed" and "Standard deposit 30% → 35%" in a["text"] for a in e.s["activity"])
+    e.reset()
+    assert e.policy["deposit"]["standard_pct"] == 35                 # overrides outlive a reset
+    RulesSeller(e).run()
+    buyer_turn(e, "Northstar")
+    RulesSeller(e).run()
+    v1 = deal_by(e, "Northstar")["versions"][-1]
+    assert (v1["terms"]["rate"], v1["terms"]["deposit_pct"]) == (23000, 35)
+    # A fresh engine on the same state directory reads the overrides back.
+    again = Engine(tmp_path / "var", e.provider)
+    assert again.rms["rates"]["twin"]["target"] == 23000
+    from agentbank.groupsales.seller import system_prompt
+    assert "twin target £230" in system_prompt(again) and "Deposit 35% standard" in system_prompt(again)
+    e.reset_rules()
+    assert e.policy["deposit"]["standard_pct"] == 30 and e.rule_store.read() == {}
+
+
+def test_rule_change_is_checked_and_refused_whole(eng):
+    e = eng
+    with pytest.raises(Refused, match="seller's floor"):
+        e.update_rules({"rms.rates.twin.autonomous_floor": 23000})   # above the £220 target
+    with pytest.raises(Refused, match="not an editable rule"):
+        e.update_rules({"rms.delivery_costs.twin": 1})
+    with pytest.raises(Refused, match="exception terms"):
+        e.update_rules({"policy.deposit.required_pct_for_exceptions": 50})
+    with pytest.raises(Refused):
+        e.update_rules({"policy.deposit.standard_pct": 35, "policy.deposit.max_pct": 30})
+    assert e.policy["deposit"]["standard_pct"] == 30 and e.policy["deposit"]["max_pct"] == 40
+    assert e.rules_view()["changed"] == 0
+
+
+def test_lower_refund_limit_sends_the_refund_to_the_manager_sooner(eng):
+    e = eng
+    e.update_rules({"policy.seller_refund_limit": 10000})
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    appr = [a for a in e.s["approvals"].values() if a["subject"] == "refund"]
+    assert appr and appr[0]["amount"] == 52800 and "£100" in " ".join(appr[0]["reasons"])
+
+
+# ------------------------------------------------------------------------------ seller pause
+def test_provider_refusal_pauses_the_seller_until_staff_retry(eng):
+    from agentbank.groupsales.provider import AirwallexError
+    e = eng
+    s, n, r = _to_organizer(e)
+    calls = []
+    real = e.provider.create_intent
+
+    def refuse(*a, **k):
+        calls.append(1)
+        raise AirwallexError(403, "non_json_response", "403 Forbidden")
+    e.provider.create_intent = refuse
+    e.decide_approval(r["approval_id"], "approve", "organizer")
+    s.run()
+    s.run()
+    RulesSeller(e).run()
+    assert len(calls) == 1                              # one attempt, not one per step or per run
+    assert n["status"] == "accepted" and n["seller_paused"]["what"] == "opening checkout"
+    assert "paused" in e.next_step(n) and e.waiting_on(n).startswith("hotel staff")
+    assert sum(1 for o in e.s["operations"].values() if o["deal_id"] == n["id"]) == 1
+    with pytest.raises(Refused, match="retry first"):
+        e.open_checkout(n["id"])
+    e.provider.create_intent = real
+    e.retry_seller(n["id"])
+    s.run()
+    assert n["status"] == "awaiting_payment" and not n.get("seller_paused")
+    with pytest.raises(Refused, match="isn't paused"):
+        e.retry_seller(n["id"])
+
+
+def test_reset_wakes_the_seller(eng):
+    woke = []
+    eng.listeners.append(woke.append)
+    eng.reset()
+    assert woke and "reset" in woke[-1]
+
+
+# ------------------------------------------------------------------------------ buyer mailbox (server)
+def test_buyer_mailbox_and_organizer_sign_off(server):
+    mod = server
+    e = mod.engine
+    e.reset()
+    s, n, r = _to_organizer(e)
+    tok = n["buyer_token"]
+    st, _, body = _req(mod, f"/inbox/{n['ref']}?t={tok}")
+    assert st == 200 and n["id"] in body
+    assert _req(mod, f"/inbox/{n['ref']}?t=wrong")[0] == 403
+    st, _, body = _req(mod, f"/api/buyer/{n['id']}/view?t={tok}")
+    v = json.loads(body)
+    assert st == 200 and v["organizer"] and v["organizer"][0]["id"] == r["approval_id"]
+    for secret in ("margin", "autonomous_floor", "delivery_costs", "hotel_check"):
+        assert secret not in body                        # the buyer's view carries no hotel internals
+    assert _req(mod, f"/api/buyer/{n['id']}/view?t=wrong")[0] == 400
+    st, _, _ = _req(mod, f"/api/buyer/{n['id']}/organizer", {"token": "wrong", "approval_id": r["approval_id"],
+                                                             "decision": "approve"})
+    assert st == 400
+    st, _, body = _req(mod, f"/api/buyer/{n['id']}/organizer", {"token": tok, "approval_id": r["approval_id"],
+                                                                "decision": "approve"})
+    assert st == 200, body
+    assert e.s["approvals"][r["approval_id"]]["status"] == "approved"
+
+
+def test_rules_api(server):
+    mod = server
+    st, _, body = _req(mod, "/api/rules")
+    assert st == 200 and json.loads(body)["editable"]
+    st, _, body = _req(mod, "/api/rules", {"changes": {"policy.quote_validity_hours": 0}})
+    assert st == 400 and "between 1 and 168" in body
+    st, _, body = _req(mod, "/api/rules", {"changes": {"policy.quote_validity_hours": 48}})
+    assert st == 200 and json.loads(body)["saved"] == 1 and json.loads(body)["changed"] == 1
+    st, _, body = _req(mod, "/api/rules/reset", {})
+    assert st == 200 and json.loads(body)["saved"] == 1 and json.loads(body)["changed"] == 0
+    assert mod.engine.policy["quote_validity_hours"] == 24
