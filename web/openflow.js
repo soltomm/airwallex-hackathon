@@ -34,7 +34,6 @@
       +metric('Group room nights',all.filter(d=>d.open||d.status==='confirmed').reduce((n,d)=>n+d.nights,0),'Across active and confirmed groups')
       +metric(`New inquiries ${pending ? `<span class="wb-badge">${pending} to review</span>` : ''}`,fresh,'A new opportunity to welcome a group','highlight')
       +metric('Deposits collected',money(all.reduce((n,d)=>n+d.paid,0)),'Includes labelled simulator deposits');
-    $('wbNavCount').hidden=!pending; $('wbNavCount').textContent=pending;
     const s=actual(); $('wbConnection').textContent=s ? `Harbour House connected · ${s.provider==='airwallex'?'Airwallex sandbox':'Simulated Harbour payments'} · ${s.runner.busy || 'Seller watching inbox'} · Simulator fixtures stay in this browser and never move money.` : 'Connecting to Harbour House… Simulator is available independently.';
     if (view==='payments') renderPayments(all); else renderPipeline(all);
   }
@@ -59,8 +58,8 @@
   }
   function navigate(next) {
     view=next; location.hash=''; $('workbench').hidden=false;
-    $('wbBreadcrumb').textContent=next==='overview'?'Overview':next==='pipeline'?'Group pipeline':'Payments';
-    $('wbTitle').textContent=next==='overview'?'A little more room to grow.':next==='pipeline'?'Your group pipeline.':'Every deposit, accounted for.';
+    $('wbBreadcrumb').textContent=next==='overview'?'Overview':'Payments';
+    $('wbTitle').textContent=next==='overview'?'A little more room to grow.':'Every deposit, accounted for.';
     document.querySelectorAll('[data-wb-view]').forEach(b=>{if(b.dataset.wbView===next)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
     refresh();
   }
@@ -175,7 +174,6 @@
     $('wbConfirmReset').onclick=()=>{demo=[];save();$('wbDrawer').close();refresh();};
   };
   $('wbAvailability').onclick=()=>{location.hash='availability';}; $('wbRules').onclick=()=>{location.hash='rules';};
-  $('wbControls').onclick=()=>{$('demo').classList.toggle('open');};
   window.addEventListener('hashchange',()=>{if(location.hash.startsWith('#review/'))open(location.hash.slice(8),true);});
   // Preserve focus while Harbour polls, including keyboard search and draft entry.
   window.OpenFlow={refresh:()=>{if(document.activeElement?.closest('#workbench'))return;refresh();}};

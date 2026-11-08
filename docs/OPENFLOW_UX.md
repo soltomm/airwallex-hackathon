@@ -1,7 +1,7 @@
 # OpenFlow group sales workbench
 
-The group-sales server now presents an OpenFlow-style overview, pipeline and
-payments view. It uses the existing Python HTTP server and plain HTML/CSS/JS;
+The group-sales server now presents an OpenFlow-style overview and payments
+view. It uses the existing Python HTTP server and plain HTML/CSS/JS;
 there is no new production dependency or frontend build step.
 
 ## Connected Harbour workflows
@@ -10,8 +10,7 @@ The existing `/api/state` supplies live inquiries, finance, inventory, approvals
 and activity. Connected rows open Harbour's existing inquiry controls in a right
 side drawer, including conversation, versions, manager approvals, payment checks,
 refund recovery and operations handoff. Buyer mailboxes still open separately.
-Availability, seller rules, the original RFP intake and Harbour demo controls are
-under the property tools. On mobile, expand **Property tools** in the sidebar.
+Availability and seller rules are under the property tools. On mobile, expand **Property tools** in the sidebar.
 The dashboard cookie gate and backend authority, inventory, immutable offer
 versions, payment verification and webhook contracts are unchanged. The three new
 static assets use explicit authenticated routes, not a directory-serving route.
@@ -20,7 +19,8 @@ static assets use explicit authenticated routes, not a directory-serving route.
 
 **Simulate inbound** creates labelled browser-only fixtures. These are stored
 under `openflow-harbour-demo-v1` in localStorage. Reset simulator removes only
-these fixtures; Harbour's own scenario reset remains in Harbour demo controls.
+these fixtures; Harbour's own scenario reset is no longer
+reachable from the dashboard (the Harbour demo controls button was removed).
 Simulator interactions never send a POST to a Harbour API or contact a payment
 provider. They are suitable for demonstrating the reference UX, not for making
 real bookings or authorizing real transactions.
