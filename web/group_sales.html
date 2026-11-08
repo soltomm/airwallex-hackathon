@@ -408,7 +408,22 @@ function offerCard(d) {
       <div><div class="l">Still due</div><div class="v">${gbp(f.still_due)}</div></div></div>
       ${due.length ? `<p class="small muted" style="margin:10px 0 0">Next payments: ${due.map(x => `${gbp(x.amount)} by ${day(x.due)}`).join(' · ')}${f.collection_blocked ? ' (once the refund completes)' : ''}</p>` : ''}</div>`;
   }
+  h += payoutCard(d);
   return h;
+}
+function payoutCard(d) {
+  const p = d.payout_view;
+  if (!p || p.status === 'not_due') return '';
+  const state = {paid: 'Paid to the hotel', pending: 'Payout pending', failed: 'Payout refused', unknown: 'Payout outcome unknown',
+                 no_account: 'No hotel account connected'}[p.status] || p.status;
+  const warn = ['failed', 'unknown', 'no_account'].includes(p.status);
+  return `<div class="card"><div class="label"><span>Hotel payout · Airwallex Payments for Platforms</span><span class="chip">${esc(state)}</span></div>
+    <div class="tiles"><div><div class="l">Paid to hotel</div><div class="v">${gbp(p.hotel_paid)}</div></div>
+      <div><div class="l">Taken back for refunds</div><div class="v">${gbp(p.hotel_clawed_back)}</div></div>
+      <div><div class="l">Hotel net</div><div class="v">${gbp(p.hotel_net)}</div></div>
+      <div><div class="l">${esc(p.platform || 'Platform')} fee (${p.commission_pct}%)</div><div class="v">${gbp(p.platform_fee)}</div></div></div>
+    <p class="small muted" style="margin:10px 0 0">The platform collects the card payment for the hotel's connected account ${p.connected_account ? `<code>${esc(p.connected_account)}</code>` : '(none set)'}; a funds split pays the hotel its share, and a funds split reversal takes back its share of any refund.</p>
+    ${warn ? `<div class="row" style="margin-top:10px"><button class="btn-p" data-act="retryPayout">Retry payout</button></div>` : ''}</div>`;
 }
 const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
@@ -471,6 +486,7 @@ function wire(d) {
       if (a === 'chkPay') { const r = await api(`/api/deals/${d.id}/check_payment`, {}); toast(r.booking ? 'Payment verified, booking confirmed' : 'Not paid yet'); }
       else if (a === 'chkRef') { await api(`/api/deals/${d.id}/check_refund`, {}); toast('Checked with Airwallex'); }
       else if (a === 'retry') { await api(`/api/deals/${d.id}/retry`, {}); toast('The seller is retrying'); }
+      else if (a === 'retryPayout') { const r = await api(`/api/deals/${d.id}/retry_payout`, {}); toast(r.status === 'paid' ? 'Hotel paid' : 'Payout still pending'); }
       else if (a === 'jump') await api('/api/clock', {to: '2027-01-20T09:00:00+00:00'});
     } catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
   });
@@ -492,7 +508,9 @@ const EVENT = {
   payment_mismatch: 'Payment mismatch', recovered: 'Recovered from provider records', amendment_drafted: 'Change drafted', amendment_sent: 'Change sent',
   amendment_accepted: 'Change accepted', refund_initiated: 'Refund started', refund_checked: 'Refund status checked', refund_completed: 'Refund completed',
   refund_failed: 'Refund failed', refund_mismatch: 'Refund mismatch', handoff: 'Handed to a person', declined: 'Inquiry declined',
-  ledger_dedupe: 'Duplicate ledger entry ignored', rules_changed: 'Seller rules changed', seller_paused: 'Seller paused', seller_retry: 'Seller asked to retry', webhook: 'Provider notification', clock: 'Scenario clock moved', reset: 'Scenario reset', sim: 'Demo setting changed'};
+  ledger_dedupe: 'Duplicate ledger entry ignored', rules_changed: 'Seller rules changed', seller_paused: 'Seller paused', seller_retry: 'Seller asked to retry',
+  payout_paid: 'Hotel paid by funds split', payout_failed: 'Hotel payout refused', payout_pending: 'Hotel payout pending', payout_retry: 'Hotel payout retried',
+  payout_reversed: "Hotel's share of refund taken back", payout_reversal_failed: 'Clawback refused', webhook: 'Provider notification', clock: 'Scenario clock moved', reset: 'Scenario reset', sim: 'Demo setting changed'};
 const WHO = {seller: ['Seller agent', 'acc'], hotel_manager: ['Hotel manager', 'warn'], organizer: ["Buyer's organizer", 'buyer'], presenter: ['Presenter', ''], system: ['System', ''], 'hotel staff': ['Hotel staff', 'warn']};
 const who = a => a.startsWith('buyer') ? ['Buyer', 'buyer'] : WHO[a] || [cap(a.replaceAll('_', ' ')), ''];
 const tidy = t => t.replace(/<[^>]*>/g, ' ').replace(/\*\*/g, '').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00/g, m => when(m)).replace(/\s*\n+\s*/g, ' ');

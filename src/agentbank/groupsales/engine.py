@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import secrets
 import threading
@@ -63,6 +64,9 @@ class Engine:
         self.var = Path(var_dir)
         self.var.mkdir(parents=True, exist_ok=True)
         self.provider = provider
+        # The hotel's Airwallex connected account (Payments for Platforms): deposits are collected by the
+        # platform for it, and its share is paid out by funds split. Unset with live Airwallex = no payouts.
+        self.hotel_account = os.environ.get("GS_HOTEL_ACCOUNT") or getattr(provider, "default_account", None)
         self.scenario_path = Path(scenario_path)
         self.public_base = public_base.rstrip("/")
         self.lock = threading.RLock()
@@ -376,6 +380,7 @@ class Engine:
                 view["approvals"] = [self._approval_for_seller(a) for a in self.s["approvals"].values()
                                      if a["deal_id"] == d["id"]]
                 view["key_dates"] = calc.key_dates(self.hotel, self.policy)
+                view["payouts"] = self.payout_view(d)
                 view["clock"] = self.now()
             else:
                 w = self.waiting_on(d) or ""
@@ -1021,7 +1026,8 @@ class Engine:
                     "agreement_hash": v["hash"], "operation_id": oid, "obligation": "signing deposit"}
             try:
                 pi = self.provider.create_intent(op["request_id"], amount, "GBP", op["merchant_order_id"], meta,
-                                                 return_url=self.pay_url(d, "return"))
+                                                 return_url=self.pay_url(d, "return"),
+                                                 connected_account_id=self.hotel_account)
                 op.update(payment_intent_id=pi["id"], client_secret=pi.get("client_secret"), status="created",
                           provider_status=pi["status"])
             except AmbiguousResult as e:
@@ -1119,6 +1125,7 @@ class Engine:
             d["status"] = "confirmed"
             self.log(d["id"], "system", "confirmed", f"Payment {pi['id']} verified with the provider ({source}); "
                      f"{gbp(op['amount'])} received; hold converted; booking confirmed.")
+            self._settle_payouts(d)
         else:
             d["booking"] = {"status": "exception", "confirmed_at": None, "version": v["n"],
                             "room_type": v["terms"]["room_type"], "rooms": dict(v["terms"]["rooms"]),
@@ -1393,6 +1400,7 @@ class Engine:
                 self.log(d["id"], "system", "refund_completed",
                          f"Refund {op['provider_id']} {new} at the provider; ledger updated once. (Provider status does "
                          "not prove the buyer's bank has posted the money.)")
+                self._settle_payouts(d)
         elif new == "FAILED":
             op["status"] = "failed"
             d["status"] = "refund_failed"
@@ -1401,6 +1409,207 @@ class Engine:
             self.log(d["id"], "system", "refund_failed", f"Refund {op['provider_id']} FAILED; amount stays owed.")
         elif new == "RECEIVED":
             op["status"] = "pending"
+
+    # ================================================================ hotel payouts (Payments for Platforms)
+    # The platform collects the deposit for the hotel ("collect payments directly", intent tagged with the
+    # hotel's connected account). Once the deposit is verified and booked, a funds split pays the hotel its
+    # share and the commission stays with the platform. A refund is paid from the platform; a funds split
+    # reversal then takes the hotel's share of it back. Payouts are backend bookkeeping: no agent tool
+    # moves them, and the buyer's view never shows them.
+    @property
+    def platform(self) -> dict:
+        return self.scenario.get("platform") or {"name": "platform", "commission_bps": 0}
+
+    def commission(self, amount: int) -> int:
+        """The platform's commission on an amount in pence, rounded half up."""
+        return (amount * int(self.platform.get("commission_bps", 0)) + 5000) // 10000
+
+    def _payout_ops(self, d, kind: str):
+        return [o for o in self.s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == kind]
+
+    def _settle_payouts(self, d):
+        """Idempotent reconciler: the hotel's share of the verified deposit paid out once, and its share of
+        each completed refund taken back once. Safe to call again after any change or failure."""
+        b = d.get("booking")
+        if not b or b.get("status") != "confirmed":
+            return
+        dep = self.s["operations"].get(b.get("deposit_op") or "")
+        if not dep or dep["status"] != "succeeded":
+            return
+        if not self.hotel_account:
+            if not any(f.startswith("no hotel connected account") for f in d["flags"]):
+                d["flags"].append("no hotel connected account configured (GS_HOTEL_ACCOUNT): deposit held by the platform, "
+                                  "hotel payout pending")
+                self.log(d["id"], "system", "payout_pending", "No hotel connected account is configured, so the "
+                         "deposit stays with the platform until one is set and the payout is retried.")
+            return
+        payouts = self._payout_ops(d, "payout")
+        live = [o for o in payouts if o["status"] not in ("failed", "superseded")]
+        if not live:
+            if any(o["status"] == "failed" for o in payouts):
+                return   # a refused payout waits for a person to retry it
+            live = [self._create_payout(d, dep)]
+        payout = live[-1]
+        if payout["status"] in ("submitting", "unknown"):
+            self._recover_payout(payout)
+        if payout["status"] != "paid":
+            return
+        for r in self._refund_ops(d):
+            if r["status"] != "completed":
+                continue
+            revs = [o for o in self._payout_ops(d, "payout_reversal")
+                    if o.get("refund_op") == r["id"] and o["status"] != "superseded"]
+            if any(o["status"] == "failed" for o in revs):
+                continue   # refused: waits for a person to retry
+            rev = revs[-1] if revs else self._create_reversal(d, payout, r)
+            if rev and rev["status"] in ("submitting", "unknown"):
+                self._submit_reversal(d, rev)
+
+    def _create_payout(self, d, dep) -> dict:
+        gross = dep["amount"]
+        fee = self.commission(gross)
+        oid = self._id("op_")
+        op = {"id": oid, "kind": "payout", "deal_id": d["id"], "run_id": self.s["run_id"], "gross": gross,
+              "commission": fee, "amount": gross - fee, "currency": "GBP", "request_id": f"{self.s['run_id']}-{oid}",
+              "payment_intent_id": dep["payment_intent_id"], "destination": self.hotel_account, "provider_id": None,
+              "status": "submitting", "created_at": self.now(), "provider_status": None}
+        self.s["operations"][oid] = op
+        self._save()   # persist the operation before calling the provider
+        meta = {"run_id": self.s["run_id"], "deal": d["ref"], "operation_id": oid,
+                "obligation": "hotel share of signing deposit", "commission": calc.gbp(fee)}
+        try:
+            sp = self.provider.create_funds_split(op["request_id"], op["payment_intent_id"], op["amount"],
+                                                  op["destination"], meta)
+            self._apply_payout(d, op, sp)
+        except AmbiguousResult as e:
+            op["status"] = "unknown"
+            op["note"] = str(e)
+            self._recover_payout(op)
+        except AirwallexError as e:
+            op["status"] = "failed"
+            op["error"] = str(e)
+            d["flags"].append(f"hotel payout refused by the provider: {e}")
+            self.log(d["id"], "system", "payout_failed", f"Funds split to the hotel refused: {e}. The booking stands; "
+                     "the deposit stays with the platform until the payout is retried.")
+        return op
+
+    def _apply_payout(self, d, op, sp: dict):
+        op.update(provider_id=sp["id"], provider_status=sp.get("status"), status="paid")
+        if self._payout_ledger(f"payout:{sp['id']}", d, "hotel_payout", op["amount"], op, sp["id"]):
+            self.log(d["id"], "system", "payout_paid",
+                     f"Paid {gbp(op['amount'])} to the hotel's account {op['destination']} by funds split {sp['id']}; "
+                     f"{gbp(op['commission'])} platform commission kept.")
+
+    def _recover_payout(self, op):
+        """Outcome unknown: look the split up by our own references, never send a second one."""
+        d = self.s["deals"][op["deal_id"]]
+        try:
+            found = [x for x in self.provider.find_funds_splits(op["payment_intent_id"])
+                     if x.get("request_id") == op["request_id"]
+                     or (x.get("metadata") or {}).get("operation_id") == op["id"]]
+        except Exception as e:
+            op["note"] = f"recovery lookup failed: {e}; left unresolved"
+            return
+        if found:
+            self._apply_payout(d, op, found[0])
+            self.log(d["id"], "system", "recovered", f"Recovered funds split {found[0]['id']} for {op['id']} from "
+                     "provider records; no second split sent.")
+        else:
+            op["status"] = "unknown"
+            if not any(f.startswith(f"hotel payout {op['id']}") for f in d["flags"]):
+                d["flags"].append(f"hotel payout {op['id']} outcome unknown: check the provider before retrying")
+
+    def _create_reversal(self, d, payout, refund_op) -> dict:
+        fee_back = self.commission(refund_op["amount"])
+        taken = sum(o["amount"] for o in self._payout_ops(d, "payout_reversal") if o["status"] not in ("failed", "superseded"))
+        claw = min(refund_op["amount"] - fee_back, payout["amount"] - taken)
+        oid = self._id("op_")
+        op = {"id": oid, "kind": "payout_reversal", "deal_id": d["id"], "run_id": self.s["run_id"],
+              "refund_op": refund_op["id"], "refund": refund_op["amount"], "commission_returned": fee_back,
+              "amount": claw, "currency": "GBP", "request_id": f"{self.s['run_id']}-{oid}",
+              "funds_split_id": payout["provider_id"], "provider_id": None, "status": "submitting",
+              "created_at": self.now(), "provider_status": None}
+        self.s["operations"][oid] = op
+        self._save()
+        return op
+
+    def _submit_reversal(self, d, op):
+        """Send (or, after a timeout, resend with the same request_id) the reversal. Airwallex refuses a reused
+        request_id, so a resend can never take the money back twice."""
+        meta = {"run_id": self.s["run_id"], "deal": d["ref"], "operation_id": op["id"],
+                "reason": "hotel share of a refund to the buyer"}
+        try:
+            r = self.provider.reverse_funds_split(op["request_id"], op["funds_split_id"], op["amount"], meta)
+            op.update(provider_id=r.get("id"), provider_status=r.get("status"), status="reversed")
+        except AmbiguousResult as e:
+            op["status"] = "unknown"
+            op["note"] = str(e)
+            return
+        except AirwallexError as e:
+            if e.code == "duplicate_request_id":
+                op.update(status="reversed", note="already created by an earlier attempt (request_id reused)")
+            else:
+                op["status"] = "failed"
+                op["error"] = str(e)
+                d["flags"].append(f"clawback of the hotel's share of a refund refused: {e}")
+                self.log(d["id"], "system", "payout_reversal_failed", f"Funds split reversal refused: {e}. The buyer's "
+                         "refund stands; the platform has paid it until the reversal is retried.")
+                return
+        if self._payout_ledger(f"reversal:{op['refund_op']}", d, "payout_reversal", -op["amount"], op,
+                               op.get("provider_id")):
+            self.log(d["id"], "system", "payout_reversed",
+                     f"Took {gbp(op['amount'])} back from the hotel's account for the {gbp(op['refund'])} refund; "
+                     f"{gbp(op['commission_returned'])} of commission returned with it.")
+
+    def _payout_ledger(self, key: str, d, typ: str, amount: int, op, provider_id) -> bool:
+        """Platform-to-hotel money, kept apart from the buyer ledger (which is buyer-to-hotel money)."""
+        book = self.s.setdefault("payout_ledger", [])
+        if any(e["key"] == key for e in book):
+            return False
+        book.append({"id": self._id("pl"), "key": key, "deal_id": d["id"], "type": typ, "amount": amount,
+                     "currency": "GBP", "operation": op["id"], "provider_id": provider_id, "at": self.now()})
+        return True
+
+    def retry_payout(self, deal_id: str, actor: str = "hotel staff") -> dict:
+        """A person retries a refused or unknown payout or clawback once the cause is fixed."""
+        with self.lock:
+            d = self.deal(deal_id)
+            for o in self._payout_ops(d, "payout") + self._payout_ops(d, "payout_reversal"):
+                if o["status"] == "failed":
+                    o["status"] = "superseded"
+            d["flags"] = [f for f in d["flags"] if not f.startswith(("hotel payout", "clawback of the hotel",
+                                                                     "no hotel connected account"))]
+            self.log(d["id"], actor, "payout_retry", f"{cap_first(actor)} retried the hotel payout.")
+            self._settle_payouts(d)
+            self._save()
+            return self.payout_view(d)
+
+    def payout_view(self, d) -> dict:
+        pays = [o for o in self._payout_ops(d, "payout") if o["status"] != "superseded"]
+        revs = [o for o in self._payout_ops(d, "payout_reversal") if o["status"] != "superseded"]
+        paid = sum(o["amount"] for o in pays if o["status"] == "paid")
+        fee = sum(o["commission"] for o in pays if o["status"] == "paid")
+        clawed = sum(o["amount"] for o in revs if o["status"] == "reversed")
+        fee_back = sum(o["commission_returned"] for o in revs if o["status"] == "reversed")
+        states = [o["status"] for o in pays + revs]
+        if not d.get("booking") or d["booking"].get("status") != "confirmed":
+            status = "not_due"
+        elif not self.hotel_account:
+            status = "no_account"
+        elif "failed" in states:
+            status = "failed"
+        elif "unknown" in states or "submitting" in states:
+            status = "unknown"
+        elif paid:
+            status = "paid"
+        else:
+            status = "pending"
+        return {"platform": self.platform.get("name"), "commission_pct": int(self.platform.get("commission_bps", 0)) / 100,
+                "connected_account": self.hotel_account, "status": status, "hotel_paid": paid,
+                "hotel_clawed_back": clawed, "hotel_net": paid - clawed, "platform_fee": fee - fee_back,
+                "operations": [{k: o.get(k) for k in ("id", "kind", "status", "amount", "commission",
+                                                      "commission_returned", "provider_id", "created_at", "error")}
+                               for o in pays + revs]}
 
     # ================================================================ webhooks
     def handle_event(self, event: dict, verified: bool) -> dict:
@@ -1572,6 +1781,7 @@ class Engine:
                 x["waiting_on"] = self.waiting_on(d)
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
+                x["payout_view"] = self.payout_view(d)
                 x["ops"] = self.ops_instructions(d)
                 x["hold"] = self._hold_public(d)
                 x["pay_url"] = self.pay_url(d) if self._deposit_op(d) else None
