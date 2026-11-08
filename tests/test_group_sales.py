@@ -14,6 +14,7 @@ from agentbank.groupsales.buyer import act, suggest
 from agentbank.groupsales.engine import SCENARIO, Engine, Refused
 from agentbank.groupsales.provider import SimulatedProvider
 from agentbank.groupsales.seller import RulesSeller
+from agentbank.groupsales.extract import extract
 
 S = json.loads(SCENARIO.read_text())
 H, RMS, POL = S["hotel"], S["rms"], S["policy"]
@@ -33,7 +34,7 @@ def eng(tmp_path):
 
 
 def deal_by(e, company):
-    return next(d for d in e.s["deals"].values() if d["company"].startswith(company))
+    return next(d for d in e.s["deals"].values() if d["company"].startswith(company) or d["domain"] == company)
 
 
 def buyer_turn(e, company):
@@ -209,7 +210,106 @@ def test_out_of_scope_goes_to_person(eng):
                    "with a group dinner. Reply by 15 January.", wake=False)
     RulesSeller(e).run()
     d = deal_by(e, "b.example")
-    assert d["status"] == "handoff" and "outside" in d["handoff"]["reason"]
+    assert d["status"] == "handoff" and "group dinner" in d["handoff"]["reason"]
+
+
+def test_out_of_scope_buyer_gets_an_acknowledgement(eng):
+    e = eng
+    e.ingest_email("x <a@b.example>", "RFP", "Please quote 4 king rooms arriving 10 March and departing 13 March 2027 "
+                   "with a group dinner. Reply by 15 January.", wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "b.example")
+    assert d["status"] == "handoff"
+    assert [m for m in d["thread"] if m["from"] == "seller"], "the buyer must hear back, not silence"
+
+
+MAY_RFP = ("Please quote 4 king rooms for 4 employees arriving 11 May and departing 14 May 2027 with breakfast. "
+           "No meeting room is needed. Billed to Microshift Demo Ltd. Reply by 15 January at noon.")
+
+
+def test_unavailable_dates_get_other_dates_not_a_handoff(eng):
+    e = eng
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", MAY_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "microshift.example")
+    assert d["company"] == "Microshift"
+    assert d["status"] == "dates_proposed" and not d["handoff"]
+    last = d["thread"][-1]
+    assert last["from"] == "seller" and last["date_options"]
+    assert "unable to offer 11 to 14 May 2027" in last["text"] and "10 to 13 March 2027" in last["text"]
+    assert "staff" not in last["text"].lower() and "team will" not in last["text"].lower()
+    o = last["date_options"][0]
+    assert (o["arrival"], o["departure"], o["room_type"], o["rooms_per_night"]) == ("2027-03-10", "2027-03-13", "king", 4)
+    assert any(r["system"] == "PMS (other dates)" for r in d["records"])
+
+    # The buyer takes the dates from the mailbox: the seller quotes them.
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "10 to 13 March works.",
+                   {"dates": {"arrival": "2027-03-10", "departure": "2027-03-13"}})
+    RulesSeller(e).run()
+    d = deal_by(e, "microshift.example")
+    assert d["status"] == "offer_sent" and d["requirements"]["arrival"] == "2027-03-10"
+    assert d["versions"][-1]["terms"]["rooms"] == {"2027-03-10": 4, "2027-03-11": 4, "2027-03-12": 4}
+
+
+def test_dates_typed_in_free_text_are_understood(eng):
+    e = eng
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", MAY_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "microshift.example")
+    e.buyer_action(d["id"], d["buyer_token"], "message", "Thanks. 10 to 13 March 2027 suits us.")
+    RulesSeller(e).run()
+    assert deal_by(e, "microshift.example")["status"] == "offer_sent"
+
+
+def test_offer_dates_cannot_offer_inventory_that_does_not_exist(eng):
+    e = eng
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", MAY_RFP, wake=False)
+    d = deal_by(e, "microshift.example")
+    e.record_requirements(d["id"], extract(d["subject"], d["thread"][0]["text"], d["sender"]))
+    with pytest.raises(Refused, match="dates can't|not available"):
+        e.price_terms(d["id"], 19000, 30, 10)                      # no quoting the unavailable dates
+    for bad in ({"arrival": "2027-05-11", "departure": "2027-05-14"},                       # outside the calendar
+                {"arrival": "2027-03-10", "departure": "2027-03-13", "rooms_per_night": 40},  # more rooms than exist
+                {"arrival": "2027-03-13", "departure": "2027-03-10"}):                       # backwards
+        with pytest.raises(Refused):
+            e.offer_dates(d["id"], [bad], "Other dates.")
+    with pytest.raises(Refused):
+        e.offer_dates(d["id"], [], "Other dates.")
+    sug = e.suggest_dates(d["id"])
+    assert sug["options"][0]["arrival"] == "2027-03-10" and sug["options"][0]["fits_rooms"]
+
+
+def test_staff_hand_back_with_instruction_and_close(eng):
+    e = eng
+    e.ingest_email("x <a@b.example>", "RFP", "Please quote 4 king rooms for 4 guests arriving 10 March and departing "
+                   "13 March 2027 with a group dinner. Billed to B Demo Ltd. Reply by 15 January.", wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "b.example")
+    assert d["status"] == "handoff"
+    with pytest.raises(Refused):
+        e.hand_back(deal_by(e, "Northstar")["id"], "x")             # only handed-off deals
+    e.hand_back(d["id"], "Quote without the group dinner.")
+    d = deal_by(e, "b.example")
+    assert d["status"] == "intake" and not d["handoff"] and d["unread"]
+    v = e.deal_view(d["id"])
+    assert v["staff_instruction"]["text"] == "Quote without the group dinner."
+    assert "Quote without the group dinner." in e.next_step(d)
+    e.record_requirements(d["id"], {"unsupported": []})            # what the seller does on that instruction
+    RulesSeller(e).run()
+    d = deal_by(e, "b.example")
+    assert d["status"] == "offer_sent" and not d.get("staff_instruction")   # the instruction is done once it replied
+
+    e.ingest_email("y <y@c.example>", "RFP", "Please quote 2 king rooms arriving 10 March and departing 13 March 2027 "
+                   "with a spa day.", wake=False)
+    RulesSeller(e).run()
+    c = deal_by(e, "c.example")
+    assert c["status"] == "handoff"
+    n = len(c["thread"])
+    e.close_deal(c["id"])
+    c = deal_by(e, "c.example")
+    assert c["status"] == "lost" and len(c["thread"]) == n          # closing sends nothing
+    with pytest.raises(Refused):
+        e.close_deal(c["id"])
 
 
 # ------------------------------------------------------------------------------ payments & recovery

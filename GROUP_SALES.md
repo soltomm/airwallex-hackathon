@@ -92,8 +92,12 @@ night, and **Seller rules** opens the rules the seller works within (see below).
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
 
-Other things to show: **Paste a new RFP…** with other dates or a group dinner (it's handed to a
-person, with the reason). **Fail the next booking commit** before paying (payment received – booking
+Other things to show: **Paste a new RFP…** with dates the hotel can't sell (for example 11–14 May).
+The seller doesn't hand it off: it replies that those dates aren't available and offers dates that
+are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 March 2027** (or type a
+reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
+group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
+back to seller**, with an optional instruction the seller follows, or **Close inquiry**. **Fail the next booking commit** before paying (payment received – booking
 exception). **Reject** on the refund (the reduction stands and £528 stays owed). **Buyer replies →
 Buyer agent** in Demo controls, to let the buyer side answer on its own.
 
@@ -188,6 +192,10 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   before 8 Feb, the deposit is recalculated and the excess refunded. From 8 Feb on, the amendment is
   recorded and the manager reconciles payments. Going over the allowance or past the deadline goes to
   manager review, and the existing agreement stays in effect until a change is accepted.
+- **Other dates.** The seller can only offer dates inside the group calendar with the rooms free at
+  that moment (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
+- **Hand-offs.** Only an inquiry handed to staff with no booking can be handed back or closed. A staff
+  instruction stays in front of the seller until it next writes to the buyer.
 - **Reset.** A reset creates a new run id and restores the hotel data. Airwallex is not reset.
   In-flight operations are written to `the groupsales_followups document`. Events tagged with an earlier
   run are logged and not applied.
