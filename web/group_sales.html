@@ -187,6 +187,14 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
 <main class="wb-content" id="workbench">
   <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ Simulate inbound</button></div>
   <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
+  <section class="overview" aria-label="Inbound overview" aria-live="polite" aria-atomic="true">
+    <dl>
+      <div><dt>Inbounds</dt><dd id="totalInbounds">–</dd><p>All inbound inquiries</p></div>
+      <div id="pendingInboundCard"><dt>Pending hotel action</dt><dd id="pendingInbounds">–</dd><p>Approvals or staff attention</p></div>
+      <div><dt>Waiting on buyer</dt><dd id="waitingInbounds">–</dd><p>Replies, sign-off or payment</p></div>
+      <div><dt>Confirmed</dt><dd id="confirmedInbounds">–</dd><p>Currently confirmed bookings</p></div>
+    </dl>
+  </section>
   <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
 </main>
@@ -200,14 +208,6 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <span class="small muted" id="pay"></span>
   <button id="demoBtn">Demo controls ▾</button>
 </header>
-<section class="overview" aria-label="Inbound overview" aria-live="polite" aria-atomic="true">
-  <dl>
-    <div><dt>Inbounds</dt><dd id="totalInbounds">–</dd><p>All inbound inquiries</p></div>
-    <div id="pendingInboundCard"><dt>Pending hotel action</dt><dd id="pendingInbounds">–</dd><p>Approvals or staff attention</p></div>
-    <div><dt>Waiting on buyer</dt><dd id="waitingInbounds">–</dd><p>Replies, sign-off or payment</p></div>
-    <div><dt>Confirmed</dt><dd id="confirmedInbounds">–</dd><p>Currently confirmed bookings</p></div>
-  </dl>
-</section>
 <div id="demo">
   <div><h3>Agents</h3>
     <label>Seller <select id="sellerMode"><option value="claude">Claude</option><option value="rules">Rules (instant, free)</option></select></label>

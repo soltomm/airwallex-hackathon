@@ -114,6 +114,7 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 #liveDrawer .layout { display:block; padding:24px; }
 #liveDrawer aside { display:none; }
 #liveDrawer .tabs { flex-wrap:wrap; overflow:visible; }
+.wb-content .overview { max-width:none; margin:0 0 25px; padding:0; }
 #demo { margin-left:224px; }
 #avail,#rules { margin-left:224px; max-width:none; padding:32px 36px; }
 #demo.open { display:grid; }
