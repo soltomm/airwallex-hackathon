@@ -50,7 +50,7 @@ Everything the scenario needs is in [`data/groupsales/scenario.json`](data/group
 
 | Key | What it holds |
 |---|---|
-| `hotel` | Harbour House, London: stay 10–13 March 2027, 13 twin and 16 king rooms free, the Thames Room (classroom for 32, 11 March), breakfast £15 (60 group covers a day) |
+| `hotel` | Harbour House, London: stay 10–13 March 2027, 14 twin and 16 king rooms free, the Thames Room (classroom for 32, 11 March), breakfast £15 (60 group covers a day) |
 | `rms` | Rates per room type (twin £220 target, £210 seller floor, £195 absolute minimum; king £190 / £180 / £170), delivery costs, 40% minimum contribution margin |
 | `policy` | Deposit (30% standard, up to 40%, 20–29% with the manager), attrition (10%, up to 20% with the manager), installments, cancellation, 24-hour quotes and holds, £500 seller refund limit |
 | `crm` | What the hotel knows about each sender |

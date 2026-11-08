@@ -9,7 +9,7 @@
     "arrival": "2027-03-10",
     "departure": "2027-03-13",
     "nights": ["2027-03-10", "2027-03-11", "2027-03-12"],
-    "availability": {"twin": 13, "king": 16},
+    "availability": {"twin": 14, "king": 16},
     "room_types": {
       "twin": {"label": "Twin room", "max_occupancy": 2},
       "king": {"label": "King room", "max_occupancy": 2}
