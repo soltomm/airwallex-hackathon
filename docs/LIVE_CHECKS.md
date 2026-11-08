@@ -1,24 +1,25 @@
-# Live checks before merging `group-sales-next`
+# Live checks on `main`
 
-Everything on this branch was tested offline: the unit tests, 6,000 randomized scenarios and a
-browser run of the demo script, all with simulated payments and the rules seller. These checks need
-real keys. Do them before merging PR #1 into `group-sales`, which redeploys the live demo.
+PR #1 was tested offline only: the unit tests, 6,000 randomized scenarios and a browser run of the
+demo script, all with simulated payments and the rules seller. These checks need real keys. `main`
+deploys the live demo on Render. The Airwallex key's IP whitelist covers Render's Oregon egress IPs,
+so check 1 may only pass on the Render deploy, not from a laptop.
 
 ## Hand-off prompt
 
 Paste this into a Claude Code session that runs on the Mac with the keys (Claude desktop app, or
 `claude remote-control` in the repo folder), or into a cloud session whose environment has the keys:
 
-> In soltomm/airwallex-hackathon, check out `group-sales-next` and pull. Follow
+> In soltomm/airwallex-hackathon, check out `main` and pull. Follow
 > `docs/LIVE_CHECKS.md` checks 1-4 in order and report each one's result as pass or fail, with the
 > evidence: figures, Airwallex ids, the fuzz script's summary lines, and any messages that look wrong.
-> Do not push to `group-sales`, `main` or `hotel-negotiation`, do not change any Render service, and
-> do not merge PR #1. If something fails, stop, show me the failing step and wait.
+> Do not push to `main` or `hotel-negotiation`, do not change any Render service, and do not merge
+> any PR. If something fails, stop, show me the failing step and wait.
 
 ## Setup
 
 ```bash
-git fetch origin && git checkout group-sales-next && git pull
+git fetch origin && git checkout main && git pull
 python3 -m venv .venv && .venv/bin/pip install -e '.[agent]' pytest
 cp -n .env.example .env       # fill in AWX_CLIENT_ID and AWX_API_KEY (sandbox), and ANTHROPIC_API_KEY
 set -a; source .env; set +a   # load the keys into this shell

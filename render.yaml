@@ -1,5 +1,5 @@
-# Render blueprint for the Harbour House group-sales demo (branch group-sales).
-# Dashboard > New > Blueprint > this repo, branch group-sales. Render asks for the sync:false secrets.
+# Render blueprint for the Harbour House group-sales demo (branch main).
+# Dashboard > New > Blueprint > this repo, branch main. Render asks for the sync:false secrets.
 # Open the dashboard at  https://<service>.onrender.com/?k=<GS_ACCESS_TOKEN>  (service > Environment).
 # The hotel-negotiation service is deployed from its own branch and its own blueprint.
 services:
@@ -8,7 +8,7 @@ services:
     runtime: python
     region: oregon        # same region as hotel-negotiation: the Airwallex key's IP whitelist has these egress IPs
     plan: free            # sleeps after 15 min idle (first request then takes ~1 min); state is in Postgres
-    branch: group-sales
+    branch: main
     buildCommand: pip install -e ".[agent,postgres]"
     startCommand: python scripts/group_sales.py
     healthCheckPath: /healthz
