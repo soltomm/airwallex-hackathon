@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import calc
+from . import calc, rules
 from .calc import gbp
 from .extract import extract, missing_info, stay_nights
 from .policy import buyer_check, hotel_check
@@ -49,6 +49,10 @@ def _dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+def cap_first(t: str) -> str:
+    return t[:1].upper() + t[1:]
+
+
 def _hash(obj) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -67,7 +71,10 @@ class Engine:
         self.store = doc(self.var / "groupsales_state.json")
         self.runs = doc(self.var / "groupsales_runs.json")
         self.followups = doc(self.var / "groupsales_followups.json")
-        self.scenario = json.loads(self.scenario_path.read_text())
+        # Hotel staff's changes to the seller's rules (rules.EDITABLE), kept apart from the scenario
+        # state so they survive a reset.
+        self.rule_store = doc(self.var / "groupsales_rules.json")
+        self.scenario = self._load_scenario()
         self.listeners: list = []          # called after state changes that should wake an agent
         saved = self.store.read()
         if saved:
@@ -132,7 +139,7 @@ class Engine:
                 self.runs.write(((self.runs.read() or []) + [{"run_id": self.s["run_id"], "state": self.s}])[-5:])
                 if followups:
                     self.followups.write((self.followups.read() or []) + followups)
-            self.scenario = json.loads(self.scenario_path.read_text())
+            self.scenario = self._load_scenario()
             h = self.hotel
             prior_events = self.s.get("events_seen", []) if self.s else []
             self.s = {
@@ -145,7 +152,7 @@ class Engine:
                             for room, mr in h["meeting_rooms"].items()},
                 "breakfast": {m: {"held": 0, "booked": 0} for m in self._mornings(h["nights"])},
                 "emails": {}, "deals": {}, "holds": {}, "approvals": {}, "operations": {}, "ledger": [],
-                "activity": [], "events_seen": prior_events[-500:], "delayed_notifications": [],
+                "activity": [], "agent_runs": [], "events_seen": prior_events[-500:], "delayed_notifications": [],
                 "reconcile_log": [],
                 "sim": {"delay_refund_notifications": True, "fail_next_commit": False},
                 "followups_at_reset": len(followups),
@@ -157,7 +164,75 @@ class Engine:
                 self.ingest_email(e["from"], e["subject"], e["body"], message_id=e["message_id"],
                                   received_at=e["received_at"], wake=False)
             self._save()
-            return {"run_id": self.s["run_id"], "followups": len(followups)}
+        self._wake("scenario reset: new inquiries in the inbox")   # the seller starts on its own
+        return {"run_id": self.s["run_id"], "followups": len(followups)}
+
+    # ================================================================ seller rules
+    def _load_scenario(self) -> dict:
+        return rules.apply(json.loads(self.scenario_path.read_text()), self.rule_store.read() or {})
+
+    def rules_view(self) -> dict:
+        with self.lock:
+            base = json.loads(self.scenario_path.read_text())
+            return rules.describe(self.scenario, base)
+
+    def update_rules(self, changes: dict, actor: str = "hotel manager") -> dict:
+        """Change the seller's editable rules. Applies to pricing from now on; versions already
+        created keep the terms (and hash) they were made with."""
+        with self.lock:
+            unknown = [k for k in changes if k not in rules.PATHS]
+            if unknown:
+                raise Refused(f"not an editable rule: {', '.join(unknown)}")
+            try:
+                changes = {k: int(v) for k, v in changes.items()}
+            except (TypeError, ValueError):
+                raise Refused("rule values must be whole numbers (pence for money)")
+            base = json.loads(self.scenario_path.read_text())
+            overrides = {**(self.rule_store.read() or {}), **changes}
+            candidate = rules.apply(base, overrides)
+            problems = rules.validate(candidate)
+            if problems:
+                raise Refused("; ".join(problems))
+            diff = [(p, rules.get(self.scenario, p), rules.get(candidate, p)) for p in changes
+                    if rules.get(self.scenario, p) != rules.get(candidate, p)]
+            # Store only what differs from the scenario file.
+            self.rule_store.write({p: v for p, v in overrides.items() if rules.get(base, p) != v})
+            self.scenario = candidate
+            if diff:
+                text = "; ".join(f"{rules.PATHS[p][0]} {rules._fmt(rules.PATHS[p][1], a)} → "
+                                 f"{rules._fmt(rules.PATHS[p][1], b)}" for p, a, b in diff)
+                self.log(None, actor, "rules_changed", f"Seller rules changed: {text}. Applies to new offers and "
+                         "changes; versions already made keep their terms.")
+                self._save()
+        if diff:
+            self._wake("seller rules changed")
+        return {**self.rules_view(), "saved": len(diff)}
+
+    def reset_rules(self, actor: str = "hotel manager") -> dict:
+        with self.lock:
+            current = self.rule_store.read() or {}
+            base = json.loads(self.scenario_path.read_text())
+            return self.update_rules({p: rules.get(base, p) for p in current}, actor=actor) if current \
+                else {**self.rules_view(), "saved": 0}
+
+    # ================================================================ seller pause
+    def _pause_seller(self, d: dict, what: str, error) -> None:
+        """A provider refused a money operation. Stop retrying it on every wake: hotel staff look at
+        the error and retry once it's fixed."""
+        d["seller_paused"] = {"at": self.now(), "what": what, "error": str(error)}
+        self.log(d["id"], "system", "seller_paused", f"Seller paused on {d['ref']}: {what} failed ({error}). "
+                 "Hotel staff can retry once the cause is fixed.")
+
+    def retry_seller(self, deal_id: str, actor: str = "hotel staff") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            if not d.get("seller_paused"):
+                raise Refused("the seller isn't paused on this deal")
+            p = d.pop("seller_paused")
+            self.log(d["id"], actor, "seller_retry", f"{cap_first(actor)} asked the seller to retry: {p['what']}.")
+            self._save()
+        self._wake(f"{actor} asked the seller to retry {p['what']} on {d['ref']}")
+        return {"retrying": p["what"]}
 
     @staticmethod
     def _mornings(nights: list[str]) -> list[str]:
@@ -264,6 +339,7 @@ class Engine:
                     "deal_id": d["id"], "ref": d["ref"], "company": d["company"], "status": d["status"],
                     "reply_by": d.get("reply_by"), "hours_to_deadline": hours_left,
                     "unread_buyer_input": d.get("unread", False),
+                    "seller_paused": bool(d.get("seller_paused")),
                     "waiting_on": self.waiting_on(d), "next_step": self.next_step(d),
                     "current_version": cur["n"] if cur else None,
                     "package_value": gbp(value) if value is not None else None,
@@ -278,21 +354,46 @@ class Engine:
             if mark_read and for_ == "seller":
                 d["unread"] = False
                 self._save()
-            view = {k: d[k] for k in ("id", "ref", "company", "sender", "subject", "status", "reply_by",
-                                      "requirements", "missing", "thread", "accepted_version", "flags")}
-            view["waiting_on"] = self.waiting_on(d)
-            view["versions"] = [self._version_public(v, for_) for v in d["versions"]]
+            if for_ not in ("seller", "buyer"):
+                raise Refused("deal views exist for the seller or the buyer only")
+            # Each side sees only its own private constraints. The seller never gets the buyer's mandate
+            # or the organizer's reasons; the buyer never gets floors, costs, margins, hotel checks,
+            # records, holds, flags or the hotel manager's approval summaries. Thread messages are what
+            # each side chose to send. The presenter dashboard (snapshot) shows both sides.
+            view = {k: copy.deepcopy(d[k]) for k in ("id", "ref", "company", "sender", "subject", "status",
+                                                      "reply_by", "requirements", "missing", "thread",
+                                                      "accepted_version")}
             view["finance"] = self.finance(d)
-            view["booking"] = d.get("booking")
+            view["booking"] = copy.deepcopy(d.get("booking"))
             if for_ == "seller":
+                view["flags"] = list(d["flags"])
+                view["waiting_on"] = self.waiting_on(d)
+                view["versions"] = [self._version_public(v, for_) for v in d["versions"]]
                 view["next_step"] = self.next_step(d)
                 view["records_consulted"] = [{"system": r["system"], "checked_at": r["checked_at"],
                                               "summary": r["summary"]} for r in d["records"]]
                 view["hold"] = self._hold_public(d)
-                view["approvals"] = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]]
+                view["approvals"] = [self._approval_for_seller(a) for a in self.s["approvals"].values()
+                                     if a["deal_id"] == d["id"]]
                 view["key_dates"] = calc.key_dates(self.hotel, self.policy)
                 view["clock"] = self.now()
+            else:
+                w = self.waiting_on(d) or ""
+                view["waiting_on"] = w if w.startswith(("buyer", "buyer's organizer")) else ("hotel" if w else None)
+                # Drafts and versions awaiting the hotel manager are internal until the hotel sends them.
+                view["versions"] = [self._version_public(v, for_) for v in d["versions"] if v.get("sent_at")]
             return view
+
+    @staticmethod
+    def _approval_for_seller(a: dict) -> dict:
+        """The hotel's own approvals in full; buyer-side (organizer) approvals only as a pending/decided marker."""
+        if a["approver"] != "organizer":
+            return copy.deepcopy(a)
+        return {"id": a["id"], "deal_id": a["deal_id"], "ref": a["ref"], "approver": "organizer",
+                "subject": a["subject"], "version": a["version"], "status": a["status"],
+                "requested_at": a["requested_at"], "decided_at": a["decided_at"],
+                "summary": f"Acceptance of v{a['version']} is pending buyer-side authorization"
+                if a["status"] == "pending" else f"Buyer-side authorization {a['status']} for v{a['version']}"}
 
     def _version_public(self, v: dict, for_: str) -> dict:
         out = {k: v[k] for k in ("n", "kind", "status", "hash", "terms", "created_at", "sent_at", "message",
@@ -423,6 +524,26 @@ class Engine:
         with self.lock:
             self.log(deal_id and self.deal(deal_id)["id"], actor, "reasoning", text)
             self._save()
+
+    # ---- agent trace (see trace.py): presenter-side record of each seller run and its tool calls
+    def agent_run_start(self, agent: str, trigger: str = "", model: str | None = None) -> dict:
+        # The run joins the record only with its first step: a wake-up that finds nothing to do leaves no line
+        # (and nothing that a save in between could persist and a later removal leave behind).
+        return {"id": "ar_" + uuid.uuid4().hex[:8], "agent": agent, "model": model, "trigger": trigger,
+                "at": self.now(), "real_at": _iso(datetime.now(timezone.utc)), "steps": []}
+
+    def agent_step(self, run: dict, step: dict):
+        with self.lock:
+            runs = self.s.setdefault("agent_runs", [])
+            if not any(r is run for r in runs):
+                runs.append(run)
+                del runs[:-60]
+            run["steps"].append(step)
+
+    def agent_run_end(self, run: dict):
+        with self.lock:
+            if any(r is run for r in self.s.get("agent_runs", [])):
+                self._save()
 
     # ================================================================ offers
     def build_terms(self, d: dict, rate: int, deposit_pct: int, attrition_pct: int,
@@ -575,8 +696,12 @@ class Engine:
              "summary": summary, "reasons": reasons, "version": version, "hash": obj_hash, "amount": amount,
              "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
         self.s["approvals"][aid] = a
-        who = "Hotel manager" if approver == "hotel_manager" else "Organizer"
-        self.log(d["id"], "system", "approval_requested", f"{who} approval requested: {summary}")
+        if approver == "hotel_manager":
+            self.log(d["id"], "system", "approval_requested", f"Hotel manager approval requested: {summary}")
+        else:
+            # The organizer's reasons are the buyer's private mandate: they stay on the approval itself.
+            self.log(d["id"], "system", "approval_requested",
+                     f"Acceptance of v{version} is pending buyer-side authorization.")
         return a
 
     def _approval_valid(self, d, subject, version, obj_hash, approver="hotel_manager") -> bool:
@@ -601,7 +726,10 @@ class Engine:
             # A request whose object changed since it was raised is stale, whatever the decision.
             if a["version"] is not None:
                 v = self._version(d, a["version"])
-                if v["hash"] != a["hash"] or v["status"] in ("superseded",):
+                # An acceptance can only be authorized while that offer is still the one on the table;
+                # checked here, before anything changes, so a refusal leaves no half-made decision.
+                lapsed_offer = a["subject"] == "acceptance" and (v["status"] != "sent" or v is not d["versions"][-1])
+                if v["hash"] != a["hash"] or v["status"] in ("superseded",) or lapsed_offer:
                     a["status"] = "stale"
                     self.log(d["id"], "system", "approval_stale", f"Approval {a['id']} is stale: v{a['version']} changed.")
                     self._save()
@@ -841,7 +969,7 @@ class Engine:
                         op["status"] = "cancelled"
                     except Exception as e:
                         op["note"] = f"cancel at expiry failed: {e}"
-            self._release_hold(hold, "quote validity (24 scenario hours) ended")
+            self._release_hold(hold, f"quote validity ({self.policy['quote_validity_hours']} scenario hours) ended")
             hold["status"] = "expired"
             for v in d["versions"]:
                 if v["status"] in ("sent", "approved", "pending_approval") and v["kind"] == "offer":
@@ -850,7 +978,7 @@ class Engine:
                 d["status"] = "expired"
                 if not d.get("booking"):
                     d["accepted_version"] = None   # an unpaid acceptance lapses with its hold
-            self.log(d["id"], "system", "expired", "Offer and hold expired after 24 scenario hours; checkout "
+            self.log(d["id"], "system", "expired", f"Offer and hold expired after {self.policy['quote_validity_hours']} scenario hours; checkout "
                      "disabled. A renewed offer needs a fresh availability check and new acceptance.")
             d["unread"] = True
 
@@ -863,6 +991,8 @@ class Engine:
         with self.lock:
             self._sweep()
             d = self.deal(deal_id)
+            if d.get("seller_paused"):
+                raise Refused(f"paused after {d['seller_paused']['what']} failed: hotel staff must retry first")
             if not d.get("accepted_version"):
                 raise Refused("no accepted agreement")
             v = self._version(d, d["accepted_version"])
@@ -901,6 +1031,7 @@ class Engine:
             except AirwallexError as e:
                 op["status"] = "failed"
                 op["note"] = str(e)
+                self._pause_seller(d, "opening checkout", e)
                 self._save()
                 raise Refused(f"provider refused the payment intent: {e}")
             d["status"] = "awaiting_payment"
@@ -942,10 +1073,15 @@ class Engine:
             op = self._deposit_op(d)
             if not op:
                 raise Refused("no checkout opened")
+            before = (d["status"], op["status"])
             self._verify_deposit(d, op, source)
             self._save()
-            return {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
-                    "booking": d.get("booking"), "deal_status": d["status"]}
+            changed = (d["status"], op["status"]) != before
+            out = {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
+                   "booking": d.get("booking"), "deal_status": d["status"]}
+        if changed:
+            self._wake("payment")   # a confirmed booking (or an exception) is new input for the seller
+        return out
 
     def _verify_deposit(self, d, op, source: str):
         if op["status"] in ("submitting", "unknown"):
@@ -1016,8 +1152,13 @@ class Engine:
             if not release:
                 raise Refused("nothing to release")
             fin = self.finance(d)
-            ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
-                                         fin["net_received"])
+            # Measure against what the hotel keeps: receipts net of refunds made AND refunds already owed
+            # (pending or not yet started), so a second reduction never refunds the first one again.
+            try:
+                ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
+                                             fin["net_received"] - fin["refund_owed"])
+            except ValueError as err:   # e.g. more rooms than are booked, or a night not in the booking
+                raise Refused(f"this change cannot be applied to the booking: {err}") from None
             for v in d["versions"]:
                 if v["kind"] == "amendment" and v["status"] in ("draft", "pending_approval", "approved", "sent"):
                     v["status"] = "superseded"
@@ -1109,11 +1250,15 @@ class Engine:
         """Refund what the buyer is owed after an accepted reduction, within authority and refundable funds."""
         with self.lock:
             d = self.deal(deal_id)
+            if d.get("seller_paused"):
+                raise Refused(f"paused after {d['seller_paused']['what']} failed: hotel staff must retry first")
             owed = d["finance"]["refund_owed"]
             if owed <= 0:
                 raise Refused("no refund is owed")
             for o in self._refund_ops(d):
-                if o["status"] in ("submitting", "unknown") or o.get("provider_status") == "RECEIVED":
+                # Anything not yet completed or failed is unresolved, including a refund stored as created
+                # whose status was never applied (e.g. the process stopped right after the provider call).
+                if o["status"] in ("submitting", "unknown", "created", "pending") or o.get("provider_status") == "RECEIVED":
                     raise Refused(f"refund {o.get('provider_id') or o['id']} is unresolved "
                                   f"({o.get('provider_status') or o['status']}): check it with check_refund before "
                                   "any new refund")
@@ -1180,6 +1325,7 @@ class Engine:
                 op["status"] = "failed"
                 op["note"] = str(e)
                 self.log(d["id"], "system", "refund_failed", f"Provider rejected refund: {e}. Amount stays owed.")
+                self._pause_seller(d, "the refund", e)
                 self._save()
                 raise Refused(f"provider rejected the refund: {e}")
             d["status"] = "refund_pending"
@@ -1290,7 +1436,9 @@ class Engine:
             self.s["reconcile_log"].append({"at": self.now(), "event": eid, "name": name, "result": result})
             self.log(None, "system", "webhook", f"Provider event {name} {eid}: {result}")
             self._save()
-            return {"event": eid, "result": result}
+        if result != "ignored" and "earlier run" not in result:
+            self._wake("provider event")
+        return {"event": eid, "result": result}
 
     # ================================================================ escalation / handoff
     def escalate(self, deal_id: str, reason: str, message: str = "", actor: str = "seller") -> dict:
@@ -1347,6 +1495,8 @@ class Engine:
         if pend:
             a = pend[-1]
             return ("hotel manager" if a["approver"] == "hotel_manager" else "buyer's organizer") + f": {a['subject']} approval"
+        if d.get("seller_paused"):
+            return "hotel staff: retry after a payment-provider error"
         st = d["status"]
         if d.get("unread") and st not in ("new",):
             return "seller: new input to read"
@@ -1362,6 +1512,9 @@ class Engine:
 
     def next_step(self, d) -> str:
         st = d["status"]
+        if d.get("seller_paused"):
+            return (f"paused: {d['seller_paused']['what']} failed at the payment provider; wait for hotel staff "
+                    "to retry (do not call it again)")
         refund_appr = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["subject"] == "refund"]
         if refund_appr and d["finance"]["refund_owed"] and not any(
                 o["status"] in ("submitting", "unknown", "created", "pending") for o in self._refund_ops(d)):
@@ -1427,9 +1580,11 @@ class Engine:
             inv = {n: {rt: {**v, "available": v["capacity"] - v["held"] - v["booked"]} for rt, v in x.items()}
                    for n, x in self.s["inventory"].items()}
             return {"run_id": self.s["run_id"], "clock": self.now(), "hotel": self.hotel["name"], "inventory": inv,
-                    "meeting": self.s["meeting"], "breakfast": self.s["breakfast"], "deals": deals,
+                    "meeting": self.s["meeting"], "breakfast": self.s["breakfast"],
+                    "breakfast_capacity": self.hotel["breakfast"]["group_capacity_per_day"], "deals": deals,
                     "approvals": list(self.s["approvals"].values()), "operations": ops, "ledger": self.s["ledger"],
-                    "activity": self.s["activity"][-200:], "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
+                    "activity": self.s["activity"][-200:],
+                    "agent_runs": copy.deepcopy(self.s.get("agent_runs", [])[-40:]), "sim": {**self.s["sim"], **getattr(self.provider, "knobs", {})},
                     "delayed_notifications": len(self.s["delayed_notifications"]),
                     "reconcile_log": self.s["reconcile_log"][-30:], "provider": self.provider.name,
                     "key_dates": calc.key_dates(self.hotel, self.policy)}

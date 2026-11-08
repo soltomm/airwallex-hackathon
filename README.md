@@ -1,8 +1,92 @@
-# Hotel Negotiation Desk
+# Harbour House: a group-sales agent for hotels
 
-> **Group sales (product spec v2):** a seller agent that handles hotel group RFPs from the first email
-> through negotiation, booking, Airwallex deposit and amendment refunds. See [GROUP_SALES.md](GROUP_SALES.md)
-> (`PYTHONPATH=src python scripts/group_sales.py`).
+Built for the Airwallex Agentic Banking Hackathon (product spec v2). A hotel's seller agent handles
+group requests (RFPs) from the first email to a paid booking: it reads the inquiry, checks the hotel's
+systems, asks for what is missing, quotes, negotiates in trades, books against a verified Airwallex
+deposit, then handles a room reduction and the partial refund it creates. The seller is Claude
+(`claude-opus-5-5`) or a deterministic rules seller with the same tools. A buyer side works only from
+its own private brief.
+
+The model negotiates and explains. Prices, authority, inventory, approvals and money movement are
+enforced in code (`src/agentbank/groupsales/engine.py`), so nothing an agent writes and nothing inside
+an RFP can change them. Each side sees only its own private constraints: the seller never sees the
+buyer's budget mandate or deposit limits, and the buyer never sees the hotel's floors, costs or
+margins. The presenter dashboard shows both sides.
+
+Full product notes, enforced rules and the live demo script: **[GROUP_SALES.md](GROUP_SALES.md)**.
+Recorded-demo shot list: [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md).
+
+## Run it
+
+Offline, with no keys (simulated Airwallex twin, rules seller):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e '.[agent]' pytest
+PAYMENTS=simulated SELLER_MODE=rules PYTHONPATH=src .venv/bin/python scripts/group_sales.py
+# open http://localhost:8010, then Demo controls → Reset scenario → Yes, reset; the seller starts on its own
+```
+
+With the Airwallex sandbox and the Claude seller, copy `.env.example` to `.env` and fill in
+`AWX_CLIENT_ID`, `AWX_API_KEY` (sandbox, Payment Acceptance read/write) and `ANTHROPIC_API_KEY`.
+Example group-sales settings (no secrets):
+
+```bash
+PAYMENTS=simulated              # or airwallex (default when sandbox keys are set)
+SELLER_MODE=rules               # or claude (default when an Anthropic key is set)
+BUYER_MODE=presenter            # or agent: the buyer side replies on its own
+PUBLIC_BASE_URL=http://localhost:8010   # return URL after hosted checkout
+GS_PORT=8010
+GS_VAR=var/groupsales           # state directory (DATABASE_URL switches to Postgres)
+GS_ACCESS_TOKEN=change-me       # optional: dashboard and API need <url>/?k=<token> once
+AWX_WEBHOOK_SECRET=             # optional: accept signed webhooks at POST /webhooks/airwallex
+```
+
+`/pay/…`, `/webhooks/…` and `/healthz` stay open when `GS_ACCESS_TOKEN` is set; the payment page
+checks the deal's own buyer token and webhooks check their signature.
+
+## Hotel data and buyer mandates
+
+Everything the scenario needs is in [`data/groupsales/scenario.json`](data/groupsales/scenario.json):
+
+| Key | What it holds |
+|---|---|
+| `hotel` | Harbour House, London: stay 10–13 March 2027, 13 twin and 16 king rooms free, the Thames Room (classroom for 32, 11 March), breakfast £15 (60 group covers a day) |
+| `rms` | Rates per room type (twin £220 target, £210 seller floor, £195 absolute minimum; king £190 / £180 / £170), delivery costs, 40% minimum contribution margin |
+| `policy` | Deposit (30% standard, up to 40%, 20–29% with the manager), attrition (10%, up to 20% with the manager), installments, cancellation, 24-hour quotes and holds, £500 seller refund limit |
+| `crm` | What the hotel knows about each sender |
+| `inbox` | The two RFPs: Northstar Analytics (12 twins, meeting room, £10,000 budget) and Summit Robotics (8 kings) |
+| `buyers` | Each buyer's private mandate: budget, deposit limit (£ and %), objectives (e.g. Northstar wants 20% attrition), known answers, and Northstar's later change request |
+
+Expected figures (tested): Northstar £9,600 with a 40% deposit of £3,840 and a 7 room-night
+allowance, margin 67.4% / 67.2%; after the two-room reduction £8,280, revised deposit £3,312, refund
+£528, £3,312 net received, £4,968 still due (£828 by 8 Feb, £4,140 by 3 Mar). Summit £4,920, deposit
+£1,476.
+
+## Checks
+
+```bash
+PYTHONPATH=src python -m pytest tests/test_group_sales.py -q    # group sales: no network, no keys
+PYTHONPATH=src python -m pytest tests -q                        # whole repository
+```
+
+`tests/test_group_sales.py` covers the spec's figures and the full demo story, privacy in both
+directions, authority (stale and wrong approvers, low deposits, below-floor rates, the margin floor,
+instructions inside an RFP), inventory and hold expiry, payment and refund recovery, webhooks and the
+access gate. The list is in [GROUP_SALES.md](GROUP_SALES.md#checks).
+
+## What was verified live
+
+Only what [GROUP_SALES.md](GROUP_SALES.md#verified-live-airwallex-sandbox-2026-11-02) records: one full
+run on the Airwallex sandbox with the rules seller (deposit and partial refund), and one run of the
+Claude seller on simulated payments. Later changes were tested offline only.
+
+---
+
+# Earlier project: Hotel Negotiation Desk
+
+The rest of this README describes the earlier hackathon build on this repository (individual stays
+negotiated with a traveller's Claude over MCP). It is kept for reference; it is not the group-sales
+product above.
 
 **Hotels sell rooms to AI agents, and they negotiate.** A traveller asks their Claude for a stay. Claude
 talks to each hotel's own seller agent, which builds a personalised offer (breakfast, late checkout,
@@ -20,7 +104,7 @@ The **financial decisions** sit in code, and the models only negotiate and expla
 | When to pay the hotel? | Payout cycle: reserves of delivered stays only | An incident at the hotel → its reserves stay held |
 | Should the hotel change its prices? | `RuleBook` suggestions from lost-deal evidence; a person clicks Apply | Each lost deal below the floor, each request for a busy night |
 
-## Try it
+### Try it
 
 - **In Claude** (claude.ai, Desktop, or Claude Code), add the connector `https://hotel-negotiation.onrender.com/mcp/<token>` (ask us for the token) and say:
   *"Find me a hotel in Paris for 2 people, 13–15 Nov 2026, with breakfast, late checkout and free cancellation, around EUR 500. Negotiate, then book by card with the deposit in GBP."*
@@ -29,7 +113,7 @@ The **financial decisions** sit in code, and the models only negotiate and expla
 - **As a new hotel**: sign up at `/join/<join token>` (linked from the revenue desk). The hotel is bookable by buyer agents as soon as it submits; its Airwallex connected account is opened in the background and card payouts start once it accepts cards.
 - **The 3-minute demo script** is in [DEMO.md](DEMO.md).
 
-## Airwallex, Metal and Claude in it
+### Airwallex, Metal and Claude in it
 
 | Product | What we use it for | Where |
 |---|---|---|
@@ -40,7 +124,7 @@ The **financial decisions** sit in code, and the models only negotiate and expla
 | Metal (testnet) | The traveller's agent pays the deposit over x402 under an on-chain mandate capped at the budget (local demo) | `metal/hotel-pay.ts`, `scripts/metal_*` |
 | Claude | Hotel seller agents (Sonnet 5.5, prompt caching, effort medium) with typed tools; MCP server and MCP App panel for the traveller's Claude | `seller_agent.py`, `scripts/hotel_mcp.py`, `ui/` |
 
-## How it follows the guide
+### How it follows the guide
 
 | Guide rule | Here |
 |---|---|
@@ -53,7 +137,7 @@ The **financial decisions** sit in code, and the models only negotiate and expla
 | Webhooks: HMAC on raw bytes, dedupe on event id, return 200 fast | `webhooks.py` |
 | Show what the agent did and why | Live negotiation panel (never the floors), audit log, demand log, dashboard |
 
-## Architecture
+### Architecture
 
 ```mermaid
 flowchart LR
@@ -70,7 +154,7 @@ flowchart LR
   I -- Apply rule change --> P
 ```
 
-## Verified
+### Verified
 
 - Live in the sandbox: pre-auth holds confirmed with the test card, cancelled and captured; a EUR deposit and a GBP deposit (Multi-Currency Pricing) captured and split to the hotel's connected account (EUR 457.60 and GBP 397.06, both RELEASED); hotels onboarded with card capabilities by API.
 - Reserves and incidents, live: a EUR 520 check-out split EUR 366.08 to the hotel now and EUR 91.52 as a held reserve, which the payout cycle then released; a non-refundable EUR 300 stay at a hotel that overbooked was refunded in full and the hotel's EUR 211.20 + 52.80 splits reversed; both hotels' ledgers reconciled.
@@ -79,7 +163,7 @@ flowchart LR
 - Seller agent eval (`scripts/eval_seller.py`): 12 scenarios across 7 hotels in two cities (boutique, business, budget and luxury), including prompt injection, a fake "manager", competing quotes, hard haggling and impossible budgets, graded in code for outcome, no leaks, every quoted price backed by a committed offer, and staying in budget. Latest full run on Sonnet 5.5 (2026-10-27): 23/24 conversations passed every check; the one miss was a grader false positive (the seller offered more flexible cancellation than asked), since fixed and that scenario re-run clean 3/3. About $0.03 per conversation.
 - 113 offline tests (plus 7 against Postgres) (`python -m unittest discover tests`), including ambiguous payouts never sent twice, reserves and the payout cycle, overbooking refunds and clawbacks, changed terms at booking, rule suggestions, tenant isolation, webhook signatures and hotel sign-ups (validation, listing, onboarding, retries, restarts).
 
-## Details
+### Details
 
 Hotels run their own seller agents (Claude, `seller_agent.py`) that negotiate personalised offers
 with the traveller's Claude, within per-hotel rules in `data/hotels.json`. `SellerPolicy`
@@ -218,7 +302,7 @@ Airwallex web app (Settings > Developer > Webhooks) for `payment_intent.*` event
 another channel, and a hotel overbooking a night. Both are on the dashboard.
 
 
-## Foundation: agentbank (kit-agnostic starter)
+### Foundation: agentbank (kit-agnostic starter)
 
 A kit-agnostic foundation for any of the ten starter kits. It implements the guide's
 "build around a financial decision" rules so your team only writes the decision logic:
@@ -233,7 +317,7 @@ A kit-agnostic foundation for any of the ten starter kits. It implements the gui
 | Give the model typed tools, not credentials | `agent/tools.py` (strict schemas) |
 | Show what the agent did and why | `audit.py` → `var/audit.jsonl` |
 
-### Setup
+#### Setup
 
 ```sh
 python3.13 -m venv .venv && source .venv/bin/activate   # Python 3.10+ (macOS system python3 is 3.9)
@@ -252,7 +336,7 @@ Other scripts (run from the repo root):
 
 Tests (offline, no network): `python -m unittest discover tests`
 
-### Layout
+#### Layout
 
 ```
 src/agentbank/
@@ -274,7 +358,7 @@ src/agentbank/
     loop.py           manual tool-use loop on claude-opus-5-5, refusal fallbacks on
 ```
 
-### Adapting it to your kit
+#### Adapting it to your kit
 
 1. **Write the policy first** (`policy.py`). The decision your demo turns on (reserve
    floor, forecast confidence, dispute economics, tenant isolation) belongs in code that
@@ -287,7 +371,7 @@ src/agentbank/
 4. **Drive the scenario's "new information" through `simulation.py`** (a late deposit,
    a transfer moved to FAILED, a declined authorization) and let the agent re-plan.
 
-### Sandbox behaviour verified on 2026-10-19
+#### Sandbox behaviour verified on 2026-10-19
 
 These came from running kits 1–3 against a real sandbox account. Some contradict the guide.
 

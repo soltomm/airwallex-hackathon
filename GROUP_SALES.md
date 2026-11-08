@@ -13,6 +13,7 @@ src/agentbank/groupsales/
                 payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
   seller.py     ClaudeSeller (tools over the engine) and RulesSeller (deterministic, same tools)
+  trace.py      record of each seller run and its tool calls, for the dashboard's AI Agent tab
   buyer.py      buyer moves from the private brief (presenter mode) and an optional Claude buyer agent
   extract.py    rule-based RFP extraction
 scripts/group_sales.py   server: dashboard, API, agent runner, payment page, webhooks
@@ -48,36 +49,69 @@ through the seller's `check_payment`/`check_refund`, and when a hold expires.
 
 ## Demo script (about 6 minutes)
 
-Each deal page has a coloured **next step** card with the buttons for that step:
-- amber: your decision, as hotel manager or the buyer's organizer
-- purple: your move as the buyer
+The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
+every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
+hotel manager. There is no button to run it. The buyer answers by email, in its own **mailbox** page
+outside the dashboard (`/inbox/<ref>`): open it from the deal's card or from **Demo controls → Buyer
+mailboxes**. Replies, acceptances, the buyer's organizer sign-off and the payment link are all there.
+
+Each deal page has a coloured **next step** card:
+- amber: your decision, as hotel manager
+- purple: waiting for the buyer, with a link to the buyer's mailbox
 - grey: the seller agent or Airwallex is working
+- red: handed to a person, or the seller paused after a payment-provider error (with **Retry**)
 
-Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo controls**.
+The card also shows the seller's last action. The **AI Agent** tab shows each seller run and the
+actions it took, one line each; click an action for its inputs, result and what it caused (a refused
+action is marked in red). The **Activity** tab lists what each agent and person did, newest first. The
+**Conversation** tab shows the newest message first; older emails fold under "earlier messages".
+Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo
+controls**. Under the inquiries list, **Availability** opens rooms, the Thames Room and breakfast by
+night, and **Seller rules** opens the rules the seller works within (see below).
 
-1. **Demo controls → Reset scenario**, then **Run seller** on the card. Northstar gets three questions.
-   Summit gets a quote: **£4,920, deposit £1,476**. The activity feed explains why the seller moved to
-   Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
-2. **Northstar → Send answers.** The seller quotes v1: **£9,600**, 30% deposit, 10% attrition.
-3. **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a **40%
-   deposit (£3,840)** in return. Click **Approve** as the hotel manager.
-4. **Accept v2.** The deposit is over Northstar's own limits, so click **Approve** as the buyer's
-   organizer.
-5. **Open payment page ↗** and pay with `4035 5010 0000 0008`. When you return, the booking is
-   verified with Airwallex and confirmed.
-6. **Jump to 20 Jan**, from the card or Demo controls. Summit's quote lapses. Click **Send change
-   request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
-7. **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates the refund in
-   Airwallex, checks it rather than creating another, and the ledger updates once.
+1. **Demo controls → Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
+   questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
+   seller moved to Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
+2. Open **Maya's mailbox ↗** from Northstar's card and click **Send answers**. The seller quotes v1:
+   **£9,600**, 30% deposit, 10% attrition. It arrives in the mailbox with the offer attached.
+3. In the mailbox, **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a
+   **40% deposit (£3,840)** in return. On the dashboard, click **Approve** as the hotel manager.
+4. In the mailbox, **Accept v2.** The deposit is over Northstar's own limits, so its organizer signs off:
+   **Approve as organizer**, still in the mailbox. The dashboard only shows that the buyer is signing off.
+5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
+   When you return, the booking is verified with Airwallex and confirmed.
+6. **Jump to 20 Jan**, from Northstar's card or Demo controls. Summit's quote lapses. In the mailbox,
+   **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
+7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
+   the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
 8. **Demo controls → Deliver held notifications.** The late notice is ignored as a duplicate. Final
    state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests.
 
-Summit can be accepted at any point (**Accept v1**). Its deposit is within Summit's own limits, so
-checkout opens straight away.
+Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
+own limits, so checkout opens straight away.
 
 Other things to show: **Paste a new RFP…** with other dates or a group dinner (it's handed to a
 person, with the reason). **Fail the next booking commit** before paying (payment received – booking
-exception). **Reject** on the refund (the reduction stands and £528 stays owed).
+exception). **Reject** on the refund (the reduction stands and £528 stays owed). **Buyer replies →
+Buyer agent** in Demo controls, to let the buyer side answer on its own.
+
+### Seller rules
+
+**Seller rules** lists what the seller may do alone, what needs the hotel manager and what is never
+possible, then every rule hotel staff can change, with its default: target rates, the seller's floor
+and the absolute minimum for each room type, deposit and attrition limits, the minimum margin, how long
+offers last and the refund limit. **Save changes** checks the whole set first (for example, a floor
+above the target is refused with the reason) and records the change in Activity. Changes apply to
+offers and changes made after saving; versions already made keep their terms. They are stored apart
+from the scenario, so they stay after a reset, and **Restore defaults** undoes them. The Claude seller's
+prompt is built from the same values, so it never quotes old limits. The fixed rules (services, prices,
+payment schedule, cancellation, capacity, costs) are listed underneath.
+
+### When a payment provider refuses
+
+If Airwallex refuses the deposit intent or a refund, the seller stops on that deal instead of trying
+again on every wake, and the card turns red with the error and a **Retry** button. Fix the cause (for
+example the key or its IP whitelist), then retry.
 
 ## What the backend enforces
 
@@ -117,6 +151,9 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
 
 ## Verified live (Airwallex sandbox, 2026-11-02)
 
+Changes made after this run (the privacy fix, the two refund fixes and the dashboard polish on
+`group-sales-next`) were tested offline only.
+
 The full story ran against the sandbox with the rules seller, paying through hosted checkout in Chrome:
 - Deposit Payment Intent `int_sgpvzhfh9hnsz4b1uwl`, £3,840.00 GBP, SUCCEEDED; checked on return,
   booking confirmed.
@@ -131,13 +168,101 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (18 tests, no network) covers the spec's figures, the full demo story,
-cumulative attrition (including releasing nine room-nights, releases after the deadline and releases
-after the first installment), refund authority, stale approvals and wrong approvers, hard limits,
-overselling, duplicate emails and threading, out-of-scope requests, a refund left unresolved, a
-rejected refund authorization, a failed refund, a timeout during refund creation, hold expiry during
-checkout, a successful payment followed by a booking-commit failure, duplicate and out-of-order
-provider events, an old event after a reset, and recovery after a restart.
+`tests/test_group_sales.py` (40 tests, no network, no keys; run with
+`PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
+
+- the spec's figures and the full demo story;
+- cumulative attrition (including releasing nine room-nights, releases after the deadline and after
+  the first installment);
+- privacy in both directions: the seller's tools and the shared thread never show the buyer's
+  mandate, deposit limits or organizer reasons (only that buyer-side authorization is pending), and
+  the buyer view never shows floors, costs, margins, hotel checks, records, flags, unsent versions or
+  manager approval summaries;
+- authority: stale approvals and wrong approvers, hard limits, a 20-29% deposit needing the manager
+  and refused alongside attrition above 10% or a below-floor rate, a below-floor rate needing
+  approval and a 40% deposit, a package below the 40% margin floor refused, and instructions inside
+  a pasted RFP changing nothing;
+- inventory and holds: no overselling, negotiated versions reusing the same hold and expiry, hold
+  expiry during checkout (unpaid: cancelled and released; processing or unknown: kept and flagged
+  for the manager), and a renewed offer after expiry needing a fresh hold and new acceptance;
+- payments: a timeout creating the deposit intent recovered by lookup with no second intent, a
+  successful payment followed by a booking-commit failure, recovery after a restart;
+- refunds: the £500 authority, an unresolved refund blocking a new one (including one stored but
+  never status-applied), pending refunds counted when a second reduction is priced, an approval
+  binding one exact amount, a rejected authorization, a failed refund, a timeout during refund
+  creation, duplicate and out-of-order provider events, an old event after a reset;
+- the AI Agent record: every seller run with its tool calls, inputs, results and effects; refused calls
+  recorded without changing anything; empty runs dropped; cleared on reset;
+- the server: webhook signatures (bad, stale, tampered and missing rejected; valid accepted) and the
+  access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
+
+### Randomized scenarios
+
+`tests/fuzz_group_sales.py` checks the rules against requests nobody wrote by hand. Each case (a seed)
+starts a fresh hotel and takes a random walk of 60-80 steps:
+
+- **Requests:** new RFPs with random sizes, room types, dates (some outside the stay), budgets,
+  meeting rooms, unsupported extras, injected instructions and duplicate emails.
+- **Moves:** seller runs; buyer answers, counteroffers, acceptances (sometimes of an old version or
+  with a wrong token), change requests and declines; approvals by the right and the wrong person.
+- **Money and time:** good and declined cards, return-page and webhook confirmations, provider
+  timeouts and failures, clock jumps, held and replayed notifications, events from earlier runs.
+- **Restarts and resets.**
+
+Two sellers drive it:
+
+- **rules:** the demo's own seller;
+- **chaos:** random, schema-valid calls to the Claude seller's tools, standing in for an agent that
+  misreads or is manipulated.
+
+After every step it checks:
+
+- inventory adds up to the holds and bookings on file, and is never oversold;
+- every sent offer is within the hard limits and carries the manager approval it needs;
+- an acceptance beyond a buyer's mandate has the organizer's approval;
+- every booking has a verified payment and a ledger receipt;
+- there is one payment intent per checkout, and refunds never exceed receipts or the capture;
+- refunds above £500 are authorized, and at most one refund is unresolved at a time;
+- neither side sees the other's private data;
+- the state survives a restart, and nothing fails except as a refusal.
+
+```bash
+PYTHONPATH=src python tests/fuzz_group_sales.py --cases 500             # prints coverage and any failures
+PYTHONPATH=src python tests/fuzz_group_sales.py --seed 72 --sellers rules -v   # replay one case step by step
+ANTHROPIC_API_KEY=... PYTHONPATH=src python tests/fuzz_group_sales.py --cases 10 --claude   # live Claude seller
+```
+
+The normal suite runs 15 cases per seller (`tests/test_group_sales_fuzz.py`; set `FUZZ_CASES` for
+more). Planted bugs are caught within the first two seeds: authority checks removed, an inventory leak
+on booking, a booking without payment, hotel flags in the buyer view. The first runs found two real
+bugs, now fixed with regression tests:
+
+- a change request for more rooms than were booked crashed the seller, and blocked it for every deal;
+- the rules seller crashed if questions had gone out before the inquiry was read;
+- an organizer approving after the offer had lapsed left the approval marked approved in memory but
+  not on disk, with no acceptance recorded; it is now refused as stale before anything changes.
+
+Last full runs: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about 8 minutes),
+ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review. Then 5,000 of
+5,000 new cases passed (seeds 1000-3499 per seller, 100 steps each, about 70 minutes), ending with
+4,156 confirmed bookings, 470 refunds, 17 refunds failed and handled, and 43 payments received with
+a booking exception, plus deals handed to a person or declined.
+
+### Browser check of the demo script
+
+`scripts/e2e_demo.js` clicks through the demo script in a real browser against a running server with
+simulated payments, and checks 38 points: the seller starting on its own, every spec figure, the
+buyer's moves made from the buyer's mailbox (none on the dashboard), the AI Agent tab, Seller rules
+(a refused change, a saved one and restoring the defaults), Availability, the late notification, 375 px
+width on every tab, the rules page and the mailbox, and no JavaScript errors or browser dialogs. It resets
+the scenario first. It needs Playwright for Node (`npm i playwright`).
+
+```bash
+PAYMENTS=simulated SELLER_MODE=rules GS_VAR=var/e2e PYTHONPATH=src python scripts/group_sales.py &
+node scripts/e2e_demo.js                                   # or BASE=<url> TOKEN=<access token>
+```
+
+The checks that need real keys, and a hand-off prompt for running them, are in `docs/LIVE_CHECKS.md`.
 
 ## Not in this build
 

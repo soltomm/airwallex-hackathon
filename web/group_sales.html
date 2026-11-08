@@ -15,6 +15,7 @@
   --accent: #82b9cc; --accent-soft: #1d3037; --ok: #62cf91; --ok-soft: #16301f; --warn: #e6b455; --warn-soft: #372b13;
   --bad: #ef8a80; --bad-soft: #3a1d1a; --buyer: #c9a2dc; --buyer-soft: #2c2133; --on-accent: #0f1a1e; } }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 button, select, input, textarea { font: inherit; color: inherit; }
 button { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; white-space: nowrap; }
@@ -41,19 +42,20 @@ header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); 
 #demo h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 #demo label { display: flex; gap: 6px; align-items: center; margin: 4px 0; cursor: pointer; }
 
-.rooms { display: flex; gap: 6px; padding: 8px 18px; overflow-x: auto; font-size: 12.5px; }
-.rooms .n { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; white-space: nowrap; }
-.rooms b { font-variant-numeric: tabular-nums; }
-
-.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 320px; gap: 16px; padding: 4px 18px 40px; align-items: start; }
-@media (max-width: 1180px) { .layout { grid-template-columns: 230px minmax(0, 1fr); } .side { grid-column: 1 / -1; } }
-@media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 4px 12px 40px; } header, .rooms { padding-left: 12px; padding-right: 12px; } }
+.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; padding: 14px 18px 40px; align-items: start; max-width: 1240px; margin: 0 auto; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 12px 12px 40px; } .page { padding: 14px 12px 40px; } header, #demo { padding-left: 12px; padding-right: 12px; }
+  dl.kv { grid-template-columns: minmax(0, 1fr); gap: 0 0; } dl.kv dt { margin-top: 6px; } .title h2 { font-size: 18px; } }
+html, body { max-width: 100%; overflow-x: hidden; }
+.layout > * { min-width: 0; }
+.side-btn { width: 100%; margin-top: 2px; padding: 10px 12px; border-radius: 12px; text-align: left; font-weight: 600; white-space: normal; display: flex; flex-direction: column; gap: 2px; }
+.side-btn .small { font-weight: 400; }
+.page .back { padding-left: 0; margin-bottom: 8px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
 .q { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); margin-bottom: 8px; cursor: pointer; }
 .q.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.q .t { display: flex; justify-content: space-between; gap: 6px; font-weight: 600; }
+.q .t { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; font-weight: 600; }
 .q .s { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .q .w { font-size: 12.5px; margin-top: 6px; }
 .chip { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 500; background: var(--sunk); color: var(--muted); white-space: nowrap; }
@@ -92,6 +94,12 @@ header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); 
 .msg { margin: 0 0 12px; } .msg .h { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
 .msg .b { white-space: pre-wrap; padding: 8px 10px; border-radius: 10px; background: var(--sunk); }
 .msg.buyer .b { background: var(--buyer-soft); } .msg.seller .b { background: var(--accent-soft); }
+.msg .b, .quote, dl.kv dd, pre, code { overflow-wrap: anywhere; }
+.msg.old .b { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.msg.old.open .b { display: block; }
+.earlier { border: 0; padding: 0; margin: 0 0 12px; } .earlier > summary { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+.confirm { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 10px; font-size: 13px; }
+.confirm .row { margin-top: 6px; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; } dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
 table.t { width: 100%; border-collapse: collapse; font-size: 13px; } table.t th { text-align: left; color: var(--muted); font-weight: 500; }
 table.t th, table.t td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; } table.t .r { text-align: right; font-variant-numeric: tabular-nums; }
@@ -99,12 +107,53 @@ details { border-bottom: 1px solid var(--line); padding: 8px 0; } summary { curs
 .next details { border: 0; padding: 0; }
 pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }
 
-.ap { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px; margin-bottom: 8px; font-size: 13px; }
-.feed .e { display: grid; grid-template-columns: 18px 1fr; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
-.feed .e .i { text-align: center; } .feed .e .x { overflow: hidden; } .feed .e.long { cursor: pointer; }
-.feed .e .m { color: var(--muted); font-size: 11.5px; }
-.feed .e.clip .txt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* activity tab */
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--sunk); }
+.seg button { border: 0; background: none; padding: 3px 10px; font-size: 12.5px; color: var(--muted); border-radius: 6px; }
+.seg button.on { background: var(--panel); color: var(--fg); font-weight: 600; }
+.act-day { font-size: 12px; font-weight: 600; color: var(--muted); margin: 16px 0 2px; }
+.ev { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+.ev:last-child { border-bottom: 0; }
+.ev .what { font-weight: 600; } .ev .detail { margin: 2px 0 0; overflow-wrap: anywhere; } .ev .at { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 760px) { .ev { grid-template-columns: minmax(0, 1fr) auto; } .ev .body { grid-column: 1 / -1; grid-row: 2; } }
+
+/* AI agent tab */
+.run-h { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; margin: 16px 0 4px; font-size: 12.5px; color: var(--muted); }
+.run-h:first-of-type { margin-top: 10px; } .run-h b { color: var(--fg); font-weight: 600; }
+details.ag { padding: 0; } details.ag > summary { list-style: none; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 0; align-items: baseline; }
+details.ag > summary::-webkit-details-marker { display: none; }
+details.ag > summary .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); align-self: center; justify-self: center; }
+details.ag.no > summary .dot { background: var(--bad); }
+details.ag .ttl { font-weight: 600; } details.ag .ttl .small { font-weight: 400; }
+details.ag .one { grid-column: 2; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.ag[open] .one { white-space: normal; overflow-wrap: anywhere; color: var(--fg); }
+details.ag .at { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+details.ag > summary::after { content: '›'; grid-column: 3; grid-row: 2; justify-self: end; color: var(--muted); transition: transform .15s; }
+details.ag[open] > summary::after { transform: rotate(90deg); }
+.ag-body { margin: 0 0 12px 28px; font-size: 13px; } .ag-body .label { margin: 10px 0 4px; }
+.ag-body ul { margin: 0; padding-left: 18px; } .ag-body li { margin: 2px 0; overflow-wrap: anywhere; }
+.ag-body dl.kv dd { overflow-wrap: anywhere; } .ag-body pre { margin: 0; }
+.ag-reads { font-size: 12.5px; color: var(--muted); padding: 4px 0 2px 28px; }
+@media (max-width: 760px) { .ag-body { margin-left: 0; } }
+
+/* availability page */
+.page { max-width: 1240px; margin: 0 auto; padding: 18px 18px 40px; }
+.page h2 { margin: 0; font-size: 20px; } .page .lede { margin: 4px 0 16px; color: var(--muted); max-width: 70ch; }
+.nights { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.nights .card { margin-bottom: 0; } .nights h3 { margin: 0 0 10px; font-size: 15px; }
+.rt { margin-bottom: 12px; } .rt:last-child { margin-bottom: 0; } .rt .l { display: flex; justify-content: space-between; gap: 8px; }
+.rt .free { font-weight: 650; font-variant-numeric: tabular-nums; } .rt .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+.meter { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunk); margin-top: 5px; }
+.meter i { display: block; } .meter .bk { background: var(--ok); } .meter .hd { background: var(--warn); }
+.key { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin: 0 0 12px; }
+.key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--sunk); border: 1px solid var(--line); }
+.key .bk { background: var(--ok); border-color: transparent; } .key .hd { background: var(--warn); border-color: transparent; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 14px; } .two .card { margin-bottom: 0; }
 .empty { color: var(--muted); text-align: center; padding: 50px 10px; }
+.rule { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); align-items: center; }
+.rgroup .rule:last-child { border-bottom: 0; } .rgroup .act-day { margin-top: 10px; }
+.rule .ri { display: flex; align-items: center; gap: 4px; } .rule .ri input { width: 96px; text-align: right; }
+@media (max-width: 760px) { .rule { grid-template-columns: minmax(0, 1fr); } }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 90vw; }
 dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg); width: min(620px, 92vw); }
 </style>
@@ -121,9 +170,10 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
 <div id="demo">
   <div><h3>Agents</h3>
     <label>Seller <select id="sellerMode"><option value="claude">Claude</option><option value="rules">Rules (instant, free)</option></select></label>
-    <label><input type="checkbox" id="auto"> Seller acts automatically</label>
-    <label>Buyer <select id="buyerMode"><option value="presenter">You (presenter)</option><option value="agent">Buyer agent</option></select></label>
-    <button id="runSeller">Run seller now</button></div>
+    <label>Buyer replies <select id="buyerMode"><option value="presenter">You, from the buyer's mailbox</option><option value="agent">Buyer agent</option></select></label>
+    <p class="small muted" style="margin:4px 0 0">The seller acts on its own and stops at decisions for the hotel manager.</p></div>
+  <div><h3>Buyer mailboxes</h3><div id="mailboxes" class="small"></div>
+    <p class="small muted" style="margin:4px 0 0">Each buyer's email thread with the hotel, outside this dashboard. Reply, accept, sign off as their organizer or pay from there.</p></div>
   <div><h3>Scenario time</h3><div class="row"><button data-h="1">+1 hour</button><button data-h="24">+1 day</button></div>
     <div class="row" style="margin-top:6px"><button id="jump">Jump to 20 Jan 09:00</button></div></div>
   <div><h3>Payment edge cases</h3>
@@ -131,17 +181,17 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
     <button id="releaseN">Deliver held notifications</button>
     <label><input type="checkbox" id="failCommit"> Fail the next booking commit</label></div>
   <div><h3>Inbox</h3><button id="paste">Paste a new RFP…</button>
-    <h3 style="margin-top:14px">Start over</h3><button class="btn-bad" id="reset">Reset scenario</button></div>
+    <h3 style="margin-top:14px">Start over</h3><button class="btn-bad" id="reset">Reset scenario</button>
+    <div class="confirm" id="resetAsk" hidden>Reset the hotel scenario? Deals, holds and the ledger start over; Airwallex records are kept.
+      <div class="row"><button class="btn-bad" id="resetYes">Yes, reset</button><button class="btn-ghost" id="resetNo">Cancel</button></div></div></div>
 </div>
-<div class="rooms" id="rooms"></div>
-<div class="layout">
-  <aside><div class="label">Inquiries</div><div id="queue"></div></aside>
+<div class="layout" id="desk">
+  <aside><div class="label">Inquiries</div><div id="queue"></div><button id="availBtn" class="side-btn">Availability<span class="small muted">Rooms, Thames Room and breakfast by night</span></button>
+    <button id="rulesBtn" class="side-btn">Seller rules<span class="small muted" id="rulesSub">What the seller may agree, and how to change it</span></button></aside>
   <main id="deal"><div class="empty">Loading…</div></main>
-  <aside class="side">
-    <div class="card" id="apCard"><div class="label">Needs approval</div><div id="aps"></div></div>
-    <div class="card"><div class="label">Agent activity <button class="btn-ghost small" id="feedScope">This deal</button></div><div class="feed" id="feed"></div></div>
-  </aside>
 </div>
+<section class="page" id="avail" hidden></section>
+<section class="page" id="rules" hidden></section>
 <dialog id="dlg"><form method="dialog">
   <h3 style="margin-top:0">Paste a new RFP</h3>
   <p class="small muted">It goes through the same intake as the scenario emails. Requests outside 10–13 March 2027 or the hotel's services are handed to a person.</p>
@@ -157,9 +207,9 @@ const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) 
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
 const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
-let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null;
+let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false, agentOpen = new Set();
 
-function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
+function toast(t) { document.querySelectorAll('.toast').forEach(x => x.remove()); const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
@@ -178,6 +228,8 @@ const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class=
 const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : null;
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
 const ROLE = {hotel_manager: 'Hotel manager', organizer: "Buyer's organizer"};
+const cap = t => { t = String(t || '').trim(); return t ? t[0].toUpperCase() + t.slice(1) : t; };
+const sentences = list => (list || []).map(x => cap(x).replace(/[.;]+$/, '')).filter(Boolean).map(x => x + '.').join(' ');
 const typing = () => { const a = document.activeElement; return a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.closest('#deal'); };
 
 async function load() {
@@ -194,18 +246,15 @@ function renderHeader() {
   const busy = S.runner.busy;
   $('agent').className = 'pill' + (busy ? ' live' : '');
   $('agent').innerHTML = busy ? `<span class="dot pulse"></span>${busy.startsWith('seller') ? 'Seller agent is working…' : 'Buyer agent is working…'}`
-    : `Seller: ${S.runner.settings.seller_mode === 'claude' ? 'Claude' : 'rules'}${S.runner.settings.auto_seller ? '' : ' (manual)'}`;
+    : `<span class="dot" style="color:var(--ok)"></span>Seller agent (${S.runner.settings.seller_mode === 'claude' ? 'Claude' : 'rules'}) is watching the inbox`;
   $('pay').textContent = S.provider === 'airwallex' ? 'Payments: Airwallex sandbox' : 'Payments: simulated';
   const st = S.runner.settings;
   $('sellerMode').value = st.seller_mode; $('sellerMode').querySelector('[value=claude]').disabled = !S.runner.claude_available;
-  $('auto').checked = st.auto_seller; $('buyerMode').value = st.buyer_mode;
+  $('buyerMode').value = st.buyer_mode;
   $('delayN').checked = S.sim.delay_refund_notifications; $('failCommit').checked = S.sim.fail_next_commit;
   $('releaseN').textContent = `Deliver held notifications (${S.delayed_notifications})`; $('releaseN').disabled = !S.delayed_notifications;
 }
 function render() {
-  $('rooms').innerHTML = Object.entries(S.inventory).map(([n, x]) =>
-    `<div class="n"><span class="muted">${day(n, {weekday: 'short'})}</span> · twin <b>${x.twin.available}</b>/${x.twin.capacity} · king <b>${x.king.available}</b>/${x.king.capacity} free</div>`).join('') +
-    `<div class="n">Thames Room 11 Mar: <b>${S.meeting.thames['2027-03-11'].status}</b></div>`;
   const deals = [...S.deals].sort((a, b) => (a.reply_by || '9') < (b.reply_by || '9') ? -1 : 1);
   if (!deals.find(d => d.id === sel)) sel = deals[0] && deals[0].id;
   $('queue').innerHTML = deals.map(d => {
@@ -215,26 +264,51 @@ function render() {
       <div class="s">${d.ref}${v ? ' · ' + gbp(v.pricing.total) : ''}${hrs != null && hrs > 0 && !d.booking ? ` · reply in ${hrs}h` : ''}</div>
       <div class="w"><span class="chip ${({you: 'warn', buyer: 'buyer', done: 'ok', bad: 'bad'})[n.cls] || ''}">${esc(n.short)}</span></div></div>`;
   }).join('') || '<div class="muted small">No inquiries.</div>';
-  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; render(); });
+  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; convOpen = false; render(); });
   renderDeal(S.deals.find(d => d.id === sel));
-  renderSide();
+  $('avail').innerHTML = availHtml();
+  $('mailboxes').innerHTML = deals.map(d => `<div><a href="${esc(d.inbox_url)}" target="_blank">${esc(contactOf(d))} · ${esc(d.company)} ↗</a></div>`).join('') || 'No inquiries yet.';
+  const changed = S.activity.filter(a => a.kind === 'rules_changed').length;
+  $('rulesSub').textContent = changed ? 'Changed by hotel staff · see what the seller may agree' : 'What the seller may agree, and how to change it';
 }
 
-// ---- the next step, with its buttons, in one place ---------------------------------------------
+// ---- the next step, in one place. The dashboard is the hotel's: the buyer answers by email ------
 const SELLER_TURN = ['new', 'intake', 'approved_to_send', 'accepted', 'refund_due', 'amendment_approved', 'revise', 'refund_awaiting_approval'];
+const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
 function nextOf(d) {
-  const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy;
-  if (ap) return {cls: 'you', short: ROLE[ap.approver] + ' to approve', who: 'Your decision · ' + ROLE[ap.approver], ap};
+  const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy, v = curVersion(d), co = esc(d.company);
+  if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
+  if (ap && ap.approver === 'hotel_manager') return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
+  if (ap) return {cls: 'buyer', short: 'Buyer sign-off', who: 'Waiting for the buyer', mail: true,
+    title: `${co}'s organizer is signing off v${ap.version}`,
+    text: "The buyer accepted, but outside what its contact can agree alone. The seller opens checkout once the organizer authorizes it."};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
-    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person', title: d.handoff ? d.handoff.reason : 'Needs staff attention'};
-  if (st === 'awaiting_payment') return {cls: 'buyer', short: 'Buyer to pay', who: 'Your move · as the buyer', pay: true};
+    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person', title: esc(d.handoff ? d.handoff.reason : 'Needs staff attention')};
+  if (st === 'awaiting_payment') return {cls: 'buyer', short: 'Buyer to pay', who: 'Waiting for the buyer', mail: true, chkPay: true,
+    title: `Waiting for ${co} to pay the ${gbp(v && v.pricing.deposit)} deposit`,
+    text: "They pay on Airwallex's hosted page from the link the seller sent. The booking confirms once the payment is verified with Airwallex."};
   if (st === 'refund_pending') return {cls: 'wait', short: 'Refund confirming', who: 'Airwallex', refund: true};
-  if (SELLER_TURN.includes(st) || d.unread)
-    return {cls: 'wait', short: busy ? 'Seller working' : "Seller's turn", who: 'Seller agent', seller: true};
-  if (st === 'acceptance_pending_organizer') return {cls: 'wait', short: 'Buyer approval', who: 'Buyer side', title: "Waiting for the buyer's organizer"};
-  if (st === 'confirmed') return {cls: 'done', short: 'Booked', who: 'Booking confirmed', buyer: true, confirmed: true};
-  if (['needs_info', 'offer_sent', 'amendment_sent', 'expired'].includes(st)) return {cls: 'buyer', short: 'Buyer to respond', who: 'Your move · as the buyer', buyer: true};
-  return {cls: 'wait', short: d.waiting_on || st, who: 'Status', title: d.waiting_on || st};
+  if (SELLER_TURN.includes(st) || d.unread) return {cls: 'wait', short: busy ? 'Seller working' : 'Seller up next', who: 'Seller agent', seller: true};
+  if (st === 'confirmed') return {cls: 'done', short: 'Booked', who: 'Booking confirmed', confirmed: true};
+  if (['needs_info', 'offer_sent', 'amendment_sent', 'expired'].includes(st)) return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
+    title: st === 'needs_info' ? `The seller asked ${co} some questions` : st === 'expired' ? 'The offer lapsed'
+      : `${v && v.kind === 'amendment' ? 'Change' : 'Offer'} v${v && v.n} is with ${co}`,
+    text: st === 'expired' ? 'Its rooms were released. The seller renews it only if the buyer asks again.' : 'The seller picks up their reply as soon as it arrives.'};
+  return {cls: 'wait', short: d.waiting_on || st, who: 'Status', title: esc(d.waiting_on || st)};
+}
+function lastStep(d) {
+  for (const r of (S.agent_runs || []).slice().reverse()) {
+    const st = r.steps.filter(s => s.deal_id === d.id && !AG_READS.has(s.tool));
+    if (st.length) return st[st.length - 1];
+  }
+  return null;
+}
+function lastLine(d) {
+  const s = lastStep(d);
+  return s ? `<p class="small muted last" style="margin:10px 0 0">Seller's last action, ${hm(s.at)}: <b>${esc(TOOL[s.tool] || s.tool)}</b>${s.ok ? '' : ' (refused)'} · ${esc(tidy(s.summary))} <a href="#" data-tab="agent">AI Agent tab</a></p>` : '';
+}
+function mailLink(d) {
+  return `<div class="row" style="margin-top:4px"><a href="${esc(d.inbox_url)}" target="_blank"><button class="btn-ghost" style="padding-left:0">Open ${esc(contactOf(d))}'s mailbox ↗</button></a><span class="small muted">Demo: reply as the buyer, outside the hotel's dashboard</span></div>`;
 }
 function nextCard(d) {
   const n = nextOf(d), v = curVersion(d);
@@ -242,68 +316,42 @@ function nextCard(d) {
   if (n.ap) {
     const a = n.ap;
     const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: `Approve change v${a.version}?`}[a.subject] || 'Approve?';
-    h += `<h3>${what}</h3><p>${esc(a.reasons.join('; '))}.</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
+    h += `<h3>${what}</h3><p>${esc(sentences(a.reasons))}</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
       <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div>`;
-  } else if (n.pay) {
-    h += `<h3>Pay the ${gbp(v && v.pricing.deposit)} deposit</h3><p>On Airwallex's hosted page, use test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
-      <div class="row"><a href="${d.pay_url}" target="_blank"><button class="btn-buyer">Open payment page ↗</button></a><button data-act="chkPay">I've paid, check</button></div>`;
+  } else if (n.paused) {
+    h += `<h3>Stopped: ${esc(n.paused.what)} failed at the payment provider</h3><p class="small" style="overflow-wrap:anywhere">${esc(tidy(n.paused.error).slice(0, 300))}</p>
+      <p class="small">The seller doesn't retry this on its own, so a provider problem can't pile up failed attempts. Fix the cause (for example the API key or its IP whitelist), then retry.</p>
+      <div class="row"><button class="btn-p" data-act="retry">Retry ${esc(n.paused.what)}</button></div>`;
   } else if (n.refund) {
     h += `<h3>${gbp(d.finance.refund_owed)} refund sent, waiting for Airwallex to confirm</h3><p class="small">The seller checks this refund before anything else, so there's never a second one.</p><div class="row"><button data-act="chkRef">Check now</button></div>`;
   } else if (n.seller) {
-    h += S.runner.busy ? `<h3><span class="dot pulse"></span>Working on it…</h3>` : `<h3>The seller has something to do</h3><div class="row"><button class="btn-p" data-act="run">Run seller</button></div>`;
-  } else if (n.buyer) {
-    h += buyerPanel(d, n);
-  } else {
-    h += `<h3>${esc(n.title || '')}</h3>`;
-  }
-  return h + '</div>';
-}
-const SUG_LABEL = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send message'};
-function buyerPanel(d, n) {
-  const v = curVersion(d), sug = d.buyer_suggestion, open = v && v.status === 'sent';
-  let h = '';
-  if (n.confirmed) {
+    h += S.runner.busy ? `<h3><span class="dot pulse"></span>Working on it…</h3>` : `<h3>The seller agent is picking this up</h3>`;
+  } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
-    h += `<h3>${rooms ? rooms + ' ' + d.booking.room_type + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
-    if (sug && sug.action === 'change_request') h += `<p class="small muted">Next in the buyer's brief:</p><div class="quote">${esc(sug.text)}</div><div class="row"><button class="btn-buyer" data-act="sendSug">Send change request</button></div>`;
-    else if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan</button></div>`;
-    h += `<div class="row" style="margin-top:8px"><button class="btn-ghost" data-form="change">Request a different change…</button></div>`;
+    h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
+    if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
+    h += mailLink(d);
   } else {
-    const title = d.status === 'needs_info' ? 'The seller asked some questions' : d.status === 'expired' ? 'The offer lapsed'
-      : open ? `${v.kind === 'amendment' ? 'Change' : 'Offer'} v${v.n}: ${gbp(v.pricing.total)} with a ${gbp(v.pricing.deposit)} deposit` : 'Waiting for the buyer';
-    h += `<h3>${esc(title)}</h3>`;
-    if (sug) h += `<p class="small muted">Suggested reply, from ${esc(d.company)}'s private brief:</p><div class="quote">${esc(sug.text)}</div>`;
-    else if (open && v.kind === 'offer' && d.company.startsWith('Summit')) h += `<p class="small muted">Summit's brief says it waits for its organizer. Accept when you want to move it on.</p>`;
-    h += '<div class="row">';
-    if (sug) h += `<button class="btn-buyer" data-act="sendSug">${SUG_LABEL[sug.action] || 'Send'}</button>`;
-    if (open && !(sug && sug.action === 'accept')) h += `<button class="${sug ? '' : 'btn-buyer'}" data-act="accept">Accept v${v.n}</button>`;
-    if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
-    if (d.status === 'needs_info' && !sug) h += `<button data-form="answers">Answer…</button>`;
-    h += `<button class="btn-ghost" data-form="msg">Message…</button></div>`;
+    h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
+    if (n.chkPay) h += `<div class="row"><button data-act="chkPay">Check the payment with Airwallex</button></div>`;
+    if (n.mail) h += mailLink(d);
   }
-  if (form) h += formHtml(d, v);
-  return h;
-}
-function formHtml(d, v) {
-  const t = v && v.terms;
-  const actions = label => `<div class="row" style="margin-top:6px"><button class="btn-buyer" data-act="sendForm">${label}</button><button class="btn-ghost" data-form="">Cancel</button></div>`;
-  if (form === 'counter') return `<div class="form"><label>Attrition %<input type="number" id="fAtt" value="20" min="0" max="30"></label>
-      <label>Deposit %<input type="number" id="fDep" value="25" min="0" max="60"></label><label>Room rate £ (optional)<input type="number" id="fRate" placeholder="${t ? t.rate / 100 : ''}"></label></div>
-      <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${actions('Send counteroffer')}`;
-  if (form === 'change') return `<div class="form"><label>Fewer rooms per night<input type="number" id="fRooms" value="2" min="1"></label></div>
-      <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${actions('Send change request')}`;
-  if (form === 'answers') return `<div class="form"><label>Meeting layout<input type="text" id="fLayout" value="classroom"></label><label>Legal payer<input type="text" id="fPayer"></label>
-      <label>Budget includes taxes?<select id="fTax"><option value="true">Yes</option><option value="false">No</option></select></label></div>${actions('Send answers')}`;
-  if (form === 'msg') return `<textarea id="fText" rows="3" placeholder="Message to the hotel" style="margin-top:10px"></textarea>${actions('Send')}`;
-  return '';
+  return h + lastLine(d) + '</div>';
 }
 
 // ---- deal ------------------------------------------------------------------------------------
 function stepsOf(d) {
-  const f = d.finance_view, am = d.versions.filter(v => v.kind === 'amendment');
-  const s = [['Inquiry', true], ['Questions', d.thread.some(m => m.questions) || d.versions.length > 0], ['Offer', d.versions.length > 0],
-    ['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]];
-  if (am.length) s.push(['Change', am.some(v => v.status === 'accepted')], ['Refund', f.refunded > 0]);
+  // Each step is done or not; the highlighted one is the first step not done, so a later step is
+  // never shown as current while an earlier one (e.g. open questions) is still outstanding.
+  const f = d.finance_view, am = d.versions.filter(v => v.kind === 'amendment'), offers = d.versions.filter(v => v.kind === 'offer');
+  const asked = d.thread.some(m => m.questions), sent = offers.some(v => v.sent_at);
+  const s = [['Inquiry', true]];
+  if (asked) s.push(['Questions', d.status !== 'needs_info' || offers.length > 0]);
+  s.push(['Offer', sent], ['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]);
+  if (am.length || d.thread.some(m => m.action === 'change_request')) {
+    s.push(['Change', am.some(v => v.status === 'accepted')]);
+    if (am.some(v => v.reduction && v.reduction.refund_due > 0)) s.push(['Refund', f.refunded > 0 && !f.refund_owed]);
+  }
   const now = s.findIndex(x => !x[1]);
   return '<div class="steps">' + s.map(([l, ok], i) => `<span class="${ok ? 'done' : i === now ? 'now' : ''}">${ok ? '✓ ' : ''}${l}</span>`).join('') + '</div>';
 }
@@ -318,7 +366,7 @@ function offerCard(d) {
     <div class="facts"><span>Deposit <b>${t.deposit_pct}% · ${gbp(p.deposit)}</b></span><span>Free release <b>${t.attrition_pct}%</b> · ${p.allowance_remaining} of ${p.attrition_allowance} room-nights left</span>
       <span>${gbp(p.per_room_night_incl_breakfast)} per room-night incl. breakfast</span>${v.expires_at && !d.booking ? `<span>Held until <b>${when(v.expires_at)}</b></span>` : ''}</div>`;
   if (v.unmet && v.unmet.length) h += `<p class="small" style="margin:10px 0 0"><b>Differs from the request:</b> ${esc(v.unmet.join('; '))}</p>`;
-  h += `<div class="hotel">Hotel only: margin ${p.margin_all_rooms.margin_pct}% (${p.margin_full_release.margin_pct}% if all free room-nights are released)${v.hotel_check && v.hotel_check.approvals.length ? ' · approval needed for: ' + esc(v.hotel_check.approvals.join('; ')) : ''}</div></div>`;
+  h += `<div class="hotel">Hotel only: margin ${p.margin_all_rooms.margin_pct}% (${p.margin_full_release.margin_pct}% if all free room-nights are released)${v.hotel_check && v.hotel_check.approvals.length ? ' · Approval needed: ' + esc(sentences(v.hotel_check.approvals)) : ''}</div></div>`;
   if (f.received || f.refund_owed) {
     const due = f.schedule ? f.schedule.filter(x => x.amount) : [];
     h += `<div class="card"><div class="label">Money</div><div class="tiles">
@@ -330,9 +378,17 @@ function offerCard(d) {
   }
   return h;
 }
-const TABS = [['conv', 'Conversation'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
+const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
-  if (tab === 'conv') return d.thread.map(m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`).join('');
+  if (tab === 'conv') {
+    // Newest first. The latest two messages are shown in full; earlier ones are folded away.
+    const msg = (m, old) => `<div class="msg ${m.from}${old ? ' old' : ''}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
+    const all = d.thread.slice().reverse(), recent = all.slice(0, 2), older = all.slice(2);
+    return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>` + recent.map(m => msg(m)).join('')
+      + (older.length ? `<details class="earlier" id="earlier"${convOpen ? ' open' : ''}><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map(m => msg(m, true)).join('')}</details>` : '');
+  }
+  if (tab === 'act') return activityHtml(d);
+  if (tab === 'agent') return agentHtml(d);
   if (tab === 'req') {
     const r = d.requirements; if (!r) return '<p class="muted">The seller hasn\'t read this inquiry yet.</p>';
     const m = r.meeting;
@@ -370,36 +426,20 @@ function renderDeal(d) {
   wire(d);
 }
 function wire(d) {
-  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
-  document.querySelectorAll('[data-form]').forEach(b => b.onclick = () => { form = b.dataset.form || null; renderDeal(d); if (!form) { lastJSON = ''; load(); } });
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
+  document.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => { scopeAll = b.dataset.scope === 'all'; renderDeal(d); });
+  if ($('earlier')) $('earlier').ontoggle = e => { convOpen = e.target.open; };
+  document.querySelectorAll('details.ag').forEach(x => x.ontoggle = () => { x.open ? agentOpen.add(x.dataset.k) : agentOpen.delete(x.dataset.k); });
+  document.querySelectorAll('.msg.old .b').forEach(b => b.onclick = () => b.parentElement.classList.toggle('open'));
   document.querySelectorAll('#deal [data-ap]').forEach(b => b.onclick = () => decide(b));
-  const act = (action, text, payload) => api(`/api/buyer/${d.id}`, {token: d.buyer_token, action, text, payload});
   document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    const v = curVersion(d), s = d.buyer_suggestion, a = b.dataset.act;
+    const a = b.dataset.act;
     try {
-      if (a === 'sendSug') await act(s.action, s.text, s.payload);
-      else if (a === 'accept') {
-        const r = await act('accept', `We accept version ${v.n}.`, {version: v.n});
-        if (r.accepted === false) toast("Over the buyer's own limits: waiting for its organizer");
-      }
-      else if (a === 'chkPay') { const r = await api(`/api/deals/${d.id}/check_payment`, {}); toast(r.booking ? 'Payment verified, booking confirmed' : 'Not paid yet'); }
+      if (a === 'chkPay') { const r = await api(`/api/deals/${d.id}/check_payment`, {}); toast(r.booking ? 'Payment verified, booking confirmed' : 'Not paid yet'); }
       else if (a === 'chkRef') { await api(`/api/deals/${d.id}/check_refund`, {}); toast('Checked with Airwallex'); }
-      else if (a === 'run') await api('/api/seller/run', {});
+      else if (a === 'retry') { await api(`/api/deals/${d.id}/retry`, {}); toast('The seller is retrying'); }
       else if (a === 'jump') await api('/api/clock', {to: '2027-01-20T09:00:00+00:00'});
-      else if (a === 'sendForm') {
-        const text = $('fText') ? $('fText').value.trim() : '';
-        if (form === 'counter') {
-          const p = {attrition_pct: +$('fAtt').value, deposit_pct: +$('fDep').value}; if ($('fRate').value) p.rate = Math.round(+$('fRate').value * 100);
-          await act('counter', text || `We'd like ${p.attrition_pct}% attrition and a ${p.deposit_pct}% deposit${p.rate ? ` at £${p.rate / 100}` : ''}.`, p);
-        } else if (form === 'change') {
-          const n = +$('fRooms').value; await act('change_request', text || `Please reduce our block by ${n} rooms per night.`, {rooms_per_night: n});
-        } else if (form === 'answers') {
-          const ans = {meeting_layout: $('fLayout').value, payer: $('fPayer').value, budget_includes_taxes: $('fTax').value === 'true'};
-          await act('reply', `Layout: ${ans.meeting_layout}. Payer: ${ans.payer}. Our budget ${ans.budget_includes_taxes ? 'includes' : 'excludes'} taxes.`, {answers: ans});
-        } else if (form === 'msg') { if (!text) { toast('Write a message first'); return; } await act('message', text, {}); }
-        form = null;
-      }
     } catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
   });
 }
@@ -408,28 +448,178 @@ async function decide(b) {
   try { await api(`/api/approvals/${b.dataset.ap}`, {decision: b.dataset.d, actor: b.dataset.who, note: ''}); toast(b.dataset.d === 'approve' ? 'Approved' : 'Rejected'); }
   catch (e) {} finally { lastJSON = ''; load(); }
 }
-const ICON = {seller: '🛎', system: '⚙︎', hotel_manager: '✓', organizer: '✓', presenter: '⏱'};
-function renderSide() {
-  const pend = S.approvals.filter(a => a.status === 'pending');
-  $('apCard').style.display = pend.length ? '' : 'none';
-  $('aps').innerHTML = pend.map(a => `<div class="ap"><b>${ROLE[a.approver]}</b> · ${a.ref}<div style="margin:3px 0 8px">${esc(a.reasons.join('; '))}${a.amount ? ' (' + gbp(a.amount) + ')' : ''}</div>
-    <div class="row"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div></div>`).join('');
-  document.querySelectorAll('#aps [data-ap]').forEach(b => b.onclick = () => decide(b));
-  $('feedScope').textContent = scopeAll ? 'All deals' : 'This deal';
-  const ref = id => (S.deals.find(d => d.id === id) || {}).ref || '';
-  const items = S.activity.filter(a => scopeAll || !a.deal_id || a.deal_id === sel).slice(-60).reverse();
-  $('feed').innerHTML = items.map(a => {
-    const t = a.text.replace(/\*\*/g, '').replace(/\n+/g, ' ').replace(/\s+-\s+/g, ' · ');
-    const icon = a.actor.startsWith('buyer') ? '🧳' : ICON[a.actor] || '•';
-    return `<div class="e ${t.length > 140 ? 'long clip' : ''}"><span class="i">${icon}</span><div class="x"><div class="txt">${esc(t)}</div><div class="m">${esc(a.actor.replace('_', ' '))} · ${when(a.at)}${scopeAll && a.deal_id ? ' · ' + ref(a.deal_id) : ''}</div></div></div>`;
-  }).join('') || '<p class="muted small">Nothing yet. Open Demo controls and click Run seller now.</p>';
-  document.querySelectorAll('.feed .e.long').forEach(e => e.onclick = () => e.classList.toggle('clip'));
+// ---- activity tab: what happened, in plain words, newest first ---------------------------------
+const EVENT = {
+  intake: 'Inquiry received', email: 'Email received', duplicate: 'Duplicate email ignored', requirements: 'Requirements recorded',
+  records: 'Hotel systems checked', clarification: 'Questions sent to the buyer', reasoning: 'Seller note',
+  offer_drafted: 'Offer drafted', offer_sent: 'Offer sent', hold: 'Rooms held', hold_released: 'Hold released', hold_expiry: 'Hold expired, payment unclear',
+  expired: 'Offer expired', lapsed: 'Buyer told the offer lapsed', approval_requested: 'Approval requested', approval_approved: 'Approved',
+  approval_rejected: 'Rejected', approval_stale: 'Approval out of date', buyer_reply: 'Buyer answered', buyer_counter: 'Buyer countered',
+  buyer_accept: 'Buyer accepted', buyer_message: 'Buyer message', buyer_change_request: 'Buyer asked for a change', buyer_decline: 'Buyer declined',
+  accepted: 'Agreement accepted', checkout: 'Payment page opened', confirmed: 'Booking confirmed', booking_exception: 'Paid, but booking failed',
+  payment_mismatch: 'Payment mismatch', recovered: 'Recovered from provider records', amendment_drafted: 'Change drafted', amendment_sent: 'Change sent',
+  amendment_accepted: 'Change accepted', refund_initiated: 'Refund started', refund_checked: 'Refund status checked', refund_completed: 'Refund completed',
+  refund_failed: 'Refund failed', refund_mismatch: 'Refund mismatch', handoff: 'Handed to a person', declined: 'Inquiry declined',
+  ledger_dedupe: 'Duplicate ledger entry ignored', rules_changed: 'Seller rules changed', seller_paused: 'Seller paused', seller_retry: 'Seller asked to retry', webhook: 'Provider notification', clock: 'Scenario clock moved', reset: 'Scenario reset', sim: 'Demo setting changed'};
+const WHO = {seller: ['Seller agent', 'acc'], hotel_manager: ['Hotel manager', 'warn'], organizer: ["Buyer's organizer", 'buyer'], presenter: ['Presenter', ''], system: ['System', ''], 'hotel staff': ['Hotel staff', 'warn']};
+const who = a => a.startsWith('buyer') ? ['Buyer', 'buyer'] : WHO[a] || [cap(a.replaceAll('_', ' ')), ''];
+const tidy = t => t.replace(/<[^>]*>/g, ' ').replace(/\*\*/g, '').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00/g, m => when(m)).replace(/\s*\n+\s*/g, ' ');
+function activityHtml(d) {
+  const ref = id => (S.deals.find(x => x.id === id) || {}).ref || '';
+  const items = S.activity.filter(a => scopeAll || a.deal_id === d.id).slice().reverse();
+  let h = `<div class="row" style="justify-content:space-between"><span class="small muted">Newest first · ${items.length} event${items.length === 1 ? '' : 's'}</span>
+    <span class="seg"><button class="${scopeAll ? '' : 'on'}" data-scope="deal">This deal</button><button class="${scopeAll ? 'on' : ''}" data-scope="all">All deals</button></span></div>`;
+  if (!items.length) return h + '<p class="muted">Nothing yet. The seller agent picks new inquiries up on its own.</p>';
+  let last = '';
+  for (const a of items) {
+    const dayKey = a.at.slice(0, 10), [name, c] = who(a.actor);
+    if (dayKey !== last) { h += `<div class="act-day">${day(a.at, {weekday: 'short', year: 'numeric'})}</div>`; last = dayKey; }
+    const title = EVENT[a.kind] || cap(a.kind.replaceAll('_', ' '));
+    h += `<div class="ev"><span><span class="chip ${c}">${esc(name)}</span></span><div class="body"><div class="what">${esc(title)}${scopeAll && a.deal_id ? ` <span class="small muted">· ${ref(a.deal_id)}</span>` : ''}</div><p class="detail">${esc(tidy(a.text))}</p></div><span class="at">${new Date(a.at).toLocaleTimeString('en-GB', {timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit'})}</span></div>`;
+  }
+  return h;
 }
 
+// ---- AI agent tab: each seller run and the actions it took; click an action for details ----------
+const TOOL = {
+  record_requirements: 'Recorded the requirements', check_systems: 'Checked hotel systems', ask_buyer: 'Asked the buyer',
+  price_terms: 'Priced terms (dry run)', propose_offer: 'Proposed an offer', send_offer: 'Sent an offer', open_checkout: 'Opened checkout',
+  check_payment: 'Checked the payment', prepare_reduction: 'Prepared a change', send_amendment: 'Sent a change', refund_excess: 'Started a refund',
+  check_refund: 'Checked the refund', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',
+  read_deal: 'Read the deal', list_queue: 'Looked at the queue'};
+const AG_READS = new Set(['read_deal', 'list_queue']);
+const ARG = {req: 'Requirements', rate: 'Rate', deposit_pct: 'Deposit %', attrition_pct: 'Attrition %', rooms_per_night: 'Rooms a night', room_type: 'Room type',
+  message: 'Message to buyer', explanation: 'Explanation', justification: 'Justification for manager', unmet: 'Not met', questions: 'Questions',
+  version: 'Version', reason: 'Reason', text: 'Note', release: 'Release'};
+const hm = iso => new Date(iso).toLocaleTimeString('en-GB', {timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit'});
+const flat = v => Array.isArray(v) ? v.map(flat).join(', ') : v && typeof v === 'object' ? Object.entries(v).map(([a, b]) => `${a.replaceAll('_', ' ')}: ${b && typeof b === 'object' && !Array.isArray(b) ? '(' + flat(b) + ')' : flat(b)}`).join(' · ') : String(v);
+const kvHtml = o => `<dl class="kv">${Object.entries(o).map(([k, v]) => `<dt>${esc(ARG[k] || cap(k.replaceAll('_', ' ')))}</dt><dd>${
+  typeof v === 'string' ? (v.length > 160 || v.includes('\n') ? `<pre>${esc(v)}</pre>` : esc(tidy(v))) : Array.isArray(v) ? esc(v.join('; ')) :
+  v && typeof v === 'object' ? esc(flat(v)) : esc(String(v))}</dd>`).join('')}</dl>`;
+function agentHtml(d) {
+  const runs = (S.agent_runs || []).slice().reverse().map(r => ({...r, steps: r.steps.map((s, i) => ({...s, k: r.id + ':' + i}))
+    .filter(s => s.deal_id === d.id)})).filter(r => r.steps.length);
+  const acts = runs.reduce((n, r) => n + r.steps.filter(s => !AG_READS.has(s.tool)).length, 0);
+  let h = `<p class="small muted" style="margin:0">What the seller agent did on ${esc(d.company)} · newest run first · ${acts} action${acts === 1 ? '' : 's'}</p>`;
+  if (!runs.length) return h + '<p class="muted">The agent hasn\'t acted on this deal yet. It picks new inquiries up on its own.</p>';
+  for (const r of runs) {
+    const agent = r.agent === 'claude' ? `Claude seller${r.model ? ` <span class="small">(${esc(r.model)})</span>` : ''}` : 'Rules seller';
+    h += `<div class="run-h"><b>${agent}</b><span>· ${day(r.at)} ${hm(r.at)}</span>${r.trigger ? `<span>· woke because: ${esc(r.trigger)}</span>` : ''}</div>`;
+    const reads = r.steps.filter(s => AG_READS.has(s.tool));
+    for (const s of r.steps.filter(s => !AG_READS.has(s.tool))) {
+      const fx = s.effects.filter(x => x.text !== s.summary);
+      h += `<details class="ag${s.ok ? '' : ' no'}" data-k="${s.k}"${agentOpen.has(s.k) ? ' open' : ''}><summary><span class="dot"></span>
+        <span class="ttl">${esc(TOOL[s.tool] || cap(s.tool.replaceAll('_', ' ')))}${s.ok ? '' : ' <span class="chip bad">refused</span>'}</span>
+        <span class="at">${hm(s.at)}</span><span class="one">${esc(tidy(s.summary))}</span></summary><div class="ag-body">
+        ${s.error ? `<div class="label">Why it was refused</div><div style="color:var(--bad)">${esc(s.error)}</div>` : ''}
+        ${fx.length ? `<div class="label">What else happened</div><ul>${fx.map(x => `<li>${x.actor === 'system' ? '<span class="chip">System</span> ' : ''}${esc(tidy(x.text))}</li>`).join('')}</ul>` : ''}
+        ${Object.keys(s.args).length && s.tool !== 'log_reasoning' ? `<div class="label">Inputs</div>${kvHtml(s.args)}` : ''}
+        ${s.result ? `<div class="label">Result</div>${kvHtml(s.result)}` : ''}
+        <div class="small muted" style="margin-top:8px">Tool <code>${esc(s.tool)}</code> · scenario time ${when(s.at)} · real time ${when(s.real_at)}</div></div></details>`;
+    }
+    if (reads.length) {
+      const nd = reads.filter(s => s.tool === 'read_deal').length, nq = reads.length - nd;
+      h += `<div class="ag-reads">Also ${[nd && `read the deal ${nd}×`, nq && `looked at the queue ${nq}×`].filter(Boolean).join(' and ')}</div>`;
+    }
+  }
+  return h;
+}
+
+// ---- availability page -------------------------------------------------------------------------
+function meterRow(label, x) {
+  const pct = n => x.capacity ? (n / x.capacity * 100).toFixed(1) + '%' : '0%';
+  return `<div class="rt"><div class="l"><span>${label}</span><span class="free">${x.available} free of ${x.capacity}</span></div>
+    <div class="meter"><i class="bk" style="width:${pct(x.booked)}"></i><i class="hd" style="width:${pct(x.held)}"></i></div>
+    <div class="sub">${x.booked} booked · ${x.held} held</div></div>`;
+}
+function availHtml() {
+  const nights = Object.entries(S.inventory).map(([n, x]) => `<div class="card"><h3>${day(n, {weekday: 'short'})} night</h3>${meterRow('Twin', x.twin)}${meterRow('King', x.king)}</div>`).join('');
+  const company = id => (S.deals.find(d => d.id === id) || {}).company || '';
+  const meeting = Object.entries(S.meeting.thames).map(([date, m]) => `<dt>${day(date, {weekday: 'short'})}</dt><dd>${esc(cap(m.status))}${m.deal_id ? ' · ' + esc(company(m.deal_id)) : ''}</dd>`).join('');
+  const breakfast = Object.entries(S.breakfast).map(([date, b]) => `<dt>${day(date, {weekday: 'short'})}</dt><dd>${b.held + b.booked} of ${S.breakfast_capacity} covers committed</dd>`).join('');
+  const perNight = rooms => { const v = [...new Set(Object.values(rooms))].sort((a, b) => a - b); return v.length > 1 ? `${v[0]}–${v[v.length - 1]}` : v[0]; };
+  const using = S.deals.flatMap(d => {
+    if (d.booking && d.booking.status === 'confirmed') return [`<tr><td>${esc(d.company)}</td><td><span class="chip ok">Booked</span></td><td>${perNight(d.booking.rooms)} ${esc(d.booking.room_type)} rooms a night</td><td class="muted">–</td></tr>`];
+    const held = d.hold && ['active', 'expired_payment_pending'].includes(d.hold.status);
+    return held ? [`<tr><td>${esc(d.company)}</td><td><span class="chip warn">${d.hold.status === 'active' ? 'Held' : 'Held, payment unclear'}</span></td><td>${perNight(d.hold.rooms)} ${esc(d.hold.room_type)} rooms a night</td><td>${d.hold.status === 'active' ? 'until ' + when(d.hold.expires_at) : 'manager review'}</td></tr>`] : [];
+  }).join('');
+  return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Harbour House can still sell for the 10–13 March stay. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released.</p>
+    <div class="key"><span><i class="bk"></i>Booked</span><span><i class="hd"></i>Held by an open offer</span><span><i></i>Free</span></div>
+    <div class="nights">${nights}</div>
+    <div class="two"><div class="card"><div class="label">Thames Room</div><dl class="kv">${meeting}</dl></div><div class="card"><div class="label">Group breakfast</div><dl class="kv">${breakfast}</dl></div></div>
+    <div class="card" style="margin-top:14px"><div class="label">Who is using the rooms</div>${using ? `<table class="t">${using}</table>` : '<p class="muted" style="margin:0">Nothing is held or booked yet.</p>'}</div>`;
+}
+function showView() {
+  const v = location.hash === '#availability' ? 'avail' : location.hash === '#rules' ? 'rules' : 'desk';
+  $('avail').hidden = v !== 'avail'; $('rules').hidden = v !== 'rules'; $('desk').hidden = v !== 'desk';
+  if (v === 'rules') loadRules();
+  window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', showView);
+$('availBtn').onclick = () => { location.hash = 'availability'; };
+$('rulesBtn').onclick = () => { location.hash = 'rules'; };
+$('avail').onclick = e => { if (e.target.closest('#availBack')) location.hash = ''; };
+
+// ---- seller rules page: what the seller may agree alone, with approval, or never; editable ---------
+let R = null, rulesErr = '';
+async function loadRules() { try { R = await api('/api/rules'); } catch (e) { return; } rulesErr = ''; renderRules(); }
+const rv = path => R.editable.find(x => x.path === path).value;
+const rfmt = (kind, v) => kind === 'gbp' ? gbp(v) : kind === 'pct' ? v + '%' : v + ' hours';
+function decisions() {
+  const r = rt => [`${cap(rt)} rate`, `${gbp(rv(`rms.rates.${rt}.autonomous_floor`))} or more`, `${gbp(rv(`rms.rates.${rt}.absolute_min`))} to ${gbp(rv(`rms.rates.${rt}.autonomous_floor`) - 100)}`, `below ${gbp(rv(`rms.rates.${rt}.absolute_min`))}`];
+  const dmin = rv('policy.deposit.min_pct_with_approval'), dstd = rv('policy.deposit.standard_pct'), dmax = rv('policy.deposit.max_pct');
+  const astd = rv('policy.attrition.standard_pct'), amax = rv('policy.attrition.max_pct_with_approval'), lim = rv('policy.seller_refund_limit');
+  return [r('twin'), r('king'),
+    ['Deposit', `${dstd}% to ${dmax}%`, dmin < dstd ? `${dmin}% to ${dstd - 1}%, for high-value repeat customers or large spend` : '–', `below ${dmin}% or above ${dmax}%`],
+    ['Free release (attrition)', `up to ${astd}%`, amax > astd ? `${astd + 1}% to ${amax}%, with a ${rv('policy.deposit.required_pct_for_exceptions')}% deposit` : '–', `above ${amax}%`],
+    ['Margin', `at least ${rv('rms.min_contribution_margin_pct')}%`, '–', `below ${rv('rms.min_contribution_margin_pct')}%`],
+    ['Refunds after a reduction', `up to ${gbp(lim)} in total`, `above ${gbp(lim)}, the exact amount`, 'more than the buyer paid']];
+}
+function renderRules() {
+  if (!R) { $('rules').innerHTML = '<div class="empty">Loading…</div>'; return; }
+  const groups = [...new Set(R.editable.map(x => x.group))];
+  const input = x => {
+    const val = x.kind === 'gbp' ? x.value / 100 : x.value;
+    return `<div class="rule"><div class="rl"><label for="r-${x.path}"><b>${esc(x.label)}</b></label>${x.changed ? ` <span class="chip warn">changed · default ${esc(rfmt(x.kind, x.default))}</span>` : ''}
+      <div class="small muted">${esc(x.help)}</div></div>
+      <div class="ri">${x.kind === 'gbp' ? '<span class="muted">£</span>' : ''}<input type="number" id="r-${x.path}" data-path="${x.path}" data-kind="${x.kind}" value="${val}" min="0" step="1">${x.kind === 'pct' ? '<span class="muted">%</span>' : x.kind === 'hours' ? '<span class="muted">h</span>' : ''}</div></div>`;
+  };
+  const changes = S ? S.activity.filter(a => a.kind === 'rules_changed').slice(-5).reverse() : [];
+  $('rules').innerHTML = `<button class="btn-ghost back" id="rulesBack">← Back to deals</button><h2>Seller rules</h2>
+    <p class="lede">The seller agent works inside these rules. They are enforced in code, not just in the prompt: an offer outside them is refused, and anything between the seller's limit and the hard limit waits for the hotel manager. Nothing in a buyer's email can change them.</p>
+    <div class="card"><div class="label">Who decides</div><div style="overflow-x:auto"><table class="t"><tr><th></th><th>Seller alone</th><th>Hotel manager approves</th><th>Never</th></tr>
+      ${decisions().map(r => `<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="muted">${esc(r[3])}</td></tr>`).join('')}</table></div></div>
+    <div class="card"><div class="label"><span>Change the rules</span><span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">${R.changed ? R.changed + ' changed from the defaults' : 'All at their defaults'}</span></div>
+      <p class="small muted" style="margin-top:0">Changes apply to offers and changes the seller makes after you save. Versions already made keep their terms, and changes stay in place when you reset the scenario.</p>
+      ${rulesErr ? `<div class="next bad" style="margin:8px 0"><div class="who">Not saved</div><p style="margin:0">${esc(rulesErr)}</p></div>` : ''}
+      ${groups.map(g => `<div class="rgroup"><div class="act-day">${esc(g)}</div>${R.editable.filter(x => x.group === g).map(input).join('')}</div>`).join('')}
+      <div class="row" style="margin-top:14px"><button class="btn-p" id="rulesSave">Save changes</button><button class="btn-ghost" id="rulesUndo">Discard edits</button><span class="spacer"></span>${R.changed ? '<button class="btn-bad" id="rulesDefault">Restore defaults</button>' : ''}</div></div>
+    <div class="card"><div class="label">Fixed rules</div><p class="small muted" style="margin-top:0">These come from the hotel's systems and contract terms. They can't be changed here.</p>
+      <dl class="kv">${R.fixed.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(f.text)}</dd>`).join('')}</dl></div>
+    ${changes.length ? `<div class="card"><div class="label">Recent changes</div>${changes.map(a => `<p class="small" style="margin:4px 0">${when(a.at)} · ${esc(cap(a.actor))}: ${esc(a.text)}</p>`).join('')}</div>` : ''}`;
+}
+$('rules').onclick = async e => {
+  if (e.target.closest('#rulesBack')) { location.hash = ''; return; }
+  if (e.target.closest('#rulesUndo')) { rulesErr = ''; renderRules(); return; }
+  if (e.target.closest('#rulesDefault')) {
+    try { R = await api('/api/rules/reset', {}); rulesErr = ''; toast('Rules restored to defaults'); } catch (err) { rulesErr = err.message; }
+    lastJSON = ''; await load(); renderRules(); return;
+  }
+  if (e.target.closest('#rulesSave')) {
+    const changes = {};
+    document.querySelectorAll('#rules input[data-path]').forEach(i => {
+      const x = R.editable.find(r => r.path === i.dataset.path);
+      const v = i.dataset.kind === 'gbp' ? Math.round(parseFloat(i.value) * 100) : parseInt(i.value, 10);
+      if (v !== x.value) changes[x.path] = Number.isFinite(v) ? v : i.value;
+    });
+    if (!Object.keys(changes).length) { toast('Nothing changed'); return; }
+    try { R = await api('/api/rules', {changes}); rulesErr = ''; toast(`Saved ${R.saved} change${R.saved === 1 ? '' : 's'}. The seller uses them from now on.`); }
+    catch (err) { rulesErr = err.message; }
+    lastJSON = ''; await load(); renderRules();
+  }
+};
+
 $('demoBtn').onclick = () => { const o = $('demo').classList.toggle('open'); $('demoBtn').textContent = o ? 'Demo controls ▴' : 'Demo controls ▾'; };
-$('feedScope').onclick = () => { scopeAll = !scopeAll; renderSide(); };
-$('runSeller').onclick = () => api('/api/seller/run', {}).then(load);
-$('auto').onchange = e => api('/api/settings', {auto_seller: e.target.checked}).then(load);
 $('sellerMode').onchange = e => api('/api/settings', {seller_mode: e.target.value}).then(load, load);
 $('buyerMode').onchange = e => api('/api/settings', {buyer_mode: e.target.value}).then(load);
 document.querySelectorAll('[data-h]').forEach(b => b.onclick = () => api('/api/clock', {hours: +b.dataset.h}).then(load));
@@ -437,10 +627,17 @@ $('jump').onclick = () => api('/api/clock', {to: '2027-01-20T09:00:00+00:00'}).t
 $('delayN').onchange = e => api('/api/sim', {delay_refund_notifications: e.target.checked}).then(load);
 $('failCommit').onchange = e => api('/api/sim', {fail_next_commit: e.target.checked}).then(load);
 $('releaseN').onclick = () => api('/api/notifications/release', {}).then(r => { toast(r.results.map(x => x.result).join('; ') || 'Delivered'); load(); });
-$('reset').onclick = () => { if (confirm('Reset the hotel scenario? Airwallex records are kept.')) api('/api/reset', {}).then(() => { sel = null; tab = 'conv'; form = null; lastJSON = ''; load(); }); };
+const askReset = on => { $('resetAsk').hidden = !on; $('reset').hidden = on; if (on) $('resetYes').focus(); };
+$('reset').onclick = () => askReset(true);
+$('resetNo').onclick = () => askReset(false);
+$('resetYes').onclick = async () => {
+  $('resetYes').disabled = true;
+  try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; convOpen = false; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
+  catch (e) {} finally { $('resetYes').disabled = false; }
+};
 $('paste').onclick = () => $('dlg').showModal();
 $('rfpSend').onclick = async e => { e.preventDefault(); const r = await api('/api/inbox', {from: $('rfpFrom').value, subject: $('rfpSubj').value, body: $('rfpBody').value}); $('dlg').close(); sel = r.deal_id; lastJSON = ''; load(); };
-load(); setInterval(load, 1500);
+showView(); load(); setInterval(load, 1500);
 </script>
 </body>
 </html>

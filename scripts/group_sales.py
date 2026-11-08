@@ -49,7 +49,11 @@ engine = Engine(VAR, provider, public_base=PUBLIC)
 
 
 class Runner:
-    """Runs the seller (and, in agent mode, the buyer) in the background when something changes."""
+    """Runs the seller (and, in agent mode, the buyer) in the background when something changes.
+
+    The seller always acts on its own: it wakes on every new email, buyer reply, decision, payment,
+    clock move or rule change, and works until it reaches something that needs a person.
+    """
 
     def __init__(self):
         self.settings = {"auto_seller": True,
@@ -92,7 +96,7 @@ class Runner:
                                     "seller until tomorrow.", actor="system")
                 self.busy = f"seller ({mode})"
                 seller = ClaudeSeller(engine) if mode == "claude" else RulesSeller(engine)
-                self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run()
+                self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
                 for d in list(engine.s["deals"].values()):
@@ -118,7 +122,35 @@ def state():
                    "claude_available": HAS_CLAUDE}
     for d in s["deals"]:
         d["buyer_suggestion"] = suggest(engine, d["id"])
+        d["inbox_url"] = inbox_path(d)
     return s
+
+
+def inbox_path(d) -> str:
+    return f"/inbox/{d['ref']}?t={d['buyer_token']}"
+
+
+def buyer_view(deal_id: str, token: str) -> dict:
+    """What the buyer's mailbox shows: the buyer's own view of the deal (no floors, costs, margins or
+    hotel approvals), its organizer's pending sign-offs, the payment link and the brief's next move."""
+    import secrets as _s
+    d = engine.deal(deal_id)
+    if not _s.compare_digest(token or "", d["buyer_token"]):
+        raise Refused("not authenticated as this deal's buyer")
+    v = engine.deal_view(d["id"], for_="buyer")
+    v["contact"] = (d.get("sender") or "").split("<")[0].strip() or d["company"]
+    v["hotel"] = engine.hotel["name"]
+    v["clock"] = engine.now()
+    v["organizer"] = [{"id": a["id"], "version": a["version"], "reasons": a.get("reasons") or [],
+                       "summary": a.get("summary", "")}
+                      for a in engine.s["approvals"].values()
+                      if a["deal_id"] == d["id"] and a["approver"] == "organizer" and a["status"] == "pending"]
+    v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None
+    v["suggestion"] = suggest(engine, d["id"])
+    v["buyer_mode"] = runner.settings["buyer_mode"]
+    v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
+    v["finance_view"] = engine.finance(d)
+    return v
 
 
 PAY_PAGE = (WEB / "group_pay.html").read_text() if (WEB / "group_pay.html").exists() else ""
@@ -178,6 +210,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, state())
             if p.startswith("/api/buyer/") and p.endswith("/suggest"):
                 return self._send(200, {"suggestion": suggest(engine, p.split("/")[3])})
+            if p.startswith("/inbox/"):
+                d = engine.deal(p.split("/")[2])
+                if q.get("t", "") != d["buyer_token"]:
+                    return self._send(403, "<h1>Not authorized</h1>", "text/html")
+                page = (WEB / "group_buyer.html").read_text()
+                return self._send(200, page.replace("__INBOX__", json.dumps({"id": d["id"], "t": d["buyer_token"]})),
+                                  "text/html")
+            if p.startswith("/api/buyer/") and p.endswith("/view"):
+                return self._send(200, buyer_view(p.split("/")[3], q.get("t", "")))
+            if p == "/api/rules":
+                return self._send(200, engine.rules_view())
             if p.startswith("/pay/"):
                 parts = p.split("/")
                 return self._pay(parts[2], q.get("t", ""), returned=len(parts) > 3 and parts[3] == "return")
@@ -202,12 +245,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._webhook(raw)
             if p == "/api/reset":
                 return self._send(200, engine.reset())
+            if p == "/api/rules":
+                return self._send(200, engine.update_rules(b.get("changes") or {}, actor="hotel manager"))
+            if p == "/api/rules/reset":
+                return self._send(200, engine.reset_rules(actor="hotel manager"))
+            if p.startswith("/api/deals/") and p.endswith("/retry"):
+                return self._send(200, engine.retry_seller(p.split("/")[3], actor="hotel staff"))
+            if p.startswith("/api/buyer/") and p.endswith("/organizer"):
+                did = p.split("/")[3]
+                buyer_view(did, b.get("token", ""))          # checks the buyer token
+                a = engine.s["approvals"].get(b.get("approval_id", ""))
+                if not a or a["deal_id"] != engine.deal(did)["id"] or a["approver"] != "organizer":
+                    return self._send(400, {"error": "no such organizer sign-off on this booking"})
+                return self._send(200, engine.decide_approval(a["id"], b.get("decision"), "organizer", b.get("note", "")))
             if p == "/api/seller/run":
                 threading.Thread(target=runner.run_once, args=("presenter asked the seller to run", True),
                                  daemon=True).start()
                 return self._send(200, {"started": True})
             if p == "/api/settings":
-                for k in ("auto_seller", "seller_mode", "buyer_mode"):
+                for k in ("seller_mode", "buyer_mode"):
                     if k in b:
                         if k == "seller_mode" and b[k] == "claude" and not HAS_CLAUDE:
                             return self._send(400, {"error": "no Anthropic credentials configured"})
@@ -332,6 +388,7 @@ button{{width:100%;padding:12px;border:0;border-radius:8px;background:#612fff;co
 
 def main():
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    runner.wake("server started")       # pick up anything left actionable before a restart
     print(f"Harbour House group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
           f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']})")
     srv.serve_forever()
