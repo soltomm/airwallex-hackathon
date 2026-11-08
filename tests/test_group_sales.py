@@ -895,7 +895,8 @@ def test_access_token_gate(server, monkeypatch):
         code, _, body = _req(mod, path, {"token": "wrong", "action": "message", "text": "hi"},
                              {"Content-Type": "application/json"})
         assert code == 400 and "buyer" in body, path
-    for path in ("/", "/api/state", "/api/buyer/GS-1001/suggest"):
+    for path in ("/", "/api/state", "/api/buyer/GS-1001/suggest", "/assets/openflow.css",
+                 "/assets/openflow.js", "/assets/openflow-demo.js"):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
     for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001",
@@ -1161,6 +1162,21 @@ def test_rules_api(server):
     st, _, body = _req(mod, "/api/rules/reset", {})
     assert st == 200 and json.loads(body)["saved"] == 1 and json.loads(body)["changed"] == 0
     assert mod.engine.policy["quote_validity_hours"] == 24
+
+
+def test_workbench_assets_are_explicit_and_authenticated(server, monkeypatch):
+    monkeypatch.setattr(server, "ACCESS", "asset-demo-token")
+    headers = {"Cookie": "gs_k=asset-demo-token"}
+    for path, mime, marker in (
+        ("/assets/openflow.css", "text/css", ".wb-sidebar"),
+        ("/assets/openflow.js", "text/javascript", "window.OpenFlow="),
+        ("/assets/openflow-demo.js", "text/javascript", "OpenFlowDemo"),
+    ):
+        code, response_headers, body = _req(server, path, headers=headers)
+        assert code == 200 and mime in response_headers["Content-Type"]
+        assert marker in body
+    for path in ("/assets/scenario.json", "/assets/../.env", "/assets/group_sales.html"):
+        assert _req(server, path, headers=headers)[0] == 404
 
 
 # ------------------------------------------------------------------------------ hotel payouts (Payments for Platforms)

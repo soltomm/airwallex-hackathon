@@ -211,6 +211,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
+            assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
+                      "/assets/openflow-demo.js": ("openflow-demo.js", "text/javascript"),
+                      "/assets/openflow.js": ("openflow.js", "text/javascript")}
+            if p in assets:
+                name, mime = assets[p]
+                return self._send(200, (WEB / name).read_text(), mime)
             if p == "/api/state":
                 return self._send(200, state())
             if p.startswith("/api/buyer/") and p.endswith("/suggest"):
