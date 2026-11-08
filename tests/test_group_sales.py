@@ -900,7 +900,7 @@ def test_access_token_gate(server, monkeypatch):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
     for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001",
-                 "/api/buyer/GS-1001/agent"):
+                 "/api/buyer/GS-1001/agent", "/api/deals/GS-1001/retry_payout"):
         code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
         assert code == 401 and "access token required" in body, path
     assert mod.engine.s["run_id"] == run_id                                       # the refused reset changed nothing
@@ -1177,3 +1177,105 @@ def test_workbench_assets_are_explicit_and_authenticated(server, monkeypatch):
         assert marker in body
     for path in ("/assets/scenario.json", "/assets/../.env", "/assets/group_sales.html"):
         assert _req(server, path, headers=headers)[0] == 404
+
+
+# ------------------------------------------------------------------------------ hotel payouts (Payments for Platforms)
+def test_hotel_paid_by_funds_split_and_share_of_refund_clawed_back(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    dep = e._deposit_op(n)
+    assert e.provider.get_intent(dep["payment_intent_id"])["connected_account_id"] == "acct_sim_harbour_house"
+    [pay_op] = e._payout_ops(n, "payout")
+    assert (pay_op["status"], pay_op["gross"], pay_op["amount"], pay_op["commission"]) == ("paid", 384000, 345600, 38400)
+    [split] = e.provider.find_funds_splits(dep["payment_intent_id"])
+    assert (split["amount"], split["destination"], split["status"]) == (345600, "acct_sim_harbour_house", "RELEASED")
+    assert e.payout_view(n)["status"] == "paid"
+
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")                                  # change request
+    s.run()
+    buyer_turn(e, "Northstar")                                  # accept the amendment
+    s.run()                                                      # refund above £500 -> approval
+    appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    s.run()
+    assert e.finance(n)["net_received"] == 331200               # the buyer-side figures are unchanged
+    [rev] = e._payout_ops(n, "payout_reversal")
+    assert (rev["status"], rev["refund"], rev["amount"], rev["commission_returned"]) == ("reversed", 52800, 47520, 5280)
+    pv = e.payout_view(n)
+    assert (pv["hotel_paid"], pv["hotel_clawed_back"], pv["hotel_net"], pv["platform_fee"]) == (345600, 47520, 298080, 33120)
+    assert pv["hotel_net"] + pv["platform_fee"] == e.finance(n)["net_received"]
+
+    # Late and repeated refund notifications take nothing back twice.
+    e.release_notifications()
+    evt = {"id": "evt_again2", "name": "refund.accepted", "data": {"object": {"id": e._refund_ops(n)[0]["provider_id"],
+                                                                               "metadata": {"run_id": e.s["run_id"]}}}}
+    e.handle_event(evt, verified=True)
+    e.handle_event(evt, verified=True)
+    e._settle_payouts(n)
+    assert len(e._payout_ops(n, "payout_reversal")) == 1 and len(e.provider.db["reversals"]) == 1
+    assert len(e.provider.find_funds_splits(dep["payment_intent_id"])) == 1
+    assert [x["amount"] for x in e.s["payout_ledger"]] == [345600, -47520]
+
+    # Payouts are platform/hotel bookkeeping: never in the buyer's view.
+    raw = json.dumps(e.deal_view(n["id"], for_="buyer"))
+    assert "acct_" not in raw and "commission" not in raw and "payout" not in raw
+    assert e.deal_view(n["id"], for_="seller")["payouts"]["hotel_net"] == 298080
+
+
+def test_payout_timeout_recovered_by_lookup_without_a_second_split(eng):
+    e = eng
+    e.provider.knobs["timeout_next_split"] = True
+    s, n = run_to_confirmed(e)
+    [pay_op] = e._payout_ops(n, "payout")
+    assert pay_op["status"] == "paid"
+    assert len(e.provider.find_funds_splits(e._deposit_op(n)["payment_intent_id"])) == 1
+    assert any(a["kind"] == "recovered" and "funds split" in a["text"] for a in e.s["activity"])
+
+
+def test_refused_payout_keeps_the_booking_and_can_be_retried(eng):
+    e = eng
+    e.provider.knobs["fail_next_split"] = True
+    s, n = run_to_confirmed(e)
+    assert n["status"] == "confirmed"                            # the booking stands
+    assert e.payout_view(n)["status"] == "failed"
+    assert any(f.startswith("hotel payout refused") for f in n["flags"])
+    assert e.provider.find_funds_splits(e._deposit_op(n)["payment_intent_id"]) == []
+    e._settle_payouts(n)                                         # no automatic resend of a refused split
+    assert e.provider.find_funds_splits(e._deposit_op(n)["payment_intent_id"]) == []
+    pv = e.retry_payout(n["id"])
+    assert pv["status"] == "paid" and pv["hotel_paid"] == 345600
+    assert len(e.provider.find_funds_splits(e._deposit_op(n)["payment_intent_id"])) == 1
+    assert not any(f.startswith("hotel payout refused") for f in n["flags"])
+
+
+def test_clawback_timeout_resent_with_the_same_request_id(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    e.provider.knobs["timeout_next_split"] = True                # the reversal's reply is lost
+    s.run()
+    [rev] = e._payout_ops(n, "payout_reversal")
+    assert rev["status"] == "unknown"
+    e._settle_payouts(n)                                         # resend: same request_id, refused as a duplicate
+    assert rev["status"] == "reversed"
+    assert len(e.provider.db["reversals"]) == 1
+    assert [x["amount"] for x in e.s["payout_ledger"]] == [345600, -47520]
+
+
+def test_without_a_connected_account_the_platform_holds_the_deposit(tmp_path, monkeypatch):
+    monkeypatch.delenv("GS_HOTEL_ACCOUNT", raising=False)
+    p = SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0)
+    p.default_account = None
+    e = Engine(tmp_path / "var", p)
+    s, n = run_to_confirmed(e)
+    assert n["status"] == "confirmed"
+    assert e.provider.get_intent(e._deposit_op(n)["payment_intent_id"])["connected_account_id"] is None
+    assert e._payout_ops(n, "payout") == [] and e.payout_view(n)["status"] == "no_account"
+    assert any(f.startswith("no hotel connected account") for f in n["flags"])

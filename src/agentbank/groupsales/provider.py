@@ -3,10 +3,17 @@
 Both return plain dicts with amounts in pence. The engine never sees API credentials beyond
 this module, and neither agent ever sees this module.
 
-Airwallex endpoints used (Payment Acceptance):
+Airwallex endpoints used (Payment Acceptance and Payments for Platforms):
   POST /pa/payment_intents/create          GET /pa/payment_intents/{id}
   GET  /pa/payment_intents?merchant_order_id=   POST /pa/payment_intents/{id}/cancel
   POST /pa/refunds/create                  GET /pa/refunds/{id}      GET /pa/refunds?payment_intent_id=
+  POST /pa/funds_splits/create             GET /pa/funds_splits?source_id=
+  POST /pa/funds_split_reversals/create
+
+The platform owns each card payment ("collect payments directly") and tags it with the hotel's
+connected account; once the payment has SUCCEEDED, a funds split pays the hotel its share and the
+platform's commission stays behind. A refund is paid from the platform, and a funds split reversal
+takes the hotel's share of it back.
 """
 from __future__ import annotations
 
@@ -35,6 +42,13 @@ def _intent(raw: dict) -> dict:
             "captured_amount": to_pence(raw.get("captured_amount") or 0), "request_id": raw.get("request_id")}
 
 
+def _split(raw: dict) -> dict:
+    return {"id": raw.get("id"), "status": raw.get("status"), "amount": to_pence(raw.get("amount", 0)),
+            "currency": raw.get("currency"), "destination": raw.get("destination"),
+            "source_id": raw.get("source_id"), "request_id": raw.get("request_id"),
+            "metadata": raw.get("metadata") or {}}
+
+
 def _refund(raw: dict) -> dict:
     return {"id": raw.get("id"), "status": raw.get("status"), "amount": to_pence(raw.get("amount", 0)),
             "currency": raw.get("currency"), "payment_intent_id": raw.get("payment_intent_id"),
@@ -45,6 +59,7 @@ def _refund(raw: dict) -> dict:
 class AirwallexProvider:
     name = "airwallex"
     hosted = True
+    default_account = None   # the hotel's connected account comes from GS_HOTEL_ACCOUNT
 
     def __init__(self, client=None):
         if client is None:
@@ -54,12 +69,15 @@ class AirwallexProvider:
         self.c = client
 
     def create_intent(self, request_id: str, amount: int, currency: str, merchant_order_id: str,
-                      metadata: dict, return_url: str | None = None) -> dict:
+                      metadata: dict, return_url: str | None = None,
+                      connected_account_id: str | None = None) -> dict:
         body = {"request_id": request_id, "amount": to_major(amount), "currency": currency,
                 "merchant_order_id": merchant_order_id, "metadata": metadata,
                 "descriptor": "Harbour House deposit"}
         if return_url:
             body["return_url"] = return_url
+        if connected_account_id:
+            body["connected_account_id"] = connected_account_id
         return _intent(self.c.post("/pa/payment_intents/create", body))
 
     def get_intent(self, intent_id: str) -> dict:
@@ -81,6 +99,26 @@ class AirwallexProvider:
     def get_refund(self, refund_id: str) -> dict:
         return _refund(self.c.get(f"/pa/refunds/{refund_id}"))
 
+    # Payments for Platforms: only on a SUCCEEDED intent; whatever is not split stays with the platform.
+    def create_funds_split(self, request_id: str, intent_id: str, amount: int, destination: str,
+                           metadata: dict) -> dict:
+        return _split(self.c.post("/pa/funds_splits/create", {
+            "request_id": request_id, "source_id": intent_id, "source_type": "PAYMENT_INTENT",
+            "amount": to_major(amount), "destination": destination, "metadata": metadata,
+            "auto_release": True}))
+
+    def find_funds_splits(self, intent_id: str) -> list[dict]:
+        r = self.c.get("/pa/funds_splits", params={"source_id": intent_id})
+        return [_split(x) for x in r.get("items", [])]
+
+    def reverse_funds_split(self, request_id: str, split_id: str, amount: int, metadata: dict) -> dict:
+        r = self.c.post("/pa/funds_split_reversals/create", {
+            "request_id": request_id, "funds_split_id": split_id, "amount": to_major(amount),
+            "metadata": metadata})
+        return {"id": r.get("id"), "status": r.get("status"),
+                "amount": to_pence(r["amount"]) if r.get("amount") is not None else amount,
+                "funds_split_id": r.get("funds_split_id", split_id), "request_id": r.get("request_id")}
+
     def find_refunds(self, intent_id: str) -> list[dict]:
         r = self.c.get("/pa/refunds", params={"payment_intent_id": intent_id})
         return [_refund(x) for x in r.get("items", [])]
@@ -94,15 +132,19 @@ class SimulatedProvider:
     """
     name = "simulated"
     hosted = False
+    default_account = "acct_sim_harbour_house"   # a stand-in connected account for the hotel
 
     def __init__(self, path: str | Path | None = None, refund_settle_seconds: float = 2.0):
         self.path = Path(path) if path else None
         self.lock = threading.RLock()
         self.refund_settle_seconds = refund_settle_seconds
-        self.knobs = {"timeout_next_create": False, "fail_next_refund": False}
+        self.knobs = {"timeout_next_create": False, "fail_next_refund": False,
+                      "timeout_next_split": False, "fail_next_split": False}
         from ..storage import doc
         self.store = doc(self.path) if self.path else None
         self.db = (self.store.read() if self.store else None) or {"intents": {}, "refunds": {}, "requests": {}}
+        self.db.setdefault("splits", {})
+        self.db.setdefault("reversals", {})
 
     def _save(self):
         if self.store:
@@ -119,7 +161,8 @@ class SimulatedProvider:
             return True
         return False
 
-    def create_intent(self, request_id, amount, currency, merchant_order_id, metadata, return_url=None):
+    def create_intent(self, request_id, amount, currency, merchant_order_id, metadata, return_url=None,
+                      connected_account_id=None):
         with self.lock:
             self._dupe(request_id)
             iid = "int_sim_" + uuid.uuid4().hex[:18]
@@ -127,7 +170,8 @@ class SimulatedProvider:
                                        "currency": currency, "merchant_order_id": merchant_order_id,
                                        "client_secret": "sim_secret_" + uuid.uuid4().hex[:12],
                                        "metadata": metadata, "captured_amount": 0, "request_id": request_id,
-                                       "return_url": return_url, "created": time.time()}
+                                       "return_url": return_url, "connected_account_id": connected_account_id,
+                                       "created": time.time()}
             self.db["requests"][request_id] = iid
             self._save()
             if self._maybe_timeout(request_id, "POST", "/pa/payment_intents/create"):
@@ -189,6 +233,56 @@ class SimulatedProvider:
             if self._maybe_timeout(request_id, "POST", "/pa/refunds/create"):
                 raise AmbiguousResult("POST", "/pa/refunds/create", request_id, "simulated timeout")
             return self._public_refund(rid)
+
+    def _knob(self, name: str) -> bool:
+        on = bool(self.knobs.get(name))
+        self.knobs[name] = False
+        return on
+
+    def create_funds_split(self, request_id, intent_id, amount, destination, metadata):
+        with self.lock:
+            self._dupe(request_id)
+            i = self.db["intents"].get(intent_id)
+            if not i or i["status"] != "SUCCEEDED":
+                raise AirwallexError(400, "invalid_status_for_operation", "funds split needs a SUCCEEDED intent", {})
+            if not str(destination).startswith("acct_"):
+                raise AirwallexError(400, "invalid_argument", "destination must be a connected account", {})
+            split = sum(x["amount"] for x in self.db["splits"].values() if x["source_id"] == intent_id)
+            if split + amount > i["captured_amount"]:
+                raise AirwallexError(400, "amount_exceeded", "splits exceed the captured amount", {})
+            if self._knob("fail_next_split"):
+                raise AirwallexError(400, "connected_account_not_enabled", "simulated split refusal", {})
+            sid = "fs_sim_" + uuid.uuid4().hex[:18]
+            self.db["splits"][sid] = {"id": sid, "status": "RELEASED", "amount": amount, "currency": i["currency"],
+                                      "destination": destination, "source_id": intent_id, "request_id": request_id,
+                                      "metadata": metadata, "created": time.time()}
+            self.db["requests"][request_id] = sid
+            self._save()
+            if self._knob("timeout_next_split"):
+                raise AmbiguousResult("POST", "/pa/funds_splits/create", request_id, "simulated timeout")
+            return dict(self.db["splits"][sid])
+
+    def find_funds_splits(self, intent_id):
+        with self.lock:
+            return [dict(x) for x in self.db["splits"].values() if x["source_id"] == intent_id]
+
+    def reverse_funds_split(self, request_id, split_id, amount, metadata):
+        with self.lock:
+            self._dupe(request_id)
+            sp = self.db["splits"].get(split_id)
+            if not sp:
+                raise AirwallexError(404, "resource_not_found", "no such funds split", {})
+            reversed_ = sum(x["amount"] for x in self.db["reversals"].values() if x["funds_split_id"] == split_id)
+            if reversed_ + amount > sp["amount"]:
+                raise AirwallexError(400, "amount_exceeded", "reversals exceed the split", {})
+            rid = "fsr_sim_" + uuid.uuid4().hex[:18]
+            self.db["reversals"][rid] = {"id": rid, "status": "SUCCEEDED", "amount": amount, "funds_split_id": split_id,
+                                         "request_id": request_id, "metadata": metadata, "created": time.time()}
+            self.db["requests"][request_id] = rid
+            self._save()
+            if self._knob("timeout_next_split"):
+                raise AmbiguousResult("POST", "/pa/funds_split_reversals/create", request_id, "simulated timeout")
+            return dict(self.db["reversals"][rid])
 
     def _advance_refund(self, rid):
         r = self.db["refunds"][rid]

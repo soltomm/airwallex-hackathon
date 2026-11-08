@@ -262,6 +262,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
             if p.startswith("/api/deals/") and p.endswith("/retry"):
                 return self._send(200, engine.retry_seller(p.split("/")[3], actor="hotel staff"))
+            if p.startswith("/api/deals/") and p.endswith("/retry_payout"):
+                return self._send(200, engine.retry_payout(p.split("/")[3], actor="hotel staff"))
             if p.startswith("/api/buyer/") and p.endswith("/organizer"):
                 did = p.split("/")[3]
                 buyer_view(did, b.get("token", ""))          # checks the buyer token
