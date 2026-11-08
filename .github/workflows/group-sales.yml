@@ -1,0 +1,33 @@
+name: Group sales
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e '.[agent]' pytest
+      - name: Harbour backend tests
+        env:
+          PYTHONPATH: src
+          PAYMENTS: simulated
+          SELLER_MODE: rules
+        run: python -m pytest tests -q
+      - name: Simulator state transitions and frontend syntax
+        run: |
+          node --test tests/test_openflow_demo.cjs
+          node --check web/openflow.js
+          node --check web/openflow-demo.js
