@@ -179,14 +179,14 @@ def test_no_overselling(eng):
     s = RulesSeller(e)
     s.run()
     buyer_turn(e, "Northstar")
-    s.run()                                                          # holds 12 of 13 twins
+    s.run()                                                          # holds 12 of 14 twins
     e.ingest_email("Ops <ops@other.example>", "Group RFP", "Please quote 5 twin rooms for 10 guests arriving 10 March "
                    "and departing 13 March 2027. No meeting room is needed. Billed to Other Corp Ltd. Reply by 14 "
                    "January at noon.", wake=False)
     s.run()
     other = deal_by(e, "other.example")
     v = other["versions"][-1]
-    assert v["terms"]["rooms"]["2027-03-10"] == 1 and v["unmet"]     # alternative: only 1 left
+    assert v["terms"]["rooms"]["2027-03-10"] == 2 and v["unmet"]     # alternative: only 2 left
     for night in H["nights"]:
         inv = e.s["inventory"][night]["twin"]
         assert inv["held"] + inv["booked"] <= inv["capacity"]
