@@ -11,8 +11,10 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -41,6 +43,10 @@ PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_U
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
 OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
+# The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
+# token instead, so a buyer can use the link without the hotel's access token. Presenter tools
+# (/api/buyer/<id>/suggest and /agent) still need the dashboard token.
+BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view|/organizer)?)$")
 WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
@@ -182,10 +188,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _authorized(self, path: str, q: dict) -> bool:
-        if not ACCESS or path.startswith(OPEN_PATHS):
+        if not ACCESS or path.startswith(OPEN_PATHS) or BUYER_PATHS.match(path):
             return True
         cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
-        import hmac
         return hmac.compare_digest(cookies.get("gs_k", ""), ACCESS) or hmac.compare_digest(q.get("k", ""), ACCESS)
 
     def do_GET(self):
@@ -212,7 +217,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"suggestion": suggest(engine, p.split("/")[3])})
             if p.startswith("/inbox/"):
                 d = engine.deal(p.split("/")[2])
-                if q.get("t", "") != d["buyer_token"]:
+                if not hmac.compare_digest(q.get("t", ""), d["buyer_token"]):
                     return self._send(403, "<h1>Not authorized</h1>", "text/html")
                 page = (WEB / "group_buyer.html").read_text()
                 return self._send(200, page.replace("__INBOX__", json.dumps({"id": d["id"], "t": d["buyer_token"]})),
