@@ -45,7 +45,7 @@ from agentbank.groupsales.provider import SimulatedProvider  # noqa: E402
 from agentbank.groupsales.seller import TOOLS, ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.groupsales.trace import TOOLS as TRACE_TOOLS  # noqa: E402
 
-STATUSES = {"new", "intake", "needs_info", "pending_approval", "approved_to_send", "revise", "offer_sent",
+STATUSES = {"new", "intake", "needs_info", "dates_proposed", "pending_approval", "approved_to_send", "revise", "offer_sent",
             "acceptance_pending_organizer", "accepted", "awaiting_payment", "confirmed", "amendment_sent",
             "amendment_review", "amendment_approved", "refund_due", "refund_awaiting_approval", "refund_pending",
             "refund_failed", "expired", "handoff", "declined", "lost", "payment_received_booking_exception"}
@@ -157,6 +157,14 @@ class ChaosSeller:
             return {**a, "version": r.randint(1, 5)}
         if name == "ask_buyer":
             return {**a, "questions": ["payer?"], "message": "Who pays?"}
+        if name == "suggest_dates":
+            return {**a, "room_type": r.choice([None, "twin", "king"])}
+        if name == "offer_dates":
+            return {**a, "message_to_buyer": r.choice(["", "Other dates."]), "options": [
+                {"arrival": r.choice(["2027-03-10", "2027-03-11", "2027-05-11", "bad"]),
+                 "departure": r.choice(["2027-03-13", "2027-03-12", "2027-03-10", "2027-05-14"]),
+                 "room_type": r.choice([None, "twin", "king"]), "rooms_per_night": r.choice([None, 0, 2, 12, 40])}
+                for _ in range(r.randint(0, 2))]}
         if name == "prepare_reduction":
             return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": ""}
         if name == "refund_excess":
@@ -237,6 +245,11 @@ class Case:
         sug = suggest(self.e, d["id"]) if d.get("buyer_profile") else None
         if sug and r < 0.5:
             act, text, payload = sug["action"], sug.get("text", ""), sug.get("payload") or {}
+        elif d["status"] == "dates_proposed" and r < 0.6:
+            opts = next((m["date_options"] for m in reversed(d["thread"]) if m.get("date_options")), [])
+            o = self.rng.choice(opts + [{"arrival": "2027-05-11", "departure": "2027-05-14"}])
+            act, text, payload = "reply", self.rng.choice(["Those dates work.", "Can you do May?", ""]), \
+                {"dates": {"arrival": o["arrival"], "departure": o["departure"]}} if self.rng.random() < 0.7 else {}
         elif d["status"] == "needs_info":
             act, text = "reply", "Here are the answers."
             payload = {"answers": {"meeting_layout": self.rng.choice(["classroom", "theatre"]),
@@ -361,6 +374,12 @@ class Case:
             a = pend[0]
             self.e.decide_approval(a["id"], "approve", a["approver"])
             self.log(f"coop: {a['approver']} approves {a['subject']} on {d['ref']}")
+        elif st == "dates_proposed":
+            o = next((m["date_options"] for m in reversed(d["thread"]) if m.get("date_options")), [None])[0]
+            if o:
+                self.e.buyer_action(d["id"], tok, "reply", "Those dates work for us.",
+                                    {"dates": {"arrival": o["arrival"], "departure": o["departure"]}})
+                self.log(f"coop: picks {o['arrival']} on {d['ref']}")
         elif st == "needs_info":
             self.e.buyer_action(d["id"], tok, "reply", "Answers below.", {"answers": {
                 "meeting_layout": "classroom", "payer": "Coop Demo Ltd", "budget_includes_taxes": True}})

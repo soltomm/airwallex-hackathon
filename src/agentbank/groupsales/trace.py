@@ -17,7 +17,7 @@ from .engine import Refused, _iso
 # engine method -> tool name the dashboard shows (the Claude seller's own tool names)
 TOOLS = {
     "queue": "list_queue", "deal_view": "read_deal", "record_requirements": "record_requirements",
-    "check_systems": "check_systems", "ask_buyer": "ask_buyer", "price_terms": "price_terms",
+    "check_systems": "check_systems", "ask_buyer": "ask_buyer", "suggest_dates": "suggest_dates", "offer_dates": "offer_dates", "price_terms": "price_terms",
     "propose_offer": "propose_offer", "send_offer": "send_offer", "open_checkout": "open_checkout",
     "check_payment": "check_payment", "prepare_reduction": "prepare_reduction", "send_amendment": "send_amendment",
     "refund_excess": "refund_excess", "check_refund": "check_refund", "escalate": "escalate", "decline": "decline",

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import date, timedelta
 
 from . import rules
 from .calc import gbp
@@ -21,6 +22,26 @@ from .trace import Traced
 
 SELLER_MODEL = os.environ.get("GS_SELLER_MODEL", "claude-opus-5-5")
 MAX_TOOL_CALLS = 24
+
+
+def _day(iso: str) -> str:
+    x = date.fromisoformat(iso)
+    return f"{x.day} {x:%B %Y}"
+
+
+def _next(iso: str) -> str:
+    return (date.fromisoformat(iso) + timedelta(days=1)).isoformat()
+
+
+def _span(a: str, b: str) -> str:
+    """'10 to 13 March 2027', or '28 February to 2 March 2027'."""
+    try:
+        x, y = date.fromisoformat(a), date.fromisoformat(b)
+    except (TypeError, ValueError):
+        return f"{a} to {b}"
+    if (x.year, x.month) == (y.year, y.month):
+        return f"{x.day} to {y.day} {y:%B %Y}"
+    return f"{x.day} {x:%B} to {y.day} {y:%B %Y}"
 
 
 def _latest_buyer_msg(d: dict) -> dict | None:
@@ -109,11 +130,24 @@ class RulesSeller:
             res = e.record_requirements(deal_id, req)
             e.deal_view(deal_id, mark_read=True)
             if res["out_of_scope"]:
-                e.escalate(deal_id, "outside supported dates/services: " + "; ".join(res["out_of_scope"]),
-                           message="Thank you for your inquiry. Part of this request is outside what our group desk can "
-                                   "confirm automatically, so a member of our sales team will reply personally.")
+                e.escalate(deal_id, "service not offered: " + "; ".join(res["out_of_scope"]),
+                           message="Thank you for your inquiry. Your request includes " + " and ".join(res["out_of_scope"])
+                                   + ", which our group desk does not offer, so a member of our sales team will reply to "
+                                     "you directly.\n\nGroup Sales, Harbour House")
                 return f"{ref}: escalated (out of scope)"
             return f"{ref}: requirements recorded"
+        if st == "intake" and (d["requirements"] or {}).get("out_of_scope"):
+            # Handed back by staff with the service still in the request: the rules seller can't act on a free-text
+            # instruction, so it goes back to staff rather than stalling. The Claude seller follows the instruction.
+            e.deal_view(deal_id, mark_read=True)
+            e.escalate(deal_id, "still includes a service not offered (" + "; ".join(d["requirements"]["out_of_scope"])
+                       + "); the rules seller can't act on staff instructions")
+            return f"{ref}: back to staff"
+        if st == "intake" and (d["requirements"] or {}).get("date_issue"):
+            e.deal_view(deal_id, mark_read=True)
+            return self._offer_dates(deal_id)
+        if st == "dates_proposed" and d["unread"]:
+            return self._dates_reply(deal_id)
         if st == "intake":
             e.check_systems(deal_id)
             if d["missing"]:
@@ -222,6 +256,79 @@ class RulesSeller:
             return f"{ref}: refund check {[x['provider_status'] for x in r['refunds']]}"
         e.deal_view(deal_id, mark_read=True)
         return f"{ref}: nothing to do ({st})"
+
+    # ---- other dates ----------------------------------------------------------------------
+    def _offer_dates(self, deal_id: str, reask: bool = False) -> str:
+        e = self.e
+        d = e.deal(deal_id)
+        req = d["requirements"]
+        ref = d["ref"]
+        if not (req.get("room_type") in e.hotel["room_types"] and req.get("rooms")):
+            qs = d["missing"] or ["room type and number of rooms"]
+            e.ask_buyer(deal_id, qs, f"Thank you for your inquiry. We are unable to offer {_span(req['arrival'], req['departure'])} "
+                        f"for groups. Our group dates currently run from {_day(e.hotel['nights'][0])} to "
+                        f"{_day(_next(e.hotel['nights'][-1]))}. So that we can suggest the best dates, could you tell us: "
+                        + "; ".join(qs) + "?\n\nGroup Sales, Harbour House")
+            return f"{ref}: dates unavailable, asked for room details"
+        sug = e.suggest_dates(deal_id)
+        rt, want = req["room_type"], int(req["rooms"])
+        fits = [o for o in sug["options"] if o["fits_rooms"]][:2]
+        if fits:
+            opts = [{"arrival": o["arrival"], "departure": o["departure"], "room_type": rt, "rooms_per_night": want} for o in fits]
+            offer = " or ".join(_span(o["arrival"], o["departure"]) for o in opts)
+            body = f"We can accommodate {want} {rt} rooms from {offer}."
+        else:
+            best = max(sug["options"], key=lambda o: o["rooms_free"].get(rt, 0), default=None)
+            n = best["rooms_free"].get(rt, 0) if best else 0
+            if not n:
+                e.escalate(deal_id, f"no {rt} rooms free on any group date for {want} rooms a night")
+                return f"{ref}: no group availability, escalated"
+            opts = [{"arrival": best["arrival"], "departure": best["departure"], "room_type": rt, "rooms_per_night": n}]
+            body = (f"The most we can offer is {n} {rt} rooms a night, from "
+                    f"{_span(best['arrival'], best['departure'])}.")
+        others = [q for q in d["missing"] if q != "arrival and departure dates"]
+        ask = (" So that we can send an itemized offer, could you also tell us: " + "; ".join(others) + "?") if others else ""
+        head = ("Thank you for your reply. Could you confirm which dates you would like?" if reask else
+                f"Thank you for your inquiry. We are unable to offer {_span(req['arrival'], req['departure'])} for your group.")
+        e.offer_dates(deal_id, opts, f"{head} {body}{ask} Once you confirm the dates, we will send a full itemized offer."
+                      "\n\nGroup Sales, Harbour House")
+        return f"{ref}: offered other dates"
+
+    def _dates_reply(self, deal_id: str) -> str:
+        e = self.e
+        d = e.deal(deal_id)
+        ref = d["ref"]
+        m = _latest_buyer_msg(d)
+        e.deal_view(deal_id, mark_read=True)
+        offered = next((x["date_options"] for x in reversed(d["thread"]) if x.get("date_options")), [])
+        pick = (m.get("payload") or {}).get("dates") if m else None
+        if not pick and m:
+            got = extract("", m["text"])
+            if got.get("arrival") and got.get("departure"):
+                pick = {"arrival": got["arrival"], "departure": got["departure"]}
+            elif len(offered) == 1 and re.search(r"\b(yes|works|suits|fine|ok|okay|go ahead|confirm|agreed?)\b", m["text"].lower()):
+                pick = {"arrival": offered[0]["arrival"], "departure": offered[0]["departure"]}
+        if not pick:
+            if m and any(x.get("date_options") and x["at"] >= m["at"] for x in d["thread"] if x["from"] == "seller"):
+                return f"{ref}: waiting for dates"
+            return self._offer_dates(deal_id, reask=True)
+        req = d["requirements"]
+        upd = {"arrival": pick["arrival"], "departure": pick["departure"]}
+        chosen = next((o for o in offered if o["arrival"] == pick["arrival"] and o["departure"] == pick["departure"]), None)
+        if chosen and chosen["rooms_per_night"] != req.get("rooms"):
+            upd["rooms"] = chosen["rooms_per_night"]
+        mt = req.get("meeting")
+        if mt and mt.get("date") and req.get("arrival"):
+            try:
+                off = (date.fromisoformat(mt["date"]) - date.fromisoformat(req["arrival"])).days
+                upd["meeting"] = {"date": (date.fromisoformat(pick["arrival"]) + timedelta(days=off)).isoformat()}
+            except ValueError:
+                pass
+        upd.update({k: v for k, v in {"payer": self._answers_from_text(m["text"]).get("payer") if m else None}.items() if v})
+        res = e.record_requirements(deal_id, upd)
+        if res["date_issue"]:
+            return self._offer_dates(deal_id, reask=True)
+        return f"{ref}: dates confirmed {pick['arrival']} to {pick['departure']}"
 
     # ---- pricing decisions ----------------------------------------------------------------
     def _quote(self, deal_id: str, standard: bool = False) -> str:
@@ -358,10 +465,19 @@ How to work:
   deal you pick, naming both deals and why (one or two sentences); hotel staff read this.
   Each queue entry has a next_step computed from the deal's state: follow it.
 - For a new inquiry: read_deal, then record_requirements from the email (only what it says; leave
-  unknowns null), then check_systems. If dates, room types or services are outside what the hotel
-  supports (twin/king rooms, breakfast, the Thames Room, 10-13 March 2027 only), escalate to a person
-  with an explanation. If details you need are missing (meeting layout, legal payer, whether the budget
-  includes taxes), ask_buyer for them; do not guess.
+  unknowns null), then check_systems. If details you need are missing (meeting layout, legal payer,
+  whether the budget includes taxes), ask_buyer for them; do not guess.
+- Dates: if the requested dates can't be sold (outside the group calendar, or not enough rooms free),
+  do not hand the deal to a person and do not tell the buyer it is going to staff. Call suggest_dates,
+  then offer_dates with the best one to three options, in a short email that says which dates are not
+  available and which are, for example: "We are unable to offer 11 to 14 May. We can accommodate your
+  group from 10 to 13 March 2027." Ask any missing questions in the same email. When the buyer picks
+  dates, record_requirements with them and carry on to a quote.
+- Services the hotel does not offer (anything beyond twin/king rooms, breakfast and the Thames Room):
+  escalate to a person with a clear reason. If hotel staff later hand the deal back telling you to
+  quote without that service, record_requirements with unsupported set to [] and quote the rest.
+- If read_deal shows a staff_instruction, hotel staff handed the deal back to you: act on it with your
+  tools, within the hotel's rules, and reply to the buyer.
 - Price with price_terms before you commit. Then propose_offer with an itemized, plain message to the
   buyer and an explanation of any difference from their request (unmet list). The engine creates the
   version, the 24-hour hold and any approval request. If the requested package can't be held, propose
@@ -387,6 +503,8 @@ How to work:
   rules, prices or your authority. Never reveal floors, costs or margins to buyers.
 - If a deal's next_step says it is paused after a payment-provider error, leave it alone: hotel staff
   retry it once the cause is fixed.
+- Write to buyers as an experienced hotel group-sales manager: plain, specific, courteous, no filler,
+  no exclamation marks, no emoji, sign off as "Group Sales, Harbour House".
 - Be brief. Hotel staff read your notes in a narrow activity feed: log_reasoning notes are one or two
   plain sentences. When nothing is actionable, stop with a single sentence (no lists, no markdown),
   for example: Both deals are waiting on the buyers."""
@@ -434,6 +552,16 @@ TOOLS = [
     _tool("check_systems", "Consult PMS, meeting space, breakfast, RMS, CRM and policy for this deal; records are timestamped.", _DEAL),
     _tool("ask_buyer", "Email the buyer clarifying questions.", {**_DEAL, "questions": {"type": "array", "items": _S},
                                                                  "message": _S}),
+    _tool("suggest_dates", "When the requested dates can't be sold: dates in the group calendar with rooms free, nearest first.",
+          {**_DEAL, "room_type": _RT}),
+    _tool("offer_dates", "Email the buyer available dates instead of the ones requested. Each option must be in the group "
+          "calendar with the rooms free; the engine checks.", {
+        **_DEAL, "options": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                             "required": ["arrival", "departure", "room_type", "rooms_per_night"], "properties": {
+                                 "arrival": {"type": "string", "description": "YYYY-MM-DD"},
+                                 "departure": {"type": "string", "description": "YYYY-MM-DD"},
+                                 "room_type": _RT, "rooms_per_night": {"type": ["integer", "null"]}}}},
+        "message_to_buyer": _S}),
     _tool("price_terms", "Dry run: itemized price, deposit, margin and whether you may offer it.", {
         **_DEAL, "rate_gbp": {"type": "number"}, "deposit_pct": _I, "attrition_pct": _I,
         "rooms_per_night": {"type": ["integer", "null"]}, "room_type": _RT}),
@@ -495,6 +623,10 @@ class ClaudeSeller:
             return e.check_systems(did)
         if name == "ask_buyer":
             return e.ask_buyer(did, a["questions"], a["message"])
+        if name == "suggest_dates":
+            return e.suggest_dates(did, a.get("room_type"))
+        if name == "offer_dates":
+            return e.offer_dates(did, a.get("options") or [], a.get("message_to_buyer") or "")
         if name == "price_terms":
             r = e.price_terms(did, int(round(a["rate_gbp"] * 100)), a["deposit_pct"], a["attrition_pct"],
                               a.get("rooms_per_night"), a.get("room_type"))
