@@ -884,10 +884,22 @@ def test_access_token_gate(server, monkeypatch):
     code, _, body = _req(mod, "/webhooks/airwallex", b"{}", {"Content-Type": "application/json"})
     assert code == 401 and "bad signature" in body                                # reached the webhook's own check
     # Everything else needs the token.
+    # The buyer's mailbox and its own moves are past the gate too, stopped by the buyer token instead.
+    code, _, body = _req(mod, "/inbox/GS-1001?t=wrong")
+    assert code == 403 and "Not authorized" in body
+    assert _req(mod, f"/inbox/GS-1001?t={d['buyer_token']}")[0] == 200
+    code, _, body = _req(mod, "/api/buyer/GS-1001/view?t=wrong")
+    assert code == 400 and "buyer" in body
+    assert _req(mod, f"/api/buyer/GS-1001/view?t={d['buyer_token']}")[0] == 200
+    for path in ("/api/buyer/GS-1001", "/api/buyer/GS-1001/organizer"):
+        code, _, body = _req(mod, path, {"token": "wrong", "action": "message", "text": "hi"},
+                             {"Content-Type": "application/json"})
+        assert code == 400 and "buyer" in body, path
     for path in ("/", "/api/state", "/api/buyer/GS-1001/suggest"):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
-    for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001"):
+    for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001",
+                 "/api/buyer/GS-1001/agent"):
         code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
         assert code == 401 and "access token required" in body, path
     assert mod.engine.s["run_id"] == run_id                                       # the refused reset changed nothing
