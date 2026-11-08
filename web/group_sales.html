@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Harbour House Group Desk</title>
+<title>OpenFlow · Harbour House group sales</title>
 <style>
 :root {
   --bg: #f4f2ee; --panel: #fff; --sunk: #f8f6f2; --fg: #1d1b18; --muted: #77716a; --line: #e5e0d7;
@@ -157,9 +157,33 @@ details.ag[open] > summary::after { transform: rotate(90deg); }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 90vw; }
 dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg); width: min(620px, 92vw); }
 </style>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/assets/openflow.css">
 </head>
 <body>
-<header>
+<aside class="wb-sidebar" aria-label="Workspace navigation">
+  <div class="wb-logo"><span aria-hidden="true"><svg width="20" height="23" viewBox="0 0 24 24" fill="none"><path d="M4 20 19 5M6 5h13v13" stroke="currentColor" stroke-width="2.5"/></svg></span>OpenFlow</div>
+  <div class="wb-tagline">ROOM FOR WHAT’S NEXT</div>
+  <nav class="wb-nav">
+    <button data-wb-view="overview" aria-current="page"><span class="wb-icon" aria-hidden="true">▦</span>Overview</button>
+    <button data-wb-view="pipeline"><span class="wb-icon" aria-hidden="true">▤</span>Group pipeline <span id="wbNavCount" class="wb-badge" hidden></span></button>
+    <button data-wb-view="payments"><span class="wb-icon" aria-hidden="true">▱</span>Payments</button>
+  </nav>
+  <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
+    <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
+    <button id="wbControls">Harbour demo controls</button><button id="wbReset">↻ Reset simulator</button>
+  </details>
+</aside>
+<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
+<main class="wb-content" id="workbench">
+  <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ Simulate inbound</button></div>
+  <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
+  <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
+  <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
+</main>
+<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">INBOUND SIMULATOR</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
+<dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
+<header hidden>
   <h1>Harbour House <span>· Group sales</span></h1>
   <span class="pill" id="clock"></span>
   <span class="pill" id="agent"></span>
@@ -236,6 +260,7 @@ async function load() {
   let s; try { s = await api('/api/state'); } catch (e) { return; }
   S = s;
   renderHeader();
+  if (window.OpenFlow) window.OpenFlow.refresh();
   const j = JSON.stringify(s);
   if (j === lastJSON || form || typing()) return;   // don't redraw under the presenter's hands
   lastJSON = j;
@@ -553,6 +578,7 @@ function showView() {
   const v = location.hash === '#availability' ? 'avail' : location.hash === '#rules' ? 'rules' : 'desk';
   $('avail').hidden = v !== 'avail'; $('rules').hidden = v !== 'rules'; $('desk').hidden = v !== 'desk';
   if (v === 'rules') loadRules();
+  $('workbench').hidden = v !== 'desk';
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', showView);
@@ -636,8 +662,17 @@ $('resetYes').onclick = async () => {
   catch (e) {} finally { $('resetYes').disabled = false; }
 };
 $('paste').onclick = () => $('dlg').showModal();
-$('rfpSend').onclick = async e => { e.preventDefault(); const r = await api('/api/inbox', {from: $('rfpFrom').value, subject: $('rfpSubj').value, body: $('rfpBody').value}); $('dlg').close(); sel = r.deal_id; lastJSON = ''; load(); };
+$('rfpSend').onclick = async e => { e.preventDefault(); const r = await api('/api/inbox', {from: $('rfpFrom').value, subject: $('rfpSubj').value, body: $('rfpBody').value}); $('dlg').close(); sel = r.deal_id; lastJSON = ''; await load(); window.Harbour.open(sel); };
+$('liveDrawerBody').appendChild($('desk'));
+window.Harbour = {
+  state: () => S,
+  open: id => { sel = id; form = null; convOpen = false; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
+  next: d => nextOf(d),
+  reload: load,
+};
 showView(); load(); setInterval(load, 1500);
 </script>
+<script src="/assets/openflow-demo.js"></script>
+<script src="/assets/openflow.js"></script>
 </body>
 </html>
