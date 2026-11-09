@@ -347,9 +347,8 @@ class RulesSeller:
         rooms = None
         if not p["fits_inventory"]:
             avail = min(e._available(n, req["room_type"]) for n in p["terms"]["rooms"])
-            if avail <= 0:
-                e.decline(deal_id, "no inventory", f"We're sorry: we have no {req['room_type']} rooms left for those dates.")
-                return f"{d['ref']}: declined (no inventory)"
+            if avail <= 0:                    # sold out on those dates: offer dates that aren't
+                return self._offer_dates(deal_id)
             rooms = avail
             unmet.append(f"only {avail} {req['room_type']} rooms per night are available (requested {req['rooms']})")
             p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
