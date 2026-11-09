@@ -33,7 +33,10 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
         sent_actions = [m.get("action") for m in d["thread"] if m["from"] == "buyer"]
         if st == "needs_info":
             last_q = next((m for m in reversed(d["thread"]) if m["from"] == "seller" and m.get("questions")), None)
-            if last_q and d["thread"][-1] is last_q:
+            # The brief only answers the intake questions (layout, payer, taxes): never for a booked stay, and
+            # never the same answer twice. Anything else is for the person playing the buyer to answer.
+            if last_q and d["thread"][-1] is last_q and not d.get("booking") and not any(
+                    m["from"] == "buyer" and (m.get("payload") or {}).get("answers") for m in d["thread"]):
                 k = b["known_answers"]
                 parts = []
                 if "meeting_layout" in k:

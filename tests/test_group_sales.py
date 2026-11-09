@@ -1234,6 +1234,31 @@ def test_rules_seller_reads_the_inquiry_if_questions_went_out_first(eng):
     assert n["requirements"]["rooms"] == 12 and n["versions"] and n["versions"][-1]["pricing"]["total"] == 960000
 
 
+def test_question_about_a_booked_stay_keeps_it_confirmed_and_drafts_no_intake_answers(eng):
+    """A seller question after booking (which reduction do you mean?) set the deal to needs_info, so the buyer's
+    draft re-sent the intake answers (layout, payer, taxes) every time the seller asked again."""
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce our block by 4 rooms per night.",
+                   {"rooms_per_night": 4})
+    e.ask_buyer(n["id"], ["Reduce to 6 rooms a night, or release 4 room-nights in total?"],
+                "Before we prepare the amendment, please confirm which reduction you mean.")
+    assert n["status"] == "confirmed"                                 # still booked: amendments stay possible
+    assert suggest(e, n["id"]) is None                                # the brief can't answer this; no canned reply
+    _reduce(e, n, 1)                                                  # the amendment still goes through
+
+
+def test_intake_answers_are_drafted_once(eng):
+    e = eng
+    n = deal_by(e, "Northstar")
+    e.ask_buyer(n["id"], ["payer?"], "Who is the legal payer, and which meeting layout do you need?")
+    first = suggest(e, n["id"])
+    assert first and first["payload"]["answers"]
+    act(e, n["id"], first)
+    e.ask_buyer(n["id"], ["anything else?"], "Thanks. One more question before we quote.")
+    assert suggest(e, n["id"]) is None                                # never the same answers twice
+
+
 def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng):
     """Found by the randomized scenarios: approving after the offer lapsed left a half-made decision in memory."""
     e = eng
