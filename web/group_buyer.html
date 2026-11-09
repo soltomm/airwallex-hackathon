@@ -114,7 +114,7 @@ const ver = n => V.versions.find(x => x.n === n);
 function attachment(v) {
   const p = v.pricing, t = v.terms;
   return `<div class="att"><div class="h"><span>${v.kind === 'amendment' ? 'Change' : 'Offer'} v${v.n}</span><span class="chip">${esc(v.status.replaceAll('_', ' '))}</span></div>
-    <table>${p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.qty} × ${gbp(l.unit)}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('')}
+    <table>${p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.unit == null ? `Bundled service · ${l.qty} units` : `${l.qty} × ${gbp(l.unit)}`}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('')}
     <tr class="tot"><td>Total</td><td class="r">${gbp(p.total)}</td></tr></table>
     <div class="facts"><span>Deposit <b>${t.deposit_pct}% · ${gbp(p.deposit)}</b></span><span>Free release <b>${t.attrition_pct}%</b></span>${v.expires_at && v.status === 'sent' ? `<span>Valid until <b>${when(v.expires_at)}</b></span>` : ''}</div></div>`;
 }

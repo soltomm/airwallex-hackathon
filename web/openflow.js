@@ -22,14 +22,14 @@
       const rooms = d.booking?.rooms || v?.terms.rooms;
       return {id:d.id, demo:false, company:d.company, contact:d.sender, arrival:r.arrival, departure:r.departure, rooms:r.rooms || (rooms ? Math.max(...Object.values(rooms)) : 0),
         payer:d.payer_fx, status, label:({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
-        nights:rooms ? Object.values(rooms).reduce((a,b)=>a+b,0) : (r.arrival && r.departure ? Math.max(0,(Date.parse(r.departure)-Date.parse(r.arrival))/864e5)*(r.rooms||0) : 0),
+        nights:rooms ? Object.values(rooms).reduce((a,b)=>a+b,0)+(v?.terms.vendor_lines||[]).filter(l=>l.category==='rooms').reduce((n,l)=>n+l.quantity,0) : (r.arrival && r.departure ? Math.max(0,(Date.parse(r.departure)-Date.parse(r.arrival))/864e5)*(r.rooms||0) : 0),
         next:n.short, review:['you','bad'].includes(n.cls) || ['new','intake'].includes(d.status), open:!['confirmed','declined','expired'].includes(d.status)};
     });
     return [...demo.map(d=>({...d, label:labels[d.status], total:M.pricing(d).total, nights:M.pricing(d).roomNights, next:action(d), review:['draft','unavailable','alternative_draft','approval'].includes(d.status), open:d.status!=='confirmed'})), ...live];
   }
   function metric(label, value, sub, extra='') { return `<div class="wb-kpi ${extra}"><dt>${label}</dt><dd>${value}</dd><p>${sub}</p></div>`; }
   function refresh() {
-    const all=rows(), pending=all.filter(d=>d.review).length, fresh=all.filter(d=>['draft','unavailable','alternative_draft'].includes(d.status)).length;
+    const all=rows(), pending=all.filter(d=>d.review||(window.Vendors?.pendingIds()||[]).includes(d.id)).length, fresh=all.filter(d=>['draft','unavailable','alternative_draft'].includes(d.status)).length;
     $('wbMetrics').innerHTML=metric('Open pipeline',money(all.filter(d=>d.open).reduce((n,d)=>n+d.total,0)),`${all.filter(d=>d.open).length} active group inquiries`)
       +metric('Group room nights',all.filter(d=>d.open||d.status==='confirmed').reduce((n,d)=>n+d.nights,0),'Across active and confirmed groups')
       +metric(`New inquiries ${pending ? `<span class="wb-badge">${pending} to review</span>` : ''}`,fresh,'A new opportunity to welcome a group','highlight')
@@ -45,12 +45,13 @@
     const moves=all.filter(d=>d.review).slice(0,6);
     const activity=[...demo.flatMap(d=>d.timeline.map(a=>({...a,company:d.company,id:d.id}))), ...(actual()?.activity || []).map(a=>({at:a.real_at||a.at,text:a.text||a.kind,company:'Harbour House',id:a.deal_id}))].sort((a,b)=>b.at.localeCompare(a.at)).slice(0,5);
     const stages=[['New inquiries', ['draft','unavailable','alternative_draft']],['Internal approval',['approval']],['Proposal',['proposal','alternative_sent']],['Confirmed',['confirmed']]];
-    $('wbBody').innerHTML=`<div class="wb-columns"><section class="wb-panel"><div class="wb-panel-head"><h2>Group inquiries <span class="muted small">${all.length}</span></h2><span class="muted small">${all.filter(d=>d.review).length} pending action</span></div>
+    $('wbBody').innerHTML=`<div class="wb-columns"><section class="wb-panel"><div class="wb-panel-head"><h2>Group inquiries <span class="muted small">${all.length}</span></h2><span class="muted small">${all.filter(d=>d.review||(window.Vendors?.pendingIds()||[]).includes(d.id)).length} pending action</span></div>
       <div class="wb-toolbar"><div class="wb-filters" aria-label="Pipeline filters">${[['new','New'],['all','All inquiries'],['approval','Internal approval'],['proposal','Proposal'],['confirmed','Confirmed']].map(([key,label])=>`<button data-filter="${key}" aria-pressed="${filter===key}">${label}</button>`).join('')}</div><label class="wb-search"><span class="small muted" hidden>Search inquiries</span><input id="wbSearch" type="search" aria-label="Search inquiries" placeholder="⌕  Search inquiries" value="${html(search)}"></label></div><div id="wbTable">${table(all)}</div></section>
       <section class="wb-panel"><div class="wb-panel-head"><h2>Your next moves</h2><span class="muted small">↗</span></div><div class="wb-moves">${moves.map(d=>`<button class="wb-move" data-open="${html(d.id)}"><span class="wb-move-icon" aria-hidden="true">${d.status==='approval'?'✓':'↗'}</span><span><b>${html(d.next)}</b><small>${html(d.company)}</small></span></button>`).join('') || '<p class="wb-empty">You’re all caught up.<br>We’ll keep an eye on the inbox.</p>'}</div></section></div>
       <div class="wb-bottom-grid"><section class="wb-panel"><div class="wb-panel-head"><h2>Pipeline at a glance</h2><span class="muted small">Current inquiries</span></div><div class="wb-summary">${stages.map(([label,statuses])=>{const count=all.filter(d=>statuses.includes(d.status)).length;return `<div class="wb-summary-row"><span>${label}</span><b>${count}</b></div><div class="wb-track"><span style="width:${all.length?count/all.length*100:0}%"></span></div>`;}).join('')}</div></section>
       <section class="wb-panel"><div class="wb-panel-head"><h2>Recent activity</h2><span class="muted small">Latest updates</span></div><div class="wb-summary">${activity.map(a=>`<div class="wb-summary-row"><span>${html(a.text)}<span class="wb-source">${html(a.company)}</span></span><span class="muted">${time(a.at)}</span></div>`).join('') || '<p class="wb-empty">New activity will appear here.</p>'}</div></section></div>`;
     // Update only the table while typing so keyboard focus and selection stay intact.
+    if(window.Vendors)document.querySelector('.wb-moves').innerHTML=window.Vendors.nextMoves(all);
     $('wbSearch').oninput=e=>{search=e.target.value; $('wbTable').innerHTML=table(rows());};
   }
   function renderPayments(all) {
