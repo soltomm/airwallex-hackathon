@@ -844,7 +844,17 @@ def test_bookable_calendar_expands_from_the_scenario():
     h = bookable.expand(S)["hotel"]
     assert h["nights"][0] == "2027-01-11" and h["nights"][-1] == "2027-12-31" and len(h["nights"]) == 355
     assert h["capacity"]["2027-03-10"] == {"twin": 14, "king": 16}        # the demo stay stays tight
-    assert h["capacity"]["2027-06-10"] == {"twin": 20, "king": 20}
+    # Other business has taken some of the group allocation: the same pattern on every run, never above the
+    # allocation or below zero, busier in summer than January, with some nights sold out.
+    assert bookable.expand(S)["hotel"]["capacity"] == h["capacity"]
+    alloc = h["availability"]
+    assert all(0 <= v[rt] <= alloc[rt] for v in h["capacity"].values() for rt in alloc)
+    free = lambda month: sum(sum(v.values()) for n, v in h["capacity"].items() if n[5:7] == month)
+    assert free("06") < free("01")
+    assert any(sum(v.values()) == 0 for v in h["capacity"].values())
+    no_demand = json.loads(json.dumps(S))
+    del no_demand["hotel"]["background_demand"]
+    assert bookable.expand(no_demand)["hotel"]["capacity"]["2027-06-10"] == {"twin": 20, "king": 20}
     thames = h["meeting_rooms"]["thames"]["available"]
     assert thames["2027-03-11"] == "08:00-18:00"                          # Thursday
     assert "2027-03-13" not in thames                                      # Saturday
@@ -865,29 +875,40 @@ def _rfp(e, who, dates):
     return deal_by(e, f"{who}.example")
 
 
-def test_a_june_stay_is_quoted_held_and_booked_on_its_own_dates(eng):
+def test_a_july_stay_is_quoted_held_and_booked_on_its_own_dates(eng):
     e = eng
-    d = _rfp(e, "junegroup", "arriving 10 June and departing 13 June 2027")
+    july = ["2027-07-08", "2027-07-09", "2027-07-10"]
+    cap = H_ALL["capacity"]["2027-07-08"]["twin"]                            # what other business left on sale
+    d = _rfp(e, "julygroup", "arriving 8 July and departing 11 July 2027")
     assert not d["requirements"]["out_of_scope"] and d["status"] != "handoff"
     v = d["versions"][-1]
-    june = ["2027-06-10", "2027-06-11", "2027-06-12"]
-    assert list(v["terms"]["rooms"]) == june and list(v["terms"]["breakfast"]) == ["2027-06-11", "2027-06-12", "2027-06-13"]
-    assert e.inventory_at("2027-06-10")["twin"] == {"capacity": 20, "held": 6, "booked": 0}
+    assert list(v["terms"]["rooms"]) == july and list(v["terms"]["breakfast"]) == ["2027-07-09", "2027-07-10", "2027-07-11"]
+    assert e.inventory_at("2027-07-08")["twin"] == {"capacity": cap, "held": 6, "booked": 0}
     assert e.inventory_at("2027-03-10")["twin"]["held"] == 0              # the March block is untouched
     msg = d["thread"][-1]["text"]
-    assert "2027-05-11" in msg and "2027-06-03" in msg and "2027-05-27" in msg   # June deadlines, not March
-    assert e.deal_view(d["id"], for_="seller")["key_dates"]["arrival"] == "2027-06-10"
+    assert "2027-06-08" in msg and "2027-07-01" in msg and "2027-06-24" in msg   # July deadlines, not March
+    assert e.deal_view(d["id"], for_="seller")["key_dates"]["arrival"] == "2027-07-08"
     assert act(e, d["id"], {"action": "accept", "text": "We accept.", "payload": {"version": v["n"]}})["accepted"]
     RulesSeller(e).run()                                                     # requests the deposit
     pay(e, d)
-    assert d["status"] == "confirmed" and d["booking"]["rooms"] == {n: 6 for n in june}
-    assert e.inventory_at("2027-06-10")["twin"] == {"capacity": 20, "held": 0, "booked": 6}
-    assert [x["due"] for x in e.finance(d)["schedule"]][1:] == ["2027-05-11", "2027-06-03"]
+    assert d["status"] == "confirmed" and d["booking"]["rooms"] == {n: 6 for n in july}
+    assert e.inventory_at("2027-07-08")["twin"] == {"capacity": cap, "held": 0, "booked": 6}
+    assert [x["due"] for x in e.finance(d)["schedule"]][1:] == ["2027-06-08", "2027-07-01"]
     # Only touched dates are stored; the snapshot still shows the whole calendar.
     assert len(e.s["inventory"]) < 10
     snap = e.snapshot()
-    assert len(snap["inventory"]) == 355 and snap["inventory"]["2027-06-10"]["twin"]["available"] == 14
-    assert snap["bookable"] == {"first_night": "2027-01-11", "last_night": "2027-12-31", "min_days_before_arrival": 31}
+    assert len(snap["inventory"]) == 355 and snap["inventory"]["2027-07-08"]["twin"]["available"] == cap - 6
+    assert snap["bookable"]["first_night"] == "2027-01-11" and snap["bookable"]["min_days_before_arrival"] == 31
+    assert snap["bookable"]["allocation"] == {"twin": 20, "king": 20}
+
+
+def test_sold_out_nights_get_other_dates(eng):
+    e = eng
+    sold = next(n for n, v in H_ALL["capacity"].items() if n >= "2027-04-01" and not sum(v.values()))
+    d = _rfp(e, "soldout", f"arriving {int(sold[8:])} {calc.d(sold):%B} and departing "
+                           f"{int(sold[8:]) + 1} {calc.d(sold):%B} 2027")
+    assert not d["versions"] and d["status"] == "dates_proposed"
+    assert all(o["arrival"] != sold for o in d["thread"][-1]["date_options"])
 
 
 @pytest.mark.parametrize("dates,why", [

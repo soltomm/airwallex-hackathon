@@ -159,6 +159,7 @@ details.ag[open] > summary::after { transform: rotate(90deg); }
 .cal button.l1 { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 .cal button.l2 { background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
 .cal button.l3 { background: color-mix(in srgb, var(--accent) 32%, var(--panel)); }
+.cal button.l4 { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); }
 .cal button.full { background: color-mix(in srgb, var(--bad) 22%, var(--panel)); }
 .cal button.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .cal button.past, .cal button:disabled { opacity: .45; } .cal .pad { min-height: 58px; }
@@ -166,11 +167,13 @@ details.ag[open] > summary::after { transform: rotate(90deg); }
 .using { overflow-x: auto; } .using table { min-width: 560px; } .using button { padding: 0; color: var(--accent); }
 .key .mt { background: var(--accent); border-color: transparent; border-radius: 2px; }
 .key .l3 { background: color-mix(in srgb, var(--accent) 32%, var(--panel)); }
+.key .l4 { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); }
 .key .full { background: color-mix(in srgb, var(--bad) 22%, var(--panel)); }
 .rt { margin-bottom: 12px; } .rt:last-child { margin-bottom: 0; } .rt .l { display: flex; justify-content: space-between; gap: 8px; }
 .rt .free { font-weight: 650; font-variant-numeric: tabular-nums; } .rt .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
 .meter { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunk); margin-top: 5px; }
 .meter i { display: block; } .meter .bk { background: var(--ok); } .meter .hd { background: var(--warn); }
+.meter .ot, .key .ot { background: color-mix(in srgb, var(--muted) 45%, var(--panel)); border-color: transparent; }
 .key { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin: 0 0 12px; }
 .key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--sunk); border: 1px solid var(--line); }
 .key .bk { background: var(--ok); border-color: transparent; } .key .hd { background: var(--warn); border-color: transparent; }
@@ -615,18 +618,22 @@ function agentHtml(d) {
 }
 
 // ---- availability page -------------------------------------------------------------------------
-function meterRow(label, x) {
-  const pct = n => x.capacity ? (n / x.capacity * 100).toFixed(1) + '%' : '0%';
-  return `<div class="rt"><div class="l"><span>${label}</span><span class="free">${x.available} free of ${x.capacity}</span></div>
-    <div class="meter"><i class="bk" style="width:${pct(x.booked)}"></i><i class="hd" style="width:${pct(x.held)}"></i></div>
-    <div class="sub">${x.booked} booked · ${x.held} held</div></div>`;
+// alloc: the hotel's group allocation for this room type; what's not on sale went to other business.
+function meterRow(label, x, alloc) {
+  const base = Math.max(alloc || 0, x.capacity), other = base - x.capacity;
+  const pct = n => base ? (n / base * 100).toFixed(1) + '%' : '0%';
+  return `<div class="rt"><div class="l"><span>${label}</span><span class="free">${x.available} free of ${base}</span></div>
+    <div class="meter"><i class="ot" style="width:${pct(other)}"></i><i class="bk" style="width:${pct(x.booked)}"></i><i class="hd" style="width:${pct(x.held)}"></i></div>
+    <div class="sub">${other ? `${other} sold to other business · ` : ''}${x.booked} booked · ${x.held} held</div></div>`;
 }
 // One month at a time from the bookable year; the selected month and night survive the 2s re-render.
 let availMonth = null, availDay = null;
 const isoD = dt => dt.toISOString().slice(0, 10);
 const addDays = (iso, n) => isoD(new Date(Date.parse(iso + 'T00:00:00Z') + n * 864e5));
 const used = x => Object.values(x).reduce((a, v) => a + v.held + v.booked, 0);
-const capOf = x => Object.values(x).reduce((a, v) => a + v.capacity, 0);
+const allocOf = x => Object.entries(x).reduce((a, [rt, v]) => a + Math.max((S.bookable.allocation || {})[rt] || 0, v.capacity), 0);
+const freeOf = x => Object.values(x).reduce((a, v) => a + v.available, 0);
+const takenOf = x => allocOf(x) - freeOf(x);          // other business + our holds and bookings
 const availMonths = () => [...new Set(Object.keys(S.inventory).map(n => n.slice(0, 7)))];
 function availDefaults() {
   // First visit: open on the first night anything is held or booked, else on the scenario's today.
@@ -640,17 +647,17 @@ function availHtml() {
   availDefaults();
   const company = id => (S.deals.find(d => d.id === id) || {}).company || '';
   const today = S.clock.slice(0, 10), months = availMonths(), nights = Object.keys(S.inventory);
-  // Year strip: one button per month in the window, with how much of it is held or booked.
+  // Year strip: one button per month in the window, with how much of the group allocation is taken.
   const strip = months.map(m => {
     const ns = nights.filter(n => n.startsWith(m));
-    const u = ns.reduce((a, n) => a + used(S.inventory[n]), 0), c = ns.reduce((a, n) => a + capOf(S.inventory[n]), 0);
+    const u = ns.reduce((a, n) => a + takenOf(S.inventory[n]), 0), c = ns.reduce((a, n) => a + allocOf(S.inventory[n]), 0);
     const pct = c ? Math.max(u ? 4 : 0, Math.round(u / c * 100)) : 0;
     const label = new Date(m + '-15T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', month: 'short'});
     const yr = m.slice(0, 4) !== months[0].slice(0, 4) ? ' ' + m.slice(2, 4) : '';
-    return `<button data-month="${m}" class="${m === availMonth ? 'sel' : ''}" aria-pressed="${m === availMonth}" title="${u} of ${c} room-nights held or booked">
+    return `<button data-month="${m}" class="${m === availMonth ? 'sel' : ''}" aria-pressed="${m === availMonth}" title="${u} of ${c} group room-nights taken">
       <span>${label}${yr}</span><span class="bar"><i style="width:${pct}%"></i></span></button>`;
   }).join('');
-  // Month grid, Monday first. Shading is the share of the night's rooms held or booked.
+  // Month grid, Monday first. Shading is the share of the night's group allocation taken, by other business or our deals.
   const [y, mo] = availMonth.split('-').map(Number);
   const first = new Date(Date.UTC(y, mo - 1, 1)), dim = new Date(Date.UTC(y, mo, 0)).getUTCDate();
   let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="dow">${d}</div>`).join('');
@@ -658,8 +665,8 @@ function availHtml() {
   for (let i = 1; i <= dim; i++) {
     const n = `${availMonth}-${String(i).padStart(2, '0')}`, x = S.inventory[n];
     if (!x) { cells += `<button disabled aria-label="${day(n)}: not on sale"><span class="n">${i}</span></button>`; continue; }
-    const share = used(x) / (capOf(x) || 1), free = capOf(x) - used(x);
-    const lvl = free === 0 ? 'full' : share >= .6 ? 'l3' : share >= .3 ? 'l2' : share > 0 ? 'l1' : '';
+    const share = takenOf(x) / (allocOf(x) || 1), free = freeOf(x);
+    const lvl = free === 0 ? 'full' : share >= .85 ? 'l4' : share >= .6 ? 'l3' : share >= .3 ? 'l2' : share > 0 ? 'l1' : '';
     const bk = Object.values(x).some(v => v.booked), hd = Object.values(x).some(v => v.held);
     const m = (S.meeting.thames[n] || {}).status, mt = m && m !== 'free';
     const typeFree = Object.entries(x).map(([rt, v]) => `${rt[0].toUpperCase()} ${v.available}`).join(' · ');
@@ -678,7 +685,7 @@ function availHtml() {
             h && h.rooms[availDay] ? `<li>${esc(d.company)}: ${h.rooms[availDay]} ${esc(h.room_type)} held</li>` : ''];
   }).join('');
   const detail = `<div class="card" id="availDay"><h3>${day(availDay, {weekday: 'short'})} night${availDay < today ? ' <span class="chip">past</span>' : ''}</h3>
-    ${Object.entries(x).map(([rt, v]) => meterRow(cap(rt), v)).join('')}
+    ${Object.entries(x).map(([rt, v]) => meterRow(cap(rt), v, (S.bookable.allocation || {})[rt])).join('')}
     <dl class="kv" style="margin-top:12px"><dt>Thames Room</dt><dd>${slot ? esc(cap(slot.status)) + (slot.deal_id ? ' · ' + esc(company(slot.deal_id)) : '') : 'Not open'}</dd>
     <dt>Breakfast ${day(morning)}</dt><dd>${bf ? `${bf.held + bf.booked} of ${S.breakfast_capacity} covers committed` : '–'}</dd></dl>
     ${staying ? `<div class="label" style="margin-top:12px">Staying this night</div><ul style="margin:0;padding-left:18px">${staying}</ul>` : ''}</div>`;
@@ -691,7 +698,7 @@ function availHtml() {
   }).join('');
   return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Harbour House can still sell, ${day(S.bookable.first_night)} to ${day(S.bookable.last_night, {year: 'numeric'})}. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released. Pick a month, then a night.</p>
     <div class="months" id="availMonths">${strip}</div>
-    <div class="key"><span><i class="l3"></i>Mostly taken</span><span><i class="full"></i>Full</span><span><i class="bk"></i>Booked</span><span><i class="hd"></i>Held by an open offer</span><span><i class="mt"></i>Thames Room in use</span></div>
+    <div class="key"><span><i class="l3"></i>Mostly taken</span><span><i class="ot"></i>Sold to other business</span><span><i class="l4"></i>Nearly full</span><span><i class="full"></i>Full</span><span><i class="bk"></i>Booked</span><span><i class="hd"></i>Held by an open offer</span><span><i class="mt"></i>Thames Room in use</span></div>
     <div class="cal-wrap"><div class="card"><div class="cal-head"><button class="btn-ghost" data-step="-1" ${idx <= 0 ? 'disabled' : ''} aria-label="Previous month">‹</button>
       <h3 id="availMonth">${monthName}</h3><button class="btn-ghost" data-step="1" ${idx >= months.length - 1 ? 'disabled' : ''} aria-label="Next month">›</button></div>
       <div class="cal" id="availCal">${cells}</div></div>${detail}</div>
