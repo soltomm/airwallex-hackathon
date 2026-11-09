@@ -8,6 +8,15 @@
     "rooms_total": 80,
     "bookable": {"first_night": "2027-01-11", "last_night": "2027-12-31"},
     "availability": {"twin": 20, "king": 20},
+    "background_demand": {
+      "_note": "Share of the group allocation other business has already taken, by month and weekday (Mon..Sun), with seeded noise and a few sold-out events. Same calendar on every run.",
+      "seed": 2027,
+      "by_month": {"1": 0.15, "2": 0.25, "3": 0.35, "4": 0.45, "5": 0.55, "6": 0.65,
+                   "7": 0.6, "8": 0.45, "9": 0.65, "10": 0.6, "11": 0.45, "12": 0.35},
+      "by_weekday": [0.05, 0.15, 0.15, 0.1, 0.0, -0.1, -0.15],
+      "noise": 0.2,
+      "sold_out_spans": [6, 2, 4]
+    },
     "availability_by_night": {
       "2027-03-10": {"twin": 14, "king": 16},
       "2027-03-11": {"twin": 14, "king": 16},
