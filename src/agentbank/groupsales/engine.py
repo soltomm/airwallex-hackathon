@@ -2227,7 +2227,8 @@ class Engine:
         meeting = {x: dict(slots.get(x) or {"status": "free", "deal_id": None})
                    for x in sorted(set(h["meeting_rooms"]["thames"]["available"]) | set(slots))}
         return {"inventory": inv, "breakfast": bf, "meeting": {"thames": meeting}, "bookable": {**h["bookable"],
-                                                                          "min_days_before_arrival": self.policy["min_days_before_arrival"]}}
+                                                                          "min_days_before_arrival": self.policy["min_days_before_arrival"],
+                                                                          "allocation": dict(h["availability"])}}
 
     def snapshot(self) -> dict:
         with self.lock:
