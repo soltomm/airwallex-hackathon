@@ -15,6 +15,7 @@ import re
 
 from . import rules
 from .calc import gbp
+from .bookable import window_text
 from .engine import Engine, Refused
 from .extract import extract
 from .trace import Traced
@@ -359,7 +360,7 @@ How to work:
   Each queue entry has a next_step computed from the deal's state: follow it.
 - For a new inquiry: read_deal, then record_requirements from the email (only what it says; leave
   unknowns null), then check_systems. If dates, room types or services are outside what the hotel
-  supports (twin/king rooms, breakfast, the Thames Room, 10-13 March 2027 only), escalate to a person
+  supports (twin/king rooms, breakfast, the Thames Room, {WINDOW}), escalate to a person
   with an explanation. If details you need are missing (meeting layout, legal payer, whether the budget
   includes taxes), ask_buyer for them; do not guess.
 - Price with price_terms before you commit. Then propose_offer with an itemized, plain message to the
@@ -396,7 +397,9 @@ How to work:
 def system_prompt(engine) -> str:
     """SYSTEM with the hotel's current rule values (rules.seller_brief), so the prompt matches the engine."""
     return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario))
-            .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"])))
+            .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
+            .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
+                                 f"{engine.policy['min_days_before_arrival']} days ahead"))
 
 
 _I = {"type": "integer"}

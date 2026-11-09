@@ -211,7 +211,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
 <section class="page" id="rules" hidden></section>
 <dialog id="dlg"><form method="dialog">
   <h3 style="margin-top:0">Paste a new RFP</h3>
-  <p class="small muted">It goes through the same intake as the scenario emails. Requests outside 10–13 March 2027 or the hotel's services are handed to a person.</p>
+  <p class="small muted">It goes through the same intake as the scenario emails. Requests outside the bookable nights (11 January to 31 December 2027), at less than 31 days' notice, or outside the hotel's services are handed to a person.</p>
   <p><input type="text" id="rfpFrom" style="width:100%" placeholder="From, e.g. Sam &lt;sam@company.example&gt;"></p>
   <p><input type="text" id="rfpSubj" style="width:100%" placeholder="Subject"></p>
   <p><textarea id="rfpBody" rows="8" placeholder="Email body"></textarea></p>
@@ -575,7 +575,7 @@ function availHtml() {
     const held = d.hold && ['active', 'expired_payment_pending'].includes(d.hold.status);
     return held ? [`<tr><td>${esc(d.company)}</td><td><span class="chip warn">${d.hold.status === 'active' ? 'Held' : 'Held, payment unclear'}</span></td><td>${perNight(d.hold.rooms)} ${esc(d.hold.room_type)} rooms a night</td><td>${d.hold.status === 'active' ? 'until ' + when(d.hold.expires_at) : 'manager review'}</td></tr>`] : [];
   }).join('');
-  return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Harbour House can still sell for the 10–13 March stay. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released.</p>
+  return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Harbour House can still sell, night by night. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released.</p>
     <div class="key"><span><i class="bk"></i>Booked</span><span><i class="hd"></i>Held by an open offer</span><span><i></i>Free</span></div>
     <div class="nights">${nights}</div>
     <div class="two"><div class="card"><div class="label">Thames Room</div><dl class="kv">${meeting}</dl></div><div class="card"><div class="label">Group breakfast</div><dl class="kv">${breakfast}</dl></div></div>

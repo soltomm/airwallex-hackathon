@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import calc, rules
+from . import bookable, calc, rules
 from .calc import gbp
 from .extract import extract, missing_info, stay_nights
 from .policy import buyer_check, hotel_check
@@ -146,11 +146,9 @@ class Engine:
                 "run_id": "run_" + uuid.uuid4().hex[:8],
                 "clock": self.scenario["start"],
                 "seq": 1000,
-                "inventory": {n: {rt: {"capacity": cap, "held": 0, "booked": 0}
-                                  for rt, cap in h["availability"].items()} for n in h["nights"]},
-                "meeting": {room: {day: {"status": "free", "deal_id": None} for day in mr["available"]}
-                            for room, mr in h["meeting_rooms"].items()},
-                "breakfast": {m: {"held": 0, "booked": 0} for m in self._mornings(h["nights"])},
+                # Sparse: only nights, mornings and meeting days something has touched are stored.
+                # _inv / _bf / _slot fill in the rest from the scenario's bookable calendar.
+                "inventory": {}, "meeting": {room: {} for room in h["meeting_rooms"]}, "breakfast": {},
                 "emails": {}, "deals": {}, "holds": {}, "approvals": {}, "operations": {}, "ledger": [],
                 "activity": [], "agent_runs": [], "events_seen": prior_events[-500:], "delayed_notifications": [],
                 "reconcile_log": [],
@@ -169,7 +167,11 @@ class Engine:
 
     # ================================================================ seller rules
     def _load_scenario(self) -> dict:
-        return rules.apply(json.loads(self.scenario_path.read_text()), self.rule_store.read() or {})
+        return bookable.expand(rules.apply(json.loads(self.scenario_path.read_text()), self.rule_store.read() or {}))
+
+    def lead_days(self, arrival: str) -> int:
+        """Whole days from the scenario clock's date to `arrival`."""
+        return (calc.d(arrival) - calc.d(self.now()[:10])).days
 
     def rules_view(self) -> dict:
         with self.lock:
@@ -197,7 +199,7 @@ class Engine:
                     if rules.get(self.scenario, p) != rules.get(candidate, p)]
             # Store only what differs from the scenario file.
             self.rule_store.write({p: v for p, v in overrides.items() if rules.get(base, p) != v})
-            self.scenario = candidate
+            self.scenario = bookable.expand(candidate)
             if diff:
                 text = "; ".join(f"{rules.PATHS[p][0]} {rules._fmt(rules.PATHS[p][1], a)} → "
                                  f"{rules._fmt(rules.PATHS[p][1], b)}" for p, a, b in diff)
@@ -434,9 +436,13 @@ class Engine:
             problems = list(merged.get("unsupported") or [])
             if merged.get("arrival") and merged.get("departure"):
                 nights = stay_nights(merged["arrival"], merged["departure"])
-                if not nights or any(n not in self.hotel["nights"] for n in nights):
-                    problems.append(f"dates {merged['arrival']} to {merged['departure']} are outside the supported "
-                                    f"stay ({self.hotel['arrival']} to {self.hotel['departure']})")
+                bookable_nights = set(self.hotel["nights"])
+                if not nights or any(n not in bookable_nights for n in nights):
+                    problems.append(f"dates {merged['arrival']} to {merged['departure']} are outside the bookable "
+                                    f"{bookable.window_text(self.hotel)}")
+                elif self.lead_days(merged["arrival"]) < self.policy["min_days_before_arrival"]:
+                    problems.append(f"arrival {merged['arrival']} is less than {self.policy['min_days_before_arrival']} "
+                                    "days away: short-notice groups are handled by a person")
             merged["out_of_scope"] = problems
             d["requirements"] = merged
             d["missing"] = missing_info(merged)
@@ -462,22 +468,23 @@ class Engine:
             own_hold = self.s["holds"].get(d.get("hold_id") or "")
             pms = {}
             for n in nights:
-                inv = self.s["inventory"].get(n)
+                inv = self._inv(n)
                 if not inv:
-                    pms[n] = "outside supported stay"
+                    pms[n] = "outside the bookable dates"
                     continue
                 pms[n] = {t: {"available": self._available(n, t), "held": inv[t]["held"], "booked": inv[t]["booked"]}
                           for t in inv}
             meeting = None
             if req.get("meeting"):
                 day = req["meeting"].get("date")
-                slot = self.s["meeting"]["thames"].get(day)
+                slot = self._slot(day)
                 mr = self.hotel["meeting_rooms"]["thames"]
                 meeting = {"room": "Thames Room", "date": day, "status": slot["status"] if slot else "not available",
                            "hours_available": mr["available"].get(day), "capacity": mr["capacity"],
                            "day_rate": gbp(mr["day_rate"]), "includes": mr["includes"]}
             bf = {m: {"capacity": self.hotel["breakfast"]["group_capacity_per_day"],
-                      "committed": v["held"] + v["booked"]} for m, v in self.s["breakfast"].items()}
+                      "committed": v["held"] + v["booked"]}
+                  for m, v in ((m, self._bf(m)) for m in self._mornings(nights)) if v}
             rates = self.rms["rates"].get(rt) if rt else self.rms["rates"]
             req_dates = calc.key_dates(req["arrival"], self.policy) if req.get("arrival") else None
             crm = self.scenario["crm"].get(d["domain"], {"account": None, "type": "unknown sender", "credit_terms": False})
@@ -556,6 +563,9 @@ class Engine:
         if not (req.get("arrival") and req.get("departure") and (room_type or req.get("room_type"))):
             raise Refused("requirements incomplete: need dates and room type")
         nights = stay_nights(req["arrival"], req["departure"])
+        if self.lead_days(req["arrival"]) < self.policy["min_days_before_arrival"]:
+            raise Refused(f"arrival {req['arrival']} is less than {self.policy['min_days_before_arrival']} days away: "
+                          "short-notice groups are handled by a person (escalate)")
         n_rooms = int(rooms_per_night or req.get("rooms") or 0)
         if n_rooms <= 0:
             raise Refused("need a number of rooms")
@@ -843,27 +853,62 @@ class Engine:
             self._apply_amendment(d, v)
 
     # ================================================================ holds & inventory
+    # State stores only what has been touched. Reads of an untouched bookable night/morning/day return a
+    # fresh, unsaved entry; writes pass create=True so the entry is stored. Outside the calendar: None.
+    def _inv(self, night: str, create: bool = False) -> dict | None:
+        inv = self.s["inventory"].get(night)
+        if inv is None and night in self.hotel["capacity"]:
+            inv = {rt: {"capacity": cap, "held": 0, "booked": 0} for rt, cap in self.hotel["capacity"][night].items()}
+            if create:
+                self.s["inventory"][night] = inv
+        return inv
+
+    def _bf(self, morning: str, create: bool = False) -> dict | None:
+        b = self.s["breakfast"].get(morning)
+        if b is None and (calc.d(morning) - timedelta(days=1)).isoformat() in self.hotel["capacity"]:
+            b = {"held": 0, "booked": 0}
+            if create:
+                self.s["breakfast"][morning] = b
+        return b
+
+    def _slot(self, day: str, create: bool = False) -> dict | None:
+        slots = self.s["meeting"].setdefault("thames", {})
+        slot = slots.get(day)
+        if slot is None and day in self.hotel["meeting_rooms"]["thames"]["available"]:
+            slot = {"status": "free", "deal_id": None}
+            if create:
+                slots[day] = slot
+        return slot
+
+    def _set_slot(self, day: str, status: str, deal_id: str | None):
+        self.s["meeting"].setdefault("thames", {})[day] = {"status": status, "deal_id": deal_id}
+
+    def inventory_at(self, night: str) -> dict | None:
+        """Rooms on one night by type ({capacity, held, booked}); None outside the bookable calendar."""
+        with self.lock:
+            return copy.deepcopy(self._inv(night))
+
     def _available(self, night: str, rt: str) -> int:
-        inv = self.s["inventory"][night][rt]
+        inv = self._inv(night)[rt]
         return inv["capacity"] - inv["held"] - inv["booked"]
 
     def _can_hold(self, terms: dict, d: dict) -> bool:
         own = self.s["holds"].get(d.get("hold_id") or "")
         own_active = own if own and own["status"] == "active" else None
         for night, n in terms["rooms"].items():
-            if night not in self.s["inventory"]:
+            if self._inv(night) is None:
                 return False
             extra = own_active["rooms"].get(night, 0) if own_active and own_active["room_type"] == terms["room_type"] else 0
             if n > self._available(night, terms["room_type"]) + extra:
                 return False
         cap = self.hotel["breakfast"]["group_capacity_per_day"]
         for m, n in terms["breakfast"].items():
-            b = self.s["breakfast"].get(m)
+            b = self._bf(m)
             extra = own_active["breakfast"].get(m, 0) if own_active else 0
             if b is None or b["held"] + b["booked"] - extra + n > cap:
                 return False
         if terms.get("meeting"):
-            slot = self.s["meeting"]["thames"].get(terms["meeting"]["date"])
+            slot = self._slot(terms["meeting"]["date"])
             if not slot or (slot["status"] != "free" and slot["deal_id"] != d["id"]):
                 return False
         return True
@@ -880,12 +925,12 @@ class Engine:
         expires = _iso(_dt(self.now()) + timedelta(hours=self.policy["quote_validity_hours"]))
         rt = terms["room_type"]
         for night, n in terms["rooms"].items():
-            self.s["inventory"][night][rt]["held"] += n
+            self._inv(night, create=True)[rt]["held"] += n
         for m, n in terms["breakfast"].items():
-            self.s["breakfast"][m]["held"] += n
+            self._bf(m, create=True)["held"] += n
         mdate = (terms.get("meeting") or {}).get("date")
         if mdate:
-            self.s["meeting"]["thames"][mdate] = {"status": "held", "deal_id": d["id"]}
+            self._set_slot(mdate, "held", d["id"])
         hold = {"id": hid, "deal_id": d["id"], "room_type": rt, "rooms": dict(terms["rooms"]),
                 "breakfast": dict(terms["breakfast"]), "meeting": mdate, "created_at": self.now(),
                 "expires_at": expires, "status": "active"}
@@ -899,11 +944,11 @@ class Engine:
         if hold["status"] != "active":
             return
         for night, n in hold["rooms"].items():
-            self.s["inventory"][night][hold["room_type"]]["held"] -= n
+            self._inv(night, create=True)[hold["room_type"]]["held"] -= n
         for m, n in hold["breakfast"].items():
-            self.s["breakfast"][m]["held"] -= n
+            self._bf(m, create=True)["held"] -= n
         if hold["meeting"]:
-            self.s["meeting"]["thames"][hold["meeting"]] = {"status": "free", "deal_id": None}
+            self._set_slot(hold["meeting"], "free", None)
         hold["status"] = "released"
         self.log(hold["deal_id"], "system", "hold_released", f"Hold {hold['id']} released: {why}.")
 
@@ -920,14 +965,15 @@ class Engine:
             if not covered:
                 return False
             for night, n in hold["rooms"].items():
-                inv = self.s["inventory"][night][rt]
+                inv = self._inv(night, create=True)[rt]
                 inv["held"] -= n
                 inv["booked"] += n
             for m, n in hold["breakfast"].items():
-                self.s["breakfast"][m]["held"] -= n
-                self.s["breakfast"][m]["booked"] += n
+                b = self._bf(m, create=True)
+                b["held"] -= n
+                b["booked"] += n
             if hold["meeting"]:
-                self.s["meeting"]["thames"][hold["meeting"]] = {"status": "booked", "deal_id": d["id"]}
+                self._set_slot(hold["meeting"], "booked", d["id"])
             hold["status"] = "converted"
             return True
         # No live hold (released at expiry): book from free inventory only if every unit is still there.
@@ -936,11 +982,11 @@ class Engine:
         if not self._can_hold(tmp, d_no_hold):
             return False
         for night, n in terms["rooms"].items():
-            self.s["inventory"][night][rt]["booked"] += n
+            self._inv(night, create=True)[rt]["booked"] += n
         for m, n in terms["breakfast"].items():
-            self.s["breakfast"][m]["booked"] += n
+            self._bf(m, create=True)["booked"] += n
         if terms.get("meeting"):
-            self.s["meeting"]["thames"][terms["meeting"]["date"]] = {"status": "booked", "deal_id": d["id"]}
+            self._set_slot(terms["meeting"]["date"], "booked", d["id"])
         return True
 
     def _sweep(self):
@@ -1216,7 +1262,7 @@ class Engine:
             return
         rt = b["room_type"]
         for night, n in v["release"].items():
-            inv = self.s["inventory"][night][rt]
+            inv = self._inv(night, create=True)[rt]
             if inv["booked"] < n:
                 raise Refused("inventory inconsistency: cannot release more than booked")
             inv["booked"] -= n
@@ -1573,6 +1619,23 @@ class Engine:
                        f"{v['pricing']['allowance_remaining']} room-nights.",
         }
 
+    def _calendar(self) -> dict:
+        """Every bookable night, morning and meeting day, stored entries merged over the scenario's defaults
+        (plus any stored entry outside the window, so nothing held or booked is ever hidden). New dicts
+        throughout: callers can't mutate state through it."""
+        h, st = self.hotel, self.s
+        cap, inv = h["capacity"], {}
+        for n in sorted(set(cap) | set(st["inventory"])):
+            x = st["inventory"].get(n) or {rt: {"capacity": c, "held": 0, "booked": 0} for rt, c in cap[n].items()}
+            inv[n] = {rt: {**v, "available": v["capacity"] - v["held"] - v["booked"]} for rt, v in x.items()}
+        free = {"held": 0, "booked": 0}
+        bf = {m: dict(st["breakfast"].get(m) or free)
+              for m in sorted(set(self._mornings(h["nights"])) | set(st["breakfast"]))}
+        slots = st["meeting"].get("thames", {})
+        meeting = {x: dict(slots.get(x) or {"status": "free", "deal_id": None})
+                   for x in sorted(set(h["meeting_rooms"]["thames"]["available"]) | set(slots))}
+        return {"inventory": inv, "breakfast": bf, "meeting": {"thames": meeting}, "bookable": dict(h["bookable"])}
+
     def snapshot(self) -> dict:
         with self.lock:
             self._sweep()
@@ -1587,10 +1650,8 @@ class Engine:
                 x["pay_url"] = self.pay_url(d) if self._deposit_op(d) else None
                 deals.append(x)
             ops = [{k: v for k, v in o.items() if k != "client_secret"} for o in self.s["operations"].values()]
-            inv = {n: {rt: {**v, "available": v["capacity"] - v["held"] - v["booked"]} for rt, v in x.items()}
-                   for n, x in self.s["inventory"].items()}
-            return {"run_id": self.s["run_id"], "clock": self.now(), "hotel": self.hotel["name"], "inventory": inv,
-                    "meeting": self.s["meeting"], "breakfast": self.s["breakfast"],
+            cal = self._calendar()
+            return {"run_id": self.s["run_id"], "clock": self.now(), "hotel": self.hotel["name"], **cal,
                     "breakfast_capacity": self.hotel["breakfast"]["group_capacity_per_day"], "deals": deals,
                     "approvals": list(self.s["approvals"].values()), "operations": ops, "ledger": self.s["ledger"],
                     "activity": self.s["activity"][-200:],

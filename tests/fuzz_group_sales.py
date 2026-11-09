@@ -31,6 +31,7 @@ import sys
 import tempfile
 import time
 import traceback
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,10 +85,15 @@ def make_rfp(rng: random.Random, i: int) -> tuple[str, str, str]:
     occ = rng.choice(["", "single-occupancy "]) if rt in ("king", "double") else ""
     guests = rooms * (2 if rt == "twin" else 1)
     count = rng.choice([str(rooms), WORD_NUM[rooms - 1] if rooms <= 12 else str(rooms)])
-    dates = rng.choice([("10", "13", "March", 2027)] * 6 + [("11", "13", "March", 2027), ("10", "12", "March", 2027),
-                                                          ("2", "5", "April", 2027), ("9", "13", "March", 2027)])
-    parts = [f"Hello, please quote {count} {occ}{rt} rooms for {guests} employees arriving {dates[0]} {dates[2]} and "
-             f"departing {dates[1]} {dates[2]} {dates[3]}"]
+    if rng.random() < 0.6:     # the demo stay, where groups compete for a tight block
+        dates = rng.choice([("10", "13", "March", 2027)] * 6 + [("11", "13", "March", 2027), ("10", "12", "March", 2027),
+                                                              ("2", "5", "April", 2027), ("9", "13", "March", 2027)])
+        when = f"arriving {dates[0]} {dates[2]} and departing {dates[1]} {dates[2]} {dates[3]}"
+    else:                      # anywhere in the bookable year, including short notice and past its edges
+        a = date(2027, 1, 12) + timedelta(days=rng.randint(0, 352))
+        b = a + timedelta(days=rng.randint(1, 4))
+        when = f"arriving {a.day} {a:%B} and departing {b.day} {b:%B} {b.year}"
+    parts = [f"Hello, please quote {count} {occ}{rt} rooms for {guests} employees {when}"]
     if rng.random() < 0.7:
         parts.append(", with breakfast each morning.")
     else:
@@ -136,11 +142,11 @@ class ChaosSeller:
         if name == "record_requirements":
             req = {}
             for k, gen in {"room_type": lambda: r.choice(["twin", "king"]), "rooms": lambda: r.randint(0, 40),
-                           "guests": lambda: r.randint(0, 80), "arrival": lambda: r.choice(["2027-03-10", "2027-03-11", "2027-04-01"]),
-                           "departure": lambda: r.choice(["2027-03-13", "2027-03-12", "2027-03-11"]),
+                           "guests": lambda: r.randint(0, 80), "arrival": lambda: r.choice(["2027-03-10", "2027-03-11", "2027-04-01", "2027-06-10", "2027-01-15", "2027-12-30"]),
+                           "departure": lambda: r.choice(["2027-03-13", "2027-03-12", "2027-03-11", "2027-06-13", "2028-01-02"]),
                            "breakfast": lambda: r.random() < 0.5, "budget_total_gbp": lambda: r.choice([1000, 9000, 20000]),
                            "payer": lambda: "Chaos Demo Ltd", "budget_includes_taxes": lambda: r.random() < 0.5,
-                           "meeting": lambda: {"attendees": r.randint(5, 60), "date": r.choice(["2027-03-11", "2027-03-12"]),
+                           "meeting": lambda: {"attendees": r.randint(5, 60), "date": r.choice(["2027-03-11", "2027-03-12", "2027-06-11", "2027-03-13"]),
                                                "layout": r.choice(["classroom", "theatre"])}}.items():
                 if r.random() < 0.5:
                     req[k] = gen()
@@ -445,6 +451,20 @@ def check(e: Engine, provider: SimulatedProvider):
                          if d.get("booking") and d["booking"]["status"] == "confirmed" and d["booking"]["room_type"] == rt)
             if booked != inv["booked"]:
                 _fail(f"inventory {night} {rt}: booked {inv['booked']} but bookings add up to {booked}")
+    # Inventory is stored sparsely: every night a live hold or booking uses must be stored.
+    for h in s["holds"].values():
+        if h["status"] in ("active", "expired_payment_pending"):
+            for night in h["rooms"]:
+                if night not in s["inventory"]:
+                    _fail(f"hold {h['id']} on {night}, which has no stored inventory")
+    for d in s["deals"].values():
+        if d.get("booking") and d["booking"]["status"] == "confirmed":
+            for night in d["booking"]["rooms"]:
+                if night not in s["inventory"]:
+                    _fail(f"{d['ref']} booked on {night}, which has no stored inventory")
+            arrival = min(d["booking"]["rooms"])
+            if arrival not in hotel["nights"]:
+                _fail(f"{d['ref']} booked outside the bookable calendar ({arrival})")
     cap = hotel["breakfast"]["group_capacity_per_day"]
     for m, b in s["breakfast"].items():
         if b["held"] < 0 or b["booked"] < 0 or b["held"] + b["booked"] > cap:

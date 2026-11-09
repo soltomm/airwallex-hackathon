@@ -50,9 +50,9 @@ Everything the scenario needs is in [`data/groupsales/scenario.json`](data/group
 
 | Key | What it holds |
 |---|---|
-| `hotel` | Harbour House, London: stay 10–13 March 2027, 14 twin and 16 king rooms free, the Thames Room (classroom for 32, 11 March), breakfast £15 (60 group covers a day) |
+| `hotel` | Harbour House, London: bookable nights 11 January to 31 December 2027 (`bookable`), 20 twin and 20 king group rooms a night, except the demo stay (10–13 March) with 14 twin and 16 king (`availability_by_night`); the Thames Room (classroom for 32, weekdays 08:00–18:00, closed on listed dates), breakfast £15 (60 group covers a day). `bookable.py` expands this into the per-night calendar; state stores only the nights something has touched |
 | `rms` | Rates per room type (twin £220 target, £210 seller floor, £195 absolute minimum; king £190 / £180 / £170), delivery costs, 40% minimum contribution margin |
-| `policy` | Deposit (30% standard, up to 40%, 20–29% with the manager), attrition (10%, up to 20% with the manager), installments, cancellation, 24-hour quotes and holds, £500 seller refund limit |
+| `policy` | Deposit (30% standard, up to 40%, 20–29% with the manager), attrition (10%, up to 20% with the manager), installments, cancellation, 24-hour quotes and holds, arrivals at least 31 days ahead (shorter notice goes to a person), £500 seller refund limit |
 | `crm` | What the hotel knows about each sender |
 | `inbox` | The two RFPs: Northstar Analytics (12 twins, meeting room, £10,000 budget) and Summit Robotics (8 kings) |
 | `buyers` | Each buyer's private mandate: budget, deposit limit (£ and %), objectives (e.g. Northstar wants 20% attrition), known answers, and Northstar's later change request |

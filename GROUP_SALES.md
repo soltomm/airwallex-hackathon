@@ -8,6 +8,7 @@ sandbox payments. This is the build for product spec v2 (Airwallex hackathon).
 data/groupsales/scenario.json        hotel, PMS/RMS/CRM/policy data, the two RFPs, buyer mandates
 src/agentbank/groupsales/
   calc.py       pricing, deposits, attrition allowance, contribution margin, reductions, schedules
+  bookable.py   expands the scenario's bookable window (defaults + per-night overrides) into a calendar
   policy.py     hotel authority (seller vs manager vs hard limits) and buyer mandate checks
   engine.py     shared hotel state + every enforced operation (intake, holds, versions, approvals,
                 payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)

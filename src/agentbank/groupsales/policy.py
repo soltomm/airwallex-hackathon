@@ -6,7 +6,10 @@ can change them.
 """
 from __future__ import annotations
 
-from .calc import gbp
+from datetime import timedelta
+
+from .bookable import window_text
+from .calc import d, gbp
 
 LAYOUTS_ON_FILE = {"classroom"}
 
@@ -24,11 +27,14 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
 
     if terms.get("currency", "GBP") != "GBP":
         hard.append("all charges are billed in GBP")
+    bookable_nights = set(hotel["nights"])
     for night in terms.get("rooms", {}):
-        if night not in hotel["nights"]:
-            hard.append(f"{night} is outside the supported stay ({hotel['arrival']} to {hotel['departure']})")
+        if night not in bookable_nights:
+            hard.append(f"{night} is outside the bookable {window_text(hotel)}")
+    # Breakfast is served the morning after a contracted night.
+    mornings = {(d(n) + timedelta(days=1)).isoformat() for n in terms.get("rooms", {})}
     for morning in (terms.get("breakfast") or {}):
-        if morning <= hotel["arrival"] or morning > hotel["departure"]:
+        if morning not in mornings:
             hard.append(f"breakfast on {morning} is outside the stay")
     if rate < bands["absolute_min"]:
         hard.append(f"{rt} rate {gbp(rate)} is below the absolute minimum {gbp(bands['absolute_min'])}")

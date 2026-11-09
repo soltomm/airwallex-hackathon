@@ -6,10 +6,13 @@
     "city": "London",
     "currency": "GBP",
     "rooms_total": 80,
-    "arrival": "2027-03-10",
-    "departure": "2027-03-13",
-    "nights": ["2027-03-10", "2027-03-11", "2027-03-12"],
-    "availability": {"twin": 14, "king": 16},
+    "bookable": {"first_night": "2027-01-11", "last_night": "2027-12-31"},
+    "availability": {"twin": 20, "king": 20},
+    "availability_by_night": {
+      "2027-03-10": {"twin": 14, "king": 16},
+      "2027-03-11": {"twin": 14, "king": 16},
+      "2027-03-12": {"twin": 14, "king": 16}
+    },
     "room_types": {
       "twin": {"label": "Twin room", "max_occupancy": 2},
       "king": {"label": "King room", "max_occupancy": 2}
@@ -18,7 +21,9 @@
       "thames": {
         "label": "Thames Room",
         "capacity": {"classroom": 32},
-        "available": {"2027-03-11": "08:00-18:00"},
+        "hours": "08:00-18:00",
+        "open_weekdays": [0, 1, 2, 3, 4],
+        "available": {"2027-12-24": null, "2027-12-27": null, "2027-12-28": null, "2027-12-31": null},
         "day_rate": 60000,
         "includes": ["projector", "microphone", "Wi-Fi"]
       }
@@ -46,6 +51,7 @@
       {"within_days": 7, "charge_pct": 100}
     ],
     "quote_validity_hours": 24,
+    "min_days_before_arrival": 31,
     "rooming_list_days_before_arrival": 21,
     "seller_refund_limit": 50000,
     "supported_services": ["twin rooms", "king rooms", "breakfast", "meeting room (Thames Room)"],
