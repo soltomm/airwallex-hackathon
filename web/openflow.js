@@ -72,13 +72,33 @@
     if(!dialog.open) dialog.showModal();
     $('wbDrawerTitle').focus();
   }
+  // New inquiries go to Harbour House itself (POST /api/inbox): the seller agent works them with the real
+  // rules, approvals only where a seller rule is exceeded, and real (sandbox) payments.
+  const SAMPLES={
+    email:full=>({from:'Jamie Chen <jamie@acme.example>', subject:`RFP | Leadership offsite | ${full?40:12} guests | 10–13 March 2027`,
+      body:`Hello Group Sales, please quote ${full?20:6} king rooms for ${full?40:12} colleagues arriving 10 March and departing 13 March 2027, with breakfast each morning. No meeting room is needed. Our target is £210 per room/night including breakfast, and our total budget is £${full?'15,000':'4,500'} inclusive of taxes. Acme Demo Ltd pays the package; guests cover incidentals. Please reply by 14 January at noon London time. Thanks, Jamie, People & Culture.`}),
+    phone:full=>({from:'Sophie Bennett <sophie@bennett.example>', subject:'Phone inquiry | Bennett wedding | 10–13 March 2027',
+      body:`Call transcript, taken by reception. Sophie: We're getting married nearby and need ${full?20:4} king rooms for ${full?40:8} guests arriving 10 March and departing 13 March 2027. Could you include breakfast each morning? No meeting room is needed. We'd hope for around £200 per room/night including breakfast, and our total budget is £${full?'15,000':'3,000'} including taxes. The bill goes to Bennett Family Events Ltd. Reception: We'll send you a written quote by email. Thanks, Sophie`})};
   function simulator() {
     active=null;
-    showDrawer('Let the inquiry come to you.',`<p class="wb-lede">A full inbox starts with a single conversation. Try one, and see what happens next.</p>
-      <label class="wb-field">Inventory scenario<select id="wbScenario"><option value="random">Random · 50% available / 50% unavailable</option><option value="available">Dates available</option><option value="unavailable">Dates unavailable</option></select></label>
-      <div class="wb-channel-grid"><button class="wb-channel" data-channel="email"><span class="wb-channel-icon" aria-hidden="true">✉</span><b>Receive an email RFP</b><p>A corporate leadership offsite. Rooms, breakfast and a space to think together.</p><span class="wb-channel-action">Receive email inquiry →</span></button>
-      <button class="wb-channel" data-channel="phone"><span class="wb-channel-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 3h4l2 5-3 2c1 3 3 5 6 6l2-3 5 2v4c0 2-3 3-6 2C8 19 3 14 2 7c0-2 1-4 3-4Z" stroke="currentColor" stroke-width="1.3"/></svg></span><b>Receive a phone inquiry</b><p>A wedding room block. A warm welcome for the people who matter most.</p><span class="wb-channel-action">Receive phone inquiry →</span></button></div>
-      <div class="wb-demo-note">Isolated simulation · Sample emails, transcripts, inventory, approval links and deposits stay in this browser. Harbour House’s live inquiries are unaffected.</div>`,'INBOUND SIMULATOR');
+    showDrawer('Let the inquiry come to you.',`<p class="wb-lede">Send Harbour House a group inquiry. Its seller agent picks it up within seconds: it checks rooms and rates, asks for anything missing, quotes, and asks the hotel manager only when a seller rule would be exceeded.</p>
+      <label class="wb-field">Rooms<select id="wbScenario"><option value="available">Ask for rooms that are free</option><option value="unavailable">Ask for more rooms than are free</option></select></label>
+      <div class="wb-channel-grid"><button class="wb-channel" data-sample="email"><span class="wb-channel-icon" aria-hidden="true">✉</span><b>Sample email RFP</b><p>A corporate leadership offsite: king rooms and breakfast, 10–13 March 2027.</p><span class="wb-channel-action">Use this inquiry →</span></button>
+      <button class="wb-channel" data-sample="phone"><span class="wb-channel-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 3h4l2 5-3 2c1 3 3 5 6 6l2-3 5 2v4c0 2-3 3-6 2C8 19 3 14 2 7c0-2 1-4 3-4Z" stroke="currentColor" stroke-width="1.3"/></svg></span><b>Sample phone inquiry</b><p>A wedding room block, written up from a call transcript.</p><span class="wb-channel-action">Use this inquiry →</span></button></div>
+      <form id="wbInbound"><h3>Or write your own</h3>
+        <label class="wb-field">From<input id="wbInquiryFrom" required maxlength="200" value="Guest <guest@example.com>"></label>
+        <label class="wb-field">Subject<input id="wbInquirySubject" required maxlength="200" value="Group inquiry"></label>
+        <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="8" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 March and departing 13 March 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>
+        <p class="wb-sub">Harbour House sells twin and king rooms, breakfast and the Thames Room for stays 10–13 March 2027. Anything else is handed to hotel staff. Mention who pays and whether the budget includes taxes, or the agent will ask.</p>
+        <button class="wb-primary" type="submit" id="wbSend">Send inquiry to Harbour House</button></form>`,'NEW INQUIRY');
+    $('wbInbound').onsubmit=async e=>{
+      e.preventDefault();
+      const from=$('wbInquiryFrom').value.trim(), subject=$('wbInquirySubject').value.trim(), body=$('wbInquiryText').value.trim();
+      if(!from||!body){notify('Add who it is from and the inquiry text.');return;}
+      $('wbSend').disabled=true;
+      try { const id=await window.Harbour.inbound(from,subject||'Group inquiry',body); $('wbDrawer').close(); refresh(); window.Harbour.open(id); }
+      catch(err){ $('wbSend').disabled=false; }
+    };
   }
   function open(id, review=false) {
     const d=demo.find(d=>d.id===id);
@@ -159,7 +179,7 @@
     if(button.hasAttribute('data-wb-close'))button.closest('dialog').close();
     if(button.dataset.filter){filter=button.dataset.filter;refresh();document.querySelector(`[data-filter="${filter}"]`).focus();}
     if(button.dataset.open)open(button.dataset.open);
-    if(button.dataset.channel){const d=M.create(button.dataset.channel,$('wbScenario').value,demo);demo.unshift(d);save();refresh();open(d.id);}
+    if(button.dataset.sample){const m=SAMPLES[button.dataset.sample]($('wbScenario').value==='unavailable');$('wbInquiryFrom').value=m.from;$('wbInquirySubject').value=m.subject;$('wbInquiryText').value=m.body;$('wbInquiryText').focus();}
     if(button.dataset.date){const d=demo.find(d=>d.id===active);try{M.selectAlternative(d,button.dataset.date,demo);save();refresh();renderDetail(d);}catch(err){notify(err.message);}}
     if(button.dataset.command)command(button.dataset.command);
     if(button.matches('a[href^="#review/"]')) { e.preventDefault(); open(button.hash.slice(8),true); }

@@ -1564,3 +1564,37 @@ def test_gs_hotel_account_overrides_onboarding(eng, monkeypatch):
     assert e.hotel_account == "acct_from_env" and e.hotel_account_view()["source"] == "GS_HOTEL_ACCOUNT"
     with pytest.raises(Refused):
         e.onboard_hotel_account()
+
+
+# ------------------------------------------------------------------------------ "New inquiry" samples (web/openflow.js)
+# Keep these in step with SAMPLES in web/openflow.js: the dashboard sends them as real inquiries.
+_ACME = ("Jamie Chen <jamie@acme.example>", "RFP | Leadership offsite | 12 guests | 10–13 March 2027",
+         "Hello Group Sales, please quote 6 king rooms for 12 colleagues arriving 10 March and departing 13 March 2027, "
+         "with breakfast each morning. No meeting room is needed. Our target is £210 per room/night including breakfast, "
+         "and our total budget is £4,500 inclusive of taxes. Acme Demo Ltd pays the package; guests cover incidentals. "
+         "Please reply by 14 January at noon London time. Thanks, Jamie, People & Culture.")
+_BENNETT = ("Sophie Bennett <sophie@bennett.example>", "Phone inquiry | Bennett wedding | 10–13 March 2027",
+            "Call transcript, taken by reception. Sophie: We're getting married nearby and need 20 king rooms for 40 "
+            "guests arriving 10 March and departing 13 March 2027. Could you include breakfast each morning? No meeting "
+            "room is needed. We'd hope for around £200 per room/night including breakfast, and our total budget is "
+            "£15,000 including taxes. The bill goes to Bennett Family Events Ltd. Reception: We'll send you a written "
+            "quote by email. Thanks, Sophie")
+
+
+def test_new_inquiry_samples_are_quoted_without_approval(eng):
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    acme = e.ingest_email(*_ACME)["deal_id"]
+    s.run()
+    d = e.deal(acme)
+    assert d["status"] == "offer_sent" and not d["missing"]
+    assert d["versions"][-1]["pricing"]["total"] == 396000             # 6 kings x 3 nights x £190 + breakfast
+    assert not any(a["deal_id"] == d["id"] for a in e.s["approvals"].values())
+    # More rooms than are free: the seller offers what it has (16 kings - Summit's 8 - Acme's 6 = 2).
+    bennett = e.ingest_email(*_BENNETT)["deal_id"]
+    s.run()
+    b = e.deal(bennett)
+    assert b["status"] in ("offer_sent", "handoff", "declined")
+    if b["status"] == "offer_sent":
+        assert max(b["versions"][-1]["terms"]["rooms"].values()) < 20 and b["versions"][-1]["unmet"]
