@@ -211,6 +211,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
+            assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
+                      "/assets/openflow-demo.js": ("openflow-demo.js", "text/javascript"),
+                      "/assets/openflow.js": ("openflow.js", "text/javascript")}
+            if p in assets:
+                name, mime = assets[p]
+                return self._send(200, (WEB / name).read_text(), mime)
             if p == "/api/state":
                 return self._send(200, state())
             if p.startswith("/api/buyer/") and p.endswith("/suggest"):
@@ -224,6 +230,8 @@ class Handler(BaseHTTPRequestHandler):
                                   "text/html")
             if p.startswith("/api/buyer/") and p.endswith("/view"):
                 return self._send(200, buyer_view(p.split("/")[3], q.get("t", "")))
+            if p == "/api/hotel_account":
+                return self._send(200, engine.hotel_account_view(check=q.get("check") == "1"))
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
             if p.startswith("/pay/"):
@@ -256,6 +264,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
             if p.startswith("/api/deals/") and p.endswith("/retry"):
                 return self._send(200, engine.retry_seller(p.split("/")[3], actor="hotel staff"))
+            if p == "/api/hotel_account/onboard":
+                return self._send(200, engine.onboard_hotel_account(actor="hotel staff"))
+            if p.startswith("/api/deals/") and p.endswith("/retry_payout"):
+                return self._send(200, engine.retry_payout(p.split("/")[3], actor="hotel staff"))
             if p.startswith("/api/buyer/") and p.endswith("/organizer"):
                 did = p.split("/")[3]
                 buyer_view(did, b.get("token", ""))          # checks the buyer token

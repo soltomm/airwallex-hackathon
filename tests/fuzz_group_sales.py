@@ -564,6 +564,27 @@ def check(e: Engine, provider: SimulatedProvider):
     if len(keys) != len(set(keys)):
         _fail("duplicate ledger entries")
 
+    # Hotel payouts: splits never above the capture, reversals never above their split, and once every
+    # payout and clawback has gone through, hotel share + platform fee = what the buyer has paid, net.
+    for iid, i in provider.db["intents"].items():
+        split = sum(x["amount"] for x in provider.db.get("splits", {}).values() if x["source_id"] == iid)
+        if split > i["captured_amount"]:
+            _fail(f"intent {iid}: funds splits {split} exceed capture {i['captured_amount']}")
+    for sid, sp in provider.db.get("splits", {}).items():
+        back = sum(x["amount"] for x in provider.db.get("reversals", {}).values() if x["funds_split_id"] == sid)
+        if back > sp["amount"]:
+            _fail(f"funds split {sid}: reversals {back} exceed the split {sp['amount']}")
+    pkeys = [x["key"] for x in s.get("payout_ledger", [])]
+    if len(pkeys) != len(set(pkeys)):
+        _fail("duplicate payout ledger entries")
+    for d in s["deals"].values():
+        pv = e.payout_view(d)
+        fin = e.finance(d)
+        refunds_done = all(o["status"] in ("completed", "failed") for o in e._refund_ops(d))
+        clean = pv["status"] == "paid" and refunds_done and not fin["refund_owed"] and not fin["refund_pending"]
+        if clean and pv["hotel_net"] + pv["platform_fee"] != fin["net_received"]:
+            _fail(f"{d['ref']}: hotel {pv['hotel_net']} + fee {pv['platform_fee']} != net received {fin['net_received']}")
+
     # Approvals are decided only by the named approver.
     for x in s["activity"]:
         if x["kind"] in ("approval_approved", "approval_rejected"):

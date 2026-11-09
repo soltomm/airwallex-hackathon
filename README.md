@@ -13,6 +13,10 @@ an RFP can change them. Each side sees only its own private constraints: the sel
 buyer's budget mandate or deposit limits, and the buyer never sees the hotel's floors, costs or
 margins. The presenter dashboard shows both sides.
 
+Money follows the Airwallex Payments for Platforms model: the platform collects each deposit for the
+hotel's connected account, pays the hotel its share by funds split (keeping a 10% commission), and takes
+the hotel's share of any refund back by funds split reversal. See "Hotel payouts" in GROUP_SALES.md.
+
 Full product notes, enforced rules and the live demo script: **[GROUP_SALES.md](GROUP_SALES.md)**.
 Recorded-demo shot list: [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md).
 

@@ -57,6 +57,11 @@
     "supported_services": ["twin rooms", "king rooms", "breakfast", "meeting room (Thames Room)"],
     "fixed_terms": "Service prices, cancellation charges, installment schedule and rooming-list deadline are fixed."
   },
+  "platform": {
+    "_note": "Airwallex Payments for Platforms. The platform collects each card payment for the hotel, which is a connected account (GS_HOTEL_ACCOUNT); a funds split pays the hotel its share and the commission stays with the platform. Commission in basis points (1000 = 10%).",
+    "name": "Group Desk",
+    "commission_bps": 1000
+  },
   "crm": {
     "northstar.example": {
       "account": "Northstar Analytics", "legal_names_on_file": [], "type": "new corporate account",

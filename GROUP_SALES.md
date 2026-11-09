@@ -80,13 +80,15 @@ night, and **Seller rules** opens the rules the seller works within (see below).
 4. In the mailbox, **Accept v2.** The deposit is over Northstar's own limits, so its organizer signs off:
    **Approve as organizer**, still in the mailbox. The dashboard only shows that the buyer is signing off.
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
-   When you return, the booking is verified with Airwallex and confirmed.
+   When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
+   shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
 6. **Jump to 20 Jan**, from Northstar's card or Demo controls. Summit's quote lapses. In the mailbox,
    **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
 8. **Demo controls → Deliver held notifications.** The late notice is ignored as a duplicate. Final
-   state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests.
+   state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
+   back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**.
 
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
@@ -107,6 +109,47 @@ offers and changes made after saving; versions already made keep their terms. Th
 from the scenario, so they stay after a reset, and **Restore defaults** undoes them. The Claude seller's
 prompt is built from the same values, so it never quotes old limits. The fixed rules (services, prices,
 payment schedule, cancellation, capacity, costs) are listed underneath.
+
+### Hotel payouts (Airwallex Payments for Platforms)
+
+The hotel doesn't hold the card payments itself. The platform (**Group Desk**, `platform` in
+`scenario.json`) has the Airwallex account; the hotel is one of its **connected accounts**
+(`GS_HOTEL_ACCOUNT`, `acct_…`), onboarded and verified by Airwallex. The platform collects each deposit
+for the hotel ("collect payments directly": the intent is tagged with `connected_account_id`), and once
+the backend has verified the payment and confirmed the booking it pays the hotel its share by **funds
+split**. The commission (10%, `commission_bps: 1000`) stays with the platform. Airwallex then pays the
+hotel out to its own bank account.
+
+A refund to the buyer is paid by the platform, and a **funds split reversal** takes the hotel's share of
+it back; the platform returns its commission on the refunded part. In the demo:
+
+| | Buyer paid | To the hotel | Group Desk fee |
+|---|---|---|---|
+| Deposit | £3,840 | £3,456 (funds split) | £384 |
+| Refund | −£528 | −£475.20 (reversal) | −£52.80 |
+| **Net** | **£3,312** | **£2,980.80** | **£331.20** |
+
+The **Hotel payout** card on the deal shows these figures, the connected account and the status. The
+same money rules apply as for deposits and refunds: the operation is saved before the call, a timeout is
+looked up (`GET /pa/funds_splits?source_id=`) and never resent as a second split, a reversal is resent
+only with its original `request_id` (Airwallex refuses a reused one), and each payout and reversal is
+recorded once in a separate payout ledger. A refused split leaves the booking standing and the deposit
+with the platform; **Retry payout** sends it again once the cause is fixed. Payouts are backend
+bookkeeping: no agent tool moves them, and the buyer's view never shows them. Without a hotel account
+(live Airwallex), deposits are collected untagged and the card shows "No hotel account connected".
+
+**Onboarding the hotel.** Property tools → **Hotel payout account** shows the hotel's connected account
+and offers **Onboard Harbour House**. On the server (so it works on Render, inside the key's IP
+whitelist) it creates a connected account named Harbour House under your Airwallex account
+(`POST /accounts/create`), submits it, activates it in the sandbox and enables card payments (Visa and
+Mastercard capabilities), reusing the onboarding the Hotel Negotiation Desk verified live. It takes a
+minute or two and runs in the background; progress is saved after each step, and a retry resumes the
+same account with the same `request_id` rather than opening another. The account is used only once it
+accepts cards, because an intent tagged with an account that doesn't is refused. It is stored apart from
+the scenario state, so a reset keeps it; staging and the live demo keep their own (separate storage
+namespaces), or share one by setting `GS_HOTEL_ACCOUNT`, which always wins. **Check with Airwallex**
+reads the account's status and capabilities. Your Airwallex account must have Payments for Platforms
+enabled and an API key allowed to create accounts; otherwise the drawer shows Airwallex's refusal.
 
 ### When a payment provider refuses
 
@@ -153,7 +196,9 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
 ## Verified live (Airwallex sandbox, 2026-11-02)
 
 Changes made after this run (the privacy fix, the two refund fixes and the dashboard polish on
-`group-sales-next`) were tested offline only.
+`group-sales-next`, and the hotel payouts by funds split and reversal) were tested offline only. The
+earlier Hotel Negotiation Desk did verify funds splits to a connected account live (2026-10-23); this
+build's splits and reversals have not yet run against the sandbox.
 
 The full story ran against the sandbox with the rules seller, paying through hosted checkout in Chrome:
 - Deposit Payment Intent `int_sgpvzhfh9hnsz4b1uwl`, £3,840.00 GBP, SUCCEEDED; checked on return,
@@ -194,6 +239,12 @@ approved refund.
   creation, duplicate and out-of-order provider events, an old event after a reset;
 - the AI Agent record: every seller run with its tool calls, inputs, results and effects; refused calls
   recorded without changing anything; empty runs dropped; cleared on reset;
+- hotel payouts: the intent tagged with the hotel's connected account, £3,456 split to the hotel and
+  £384 kept, £475.20 taken back for the £528 refund (hotel £2,980.80 + fee £331.20 = £3,312 net
+  received), late and repeated refund events taking nothing back twice, a split timeout recovered by
+  lookup with no second split, a refused split leaving the booking standing until **Retry payout**, a
+  reversal timeout resent with the same request_id, no payouts without a connected account, and none
+  of it in the buyer's view;
 - the server: webhook signatures (bad, stale, tampered and missing rejected; valid accepted) and the
   access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
 

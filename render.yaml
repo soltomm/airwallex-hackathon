@@ -35,5 +35,7 @@ services:
         sync: false
       - key: AWX_API_KEY
         sync: false
+      - key: GS_HOTEL_ACCOUNT           # the hotel's Airwallex connected account (acct_...); its share of each deposit is paid by funds split
+        sync: false
       - key: AWX_WEBHOOK_SECRET         # optional: webhook URL <service URL>/webhooks/airwallex
         sync: false
