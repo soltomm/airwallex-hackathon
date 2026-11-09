@@ -81,9 +81,14 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     deposit = pct_of(total, int(terms["deposit_pct"]))
 
     costs = rms["delivery_costs"]
+    # Delivery costs follow the rooms actually used; the holding cost (rooms blocked for the group and
+    # not sold to anyone else) is carried on every contracted room-night, released or not. That is what
+    # makes free release and rate concessions eat into the margin.
+    hold = (rms.get("holding_costs") or {}).get(rt, 0) * contracted
     def contribution(room_nights: int) -> dict:
         revenue = room_nights * rate + bf_count * bf_unit + meeting_price
-        cost = room_nights * costs[rt] + bf_count * costs["breakfast"] + (costs["meeting_day"] if meeting else 0)
+        cost = (room_nights * costs[rt] + hold + bf_count * costs["breakfast"]
+                + (costs["meeting_day"] if meeting else 0))
         contrib = revenue - cost
         return {"revenue": revenue, "costs": cost, "contribution": contrib,
                 "margin_pct": round(100 * contrib / revenue, 1) if revenue else 0.0}

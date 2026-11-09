@@ -36,6 +36,7 @@
       "king": {"target": 19000, "autonomous_floor": 18000, "absolute_min": 17000}
     },
     "delivery_costs": {"twin": 7000, "king": 6000, "breakfast": 600, "meeting_day": 18000},
+    "holding_costs": {"twin": 6000, "king": 4500},
     "min_contribution_margin_pct": 40
   },
   "policy": {

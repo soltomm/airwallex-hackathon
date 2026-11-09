@@ -55,14 +55,14 @@ Everything the scenario needs is in [`data/groupsales/scenario.json`](data/group
 | Key | What it holds |
 |---|---|
 | `hotel` | Harbour House, London: bookable nights 11 January to 31 December 2027 (`bookable`), 20 twin and 20 king group rooms a night, except the demo stay (10–13 March) with 14 twin and 16 king (`availability_by_night`); the Thames Room (classroom for 32, weekdays 08:00–18:00, closed on listed dates), breakfast £15 (60 group covers a day). `bookable.py` expands this into the per-night calendar; state stores only the nights something has touched |
-| `rms` | Rates per room type (twin £220 target, £210 seller floor, £195 absolute minimum; king £190 / £180 / £170), delivery costs, 40% minimum contribution margin |
+| `rms` | Rates per room type (twin £220 target, £210 seller floor, £195 absolute minimum; king £190 / £180 / £170), delivery costs per room-night used, holding costs per contracted room-night (kept when rooms are released), 40% minimum contribution margin |
 | `policy` | Deposit (30% standard, up to 40%, 20–29% with the manager), attrition (10%, up to 20% with the manager), installments, cancellation, 24-hour quotes and holds, arrivals at least 31 days ahead (for shorter notice, or dates outside the calendar, the seller offers dates it can sell), £500 seller refund limit |
 | `crm` | What the hotel knows about each sender |
 | `inbox` | The two RFPs: Northstar Analytics (12 twins, meeting room, £10,000 budget) and Summit Robotics (8 kings) |
 | `buyers` | Each buyer's private mandate: budget, deposit limit (£ and %), objectives (e.g. Northstar wants 20% attrition), known answers, and Northstar's later change request |
 
 Expected figures (tested): Northstar £9,600 with a 40% deposit of £3,840 and a 7 room-night
-allowance, margin 67.4% / 67.2%; after the two-room reduction £8,280, revised deposit £3,312, refund
+allowance, margin 44.9% / 40.4%; after the two-room reduction £8,280, revised deposit £3,312, refund
 £528, £3,312 net received, £4,968 still due (£828 by 8 Feb, £4,140 by 3 Mar). Summit £4,920, deposit
 £1,476.
 

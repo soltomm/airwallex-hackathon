@@ -78,11 +78,12 @@ def test_spec_figures():
     assert (p["total"], p["deposit"]) == (960000, 288000)
     p = calc.price(northstar_terms(), H, RMS)
     assert (p["total"], p["deposit"], p["attrition_allowance"]) == (960000, 384000, 7)
-    assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 313200, "contribution": 646800, "margin_pct": 67.4}
-    assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 264200
+    assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 529200, "contribution": 430800, "margin_pct": 44.9}
+    assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 480200
+    assert p["margin_full_release"]["margin_pct"] == 40.4
     r = calc.evaluate_reduction(northstar_terms(), {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     assert (r["new_pricing"]["total"], r["revised_deposit"], r["refund_due"], r["remaining_after"]) == (828000, 331200, 52800, 1)
-    assert r["new_pricing"]["margin_all_rooms"]["costs"] == 271200
+    assert r["new_pricing"]["margin_all_rooms"]["costs"] == 487200          # released rooms keep their holding cost
     sched = calc.schedule(828000, 40, 331200, "2027-03-10", POL, "2027-01-11")
     assert [x["amount"] for x in sched] == [0, 82800, 414000]
 
@@ -191,7 +192,7 @@ def test_stale_approval_and_hard_limits(eng):
     old = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     with pytest.raises(Refused):
         e.decide_approval(old["id"], "approve", "organizer")          # wrong approver
-    e.propose_offer(n["id"], 21000, 40, 20, "revised")                # materially changed offer
+    e.propose_offer(n["id"], 22000, 40, 15, "revised")                # materially changed offer
     assert e.s["approvals"][old["id"]]["status"] == "stale"
     with pytest.raises(Refused):
         e.decide_approval(old["id"], "approve", "hotel_manager")
@@ -777,8 +778,10 @@ def test_below_floor_rate_needs_approval_and_40_percent(eng):
     e = eng
     s, n = _quoted(e)
     with pytest.raises(Refused, match="40% deposit"):
-        e.propose_offer(n["id"], 20500, 30, 10, "below floor at 30%")
-    r = e.propose_offer(n["id"], 20500, 40, 10, "below floor at 40%")
+        e.propose_offer(n["id"], 20600, 30, 10, "below floor at 30%")
+    with pytest.raises(Refused, match="contribution margin"):        # £205 loses margin if the release is used
+        e.propose_offer(n["id"], 20500, 40, 10, "too far below floor")
+    r = e.propose_offer(n["id"], 20600, 40, 10, "below floor at 40%")
     assert r["status"] == "pending_approval"
     appr = e.s["approvals"][r["approval_id"]]
     assert any("below the seller's floor" in x for x in appr["reasons"])
@@ -786,6 +789,35 @@ def test_below_floor_rate_needs_approval_and_40_percent(eng):
         e.send_offer(n["id"], r["version"])
     e.decide_approval(r["approval_id"], "approve", "hotel_manager")
     assert e.send_offer(n["id"], r["version"])["status"] == "sent"
+
+
+def test_margin_moves_with_concessions():
+    """Free release and rate cuts cost the hotel margin: released rooms still carry their holding cost."""
+    def m(**kw):
+        p = calc.price(northstar_terms(**kw), H, RMS)
+        return p["margin_all_rooms"]["margin_pct"], p["margin_full_release"]["margin_pct"]
+    assert m(att=10, rate=22000) == (44.9, 43.2)
+    assert m(att=20, rate=22000) == (44.9, 40.4)          # more free release: lower worst case
+    assert m(att=10, rate=21000) == (42.7, 41.0)          # rate cut: lower in both cases
+    assert m(att=20, rate=21000)[1] < 40 < m(att=10, rate=21000)[1]
+    assert m(att=10, rate=19500)[0] < 40
+
+
+def test_margin_floor_bites_on_the_default_rules(eng):
+    """With the shipped costs the 40% floor refuses a below-target rate combined with 20% attrition."""
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    n = deal_by(e, "Northstar")
+    buyer_turn(e, "Northstar")
+    s.run()
+    assert e.price_terms(n["id"], 21000, 40, 10)["hotel_check"]["ok"]
+    p = e.price_terms(n["id"], 21000, 40, 20)
+    assert any("contribution margin" in x and "full allowance released" in x for x in p["hotel_check"]["hard"])
+    p = e.price_terms(n["id"], 19500, 40, 10)
+    assert any("contribution margin" in x and "all rooms used" in x for x in p["hotel_check"]["hard"])
+    with pytest.raises(Refused, match="contribution margin"):
+        e.propose_offer(n["id"], 21000, 40, 20, "rate cut and wide release")
 
 
 def test_package_below_margin_floor_is_refused(tmp_path):
@@ -1284,6 +1316,8 @@ def test_rule_change_is_checked_and_refused_whole(eng):
         e.update_rules({"rms.rates.twin.autonomous_floor": 23000})   # above the £220 target
     with pytest.raises(Refused, match="not an editable rule"):
         e.update_rules({"rms.delivery_costs.twin": 1})
+    with pytest.raises(Refused, match="£130 cost of a room-night"):     # £70 delivery + £60 holding
+        e.update_rules({"rms.rates.twin.absolute_min": 12000})
     with pytest.raises(Refused, match="exception terms"):
         e.update_rules({"policy.deposit.required_pct_for_exceptions": 50})
     with pytest.raises(Refused):
