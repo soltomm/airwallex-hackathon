@@ -375,9 +375,10 @@ function nextCard(d) {
   let h = `<div class="next ${n.cls}"><div class="who">${esc(n.who)}</div>`;
   if (n.ap) {
     const a = n.ap;
-    const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: `Approve change v${a.version}?`}[a.subject] || 'Approve?';
+    const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
+    const [yes, no] = a.subject === 'reduction' && a.amount ? ['Approve waiver', 'Keep the charge'] : ['Approve', 'Reject'];
     h += `<h3>${what}</h3><p>${esc(sentences(a.reasons))}</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
-      <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div>`;
+      <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">${yes}</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">${no}</button></div>`;
   } else if (n.paused) {
     h += `<h3>Stopped: ${esc(n.paused.what)} failed at the payment provider</h3><p class="small" style="overflow-wrap:anywhere">${esc(tidy(n.paused.error).slice(0, 300))}</p>
       <p class="small">The seller doesn't retry this on its own, so a provider problem can't pile up failed attempts. Fix the cause (for example the API key or its IP whitelist), then retry.</p>
@@ -485,7 +486,7 @@ function tabBody(d) {
   if (tab === 'rec') return d.records.length ? d.records.map(x => `<details><summary><b>${esc(x.system)}</b> <span class="small muted">· ${when(x.checked_at)}</span><div class="small">${esc(x.summary)}</div></summary><pre>${esc(JSON.stringify(x.data, null, 1))}</pre></details>`).join('') : '<p class="muted">No records checked yet.</p>';
   if (tab === 'hist') return d.versions.slice().reverse().map(v => `<details><summary><b>v${v.n}</b> ${v.kind} · ${esc(v.status.replaceAll('_', ' '))} · ${gbp(v.pricing.total)} · deposit ${v.terms.deposit_pct}% · attrition ${v.terms.attrition_pct}%</summary>
       <dl class="kv small" style="margin-top:6px"><dt>Rate</dt><dd>${gbp(v.terms.rate)} ${v.terms.room_type}</dd><dt>Created</dt><dd>${when(v.created_at)}${v.sent_at ? ' · sent ' + when(v.sent_at) : ''}</dd><dt>Terms hash</dt><dd><code>${v.hash}</code></dd>
-      ${v.reduction ? `<dt>Reduction</dt><dd>${v.reduction.requested_room_nights} room-nights released of ${v.reduction.allowance} · refund ${gbp(v.reduction.refund_due)} (${esc(v.reduction.refund_mode)})</dd>` : ''}
+      ${v.reduction ? `<dt>Reduction</dt><dd>${v.reduction.requested_room_nights} room-nights released (allowance ${v.reduction.allowance})${v.reduction.charged_room_nights ? ` · ${v.reduction.charged_room_nights} charged, attrition charge ${gbp(v.reduction.attrition_charge)}${v.reduction.waived ? `, ${gbp(v.reduction.waived)} waived` : ''}` : ''} · refund ${gbp(v.reduction.refund_due)} (${esc(v.reduction.refund_mode)})</dd>` : ''}
       ${v.explanation ? `<dt>Seller's note</dt><dd>${esc(v.explanation)}</dd>` : ''}</dl></details>`).join('') || '<p class="muted">No versions yet.</p>';
   if (tab === 'money') {
     const ops = S.operations.filter(o => o.deal_id === d.id), led = S.ledger.filter(x => x.deal_id === d.id), f = d.finance_view;
@@ -737,6 +738,7 @@ function decisions() {
   return [r('twin'), r('king'),
     ['Deposit', `${dstd}% to ${dmax}%`, dmin < dstd ? `${dmin}% to ${dstd - 1}%, for high-value repeat customers or large spend` : '–', `below ${dmin}% or above ${dmax}%`],
     ['Free release (attrition)', `up to ${astd}%`, amax > astd ? `${astd + 1}% to ${amax}%, with a ${rv('policy.deposit.required_pct_for_exceptions')}% deposit` : '–', `above ${amax}%`],
+    ['Releases beyond the free release or after the deadline', 'charged at the contracted rate', 'waiving any of that charge', '–'],
     ['Margin', `at least ${rv('rms.min_contribution_margin_pct')}%`, '–', `below ${rv('rms.min_contribution_margin_pct')}%`],
     ['Refunds after a reduction', `up to ${gbp(lim)} in total`, `above ${gbp(lim)}, the exact amount`, 'more than the buyer paid']];
 }

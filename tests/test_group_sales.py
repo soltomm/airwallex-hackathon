@@ -115,7 +115,8 @@ def test_reduction_deadlines_follow_the_contract_arrival():
     assert r["before_release_deadline"] and r["before_first_installment"] and not r["needs_manager_review"]
     assert r["refund_mode"] == "automatic"
     r = calc.evaluate_reduction(june_terms(), {"2027-06-10": 2}, "2027-05-28", H, POL, RMS, 384000)
-    assert not r["before_release_deadline"] and "after the room-release deadline (2027-05-27)" in r["review_reasons"]
+    assert not r["before_release_deadline"] and "released after the room-release deadline (2027-05-27)" in r["charge_reasons"]
+    assert r["charged_room_nights"] == 2 and not r["needs_manager_review"]
 
 
 def test_summit_offer():
@@ -130,13 +131,94 @@ def test_cumulative_attrition_and_rules():
     t = northstar_terms()
     first = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     later = calc.evaluate_reduction(first["new_terms"], {"2027-03-10": 2}, "2027-01-25", H, POL, RMS, 331200)
-    assert later["already_released"] == 6 and not later["within_allowance"] and later["needs_manager_review"]
+    assert later["already_released"] == 6 and not later["within_allowance"] and not later["needs_manager_review"]
+    assert (later["free_room_nights"], later["charged_room_nights"]) == (1, 1)    # 1 left of the 7 allowed
     nine = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
-    assert not nine["within_allowance"] and nine["refund_due"] == 0
+    assert not nine["within_allowance"] and nine["charged_room_nights"] == 2
     late = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-02-25", H, POL, RMS, 384000)
-    assert not late["before_release_deadline"] and late["needs_manager_review"]
+    assert not late["before_release_deadline"] and late["charged_room_nights"] == 6 and late["total_change"] == 0
+    assert late["refund_mode"] == "none" and not late["needs_manager_review"]
     after_inst = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-02-10", H, POL, RMS, 384000)
     assert after_inst["refund_mode"] == "manager reconciliation" and after_inst["refund_due"] == 0
+
+
+def test_releases_beyond_the_allowance_are_charged_not_waived():
+    # Northstar: 36 room-nights at £220, 7 free. Releasing 3 a night (9) frees 7 and charges 2 at the rate.
+    t = northstar_terms()
+    r = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
+    assert (r["free_room_nights"], r["charged_room_nights"], r["attrition_charge"]) == (7, 2, 44000)
+    assert "2 room-night(s) beyond the 7 room-night allowance (0 already used)" in r["charge_reasons"]
+    p = r["new_pricing"]
+    assert p["room_nights"] == 27 and p["total"] == 960000 - 7 * 22000           # only the free part comes off
+    assert any(l["item"].startswith("Attrition charge") and l["amount"] == 44000 for l in p["lines"])
+    assert r["refund_due"] == 384000 - calc.pct_of(p["total"], 40) == 61600      # deposit on £8,060
+    assert r["remaining_after"] == 0 and p["allowance_remaining"] == 0
+    # The allowance is used up: the next release is charged in full and changes nothing owed.
+    nxt = calc.evaluate_reduction(r["new_terms"], {"2027-03-11": 1}, "2027-01-21", H, POL, RMS, 322400)
+    assert nxt["charged_room_nights"] == 1 and nxt["total_change"] == 0 and nxt["refund_due"] == 0
+    # Within the allowance nothing is charged and the spec figures stand.
+    two = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
+    assert two["charged_room_nights"] == 0 and two["new_pricing"]["total"] == 828000 and two["refund_due"] == 52800
+
+
+def test_a_waiver_is_bounded_and_needs_review():
+    t = northstar_terms()
+    r = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000, waive=22000)
+    assert r["needs_manager_review"] and r["review_reasons"] == ["waives £220 of the £440 attrition charge"]
+    assert r["new_pricing"]["total"] == 960000 - 7 * 22000 - 22000 and r["new_pricing"]["waived"] == 22000
+    with pytest.raises(ValueError, match="waiver"):
+        calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000, waive=44001)
+    with pytest.raises(ValueError, match="waiver"):                 # nothing charged, nothing to waive
+        calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000, waive=100)
+
+
+def test_over_allowance_change_goes_to_the_buyer_with_the_charge(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    r = e.prepare_reduction(n["id"], rooms_per_night=3)
+    assert r["status"] == "sent" and not any(a["subject"] == "reduction" for a in e.s["approvals"].values())
+    v = n["versions"][-1]
+    assert "beyond your attrition allowance" in v["message"] and "under your attrition allowance (" not in v["message"]
+    buyer = e.deal_view(n["id"], for_="buyer")["versions"][-1]
+    assert buyer["reduction"]["attrition_charge"] == 44000 and buyer["pricing"]["attrition_charge"] == 44000
+    e.buyer_action(n["id"], n["buyer_token"], "accept", payload={"version": r["version"]})
+    assert e.inventory_at("2027-03-10")["twin"]["booked"] == 9                  # all 9 room-nights released
+    assert n["finance"]["refund_owed"] == 61600 and n["status"] == "refund_due"
+    assert not any("reconciled manually" in f for f in n["flags"])
+
+
+def test_a_waiver_waits_for_the_manager_and_binds_its_amount(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=44000, justification="long-standing client")
+    assert r["status"] == "pending_approval" and n["status"] == "amendment_review"
+    appr = e.s["approvals"][r["approval_id"]]
+    assert appr["amount"] == 44000 and "long-standing client" in appr["summary"]
+    with pytest.raises(Refused):
+        e.send_amendment(n["id"], r["version"])                     # not before the manager decides
+    with pytest.raises(Refused, match="only the hotel manager"):
+        e.decide_approval(appr["id"], "approve", "seller")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    e.send_amendment(n["id"], r["version"])
+    e.buyer_action(n["id"], n["buyer_token"], "accept", payload={"version": r["version"]})
+    assert n["finance"]["refund_owed"] == 384000 - calc.pct_of(960000 - 9 * 22000, 40)   # as if all were free
+
+
+def test_a_declined_waiver_leaves_the_change_to_be_offered_with_the_charge(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce by 3 rooms a night.",
+                   {"rooms_per_night": 3})
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=44000)
+    e.decide_approval(r["approval_id"], "reject", "hotel_manager")
+    assert n["status"] == "confirmed" and n["booking"]["rooms"]["2027-03-10"] == 12
+    assert any("attrition charge stands" in f for f in n["flags"])
+    s.run()                                                          # the rules seller re-offers it, charged
+    v = n["versions"][-1]
+    assert v["status"] == "sent" and v["reduction"]["charged_room_nights"] == 2 and not v["reduction"]["waived"]
 
 
 # ------------------------------------------------------------------------------ the demo story
@@ -417,9 +499,9 @@ def test_reduction_after_installment_and_beyond_allowance(eng):
     e.advance_clock(to="2027-02-10T09:00:00+00:00")
     r = e.prepare_reduction(n["id"], rooms_per_night=2)
     assert r["status"] == "sent" and r["evaluation"]["refund_mode"] == "manager reconciliation"
-    r = e.prepare_reduction(n["id"], rooms_per_night=3)              # 9 room-nights > 7
-    assert r["status"] == "pending_approval"
-    assert n["booking"]["rooms"]["2027-03-10"] == 12                 # existing agreement still in effect
+    r = e.prepare_reduction(n["id"], rooms_per_night=3)              # 9 room-nights > 7: priced, not escalated
+    assert r["status"] == "sent" and r["evaluation"]["charged_room_nights"] == 2
+    assert n["booking"]["rooms"]["2027-03-10"] == 12                 # existing agreement in effect until accepted
 
 
 def test_timeout_on_refund_creation_recovers_without_duplicate(eng):

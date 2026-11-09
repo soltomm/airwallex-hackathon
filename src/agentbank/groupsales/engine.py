@@ -510,7 +510,11 @@ class Engine:
         out["pricing"] = {k: p[k] for k in ("lines", "total", "deposit", "deposit_pct", "attrition_pct",
                                             "attrition_allowance", "allowance_remaining", "room_nights",
                                             "contracted_room_nights", "released_room_nights",
-                                            "per_room_night_incl_breakfast", "accommodation")}
+                                            "per_room_night_incl_breakfast", "accommodation")
+                           if k in p}
+        for k in ("charged_room_nights", "attrition_charge", "waived"):
+            if p.get(k):
+                out["pricing"][k] = p[k]
         if for_ == "seller":
             out["pricing"]["margin_all_rooms"] = p["margin_all_rooms"]
             out["pricing"]["margin_full_release"] = p["margin_full_release"]
@@ -521,7 +525,9 @@ class Engine:
         elif v.get("reduction"):
             r = v["reduction"]
             out["reduction"] = {k: r[k] for k in ("requested_room_nights", "allowance", "remaining_after",
-                                                  "revised_deposit", "refund_due", "refund_mode")}
+                                                  "free_room_nights", "charged_room_nights", "attrition_charge",
+                                                  "waived", "charge_reasons", "revised_deposit", "refund_due",
+                                                  "refund_mode") if k in r}
         return out
 
     def _hold_public(self, d):
@@ -1009,8 +1015,11 @@ class Engine:
                 if decision == "approve":
                     d["status"] = "amendment_approved"
                 else:
+                    # Only a waiver needs review, so a rejection withdraws the waiver, not the change: the
+                    # seller can offer the same release with the full attrition charge.
                     d["status"] = "confirmed"
-                    d["flags"].append(f"reduction v{a['version']} declined by manager; existing agreement stands")
+                    d["flags"].append(f"waiver on change v{a['version']} declined by manager: the attrition charge "
+                                      "stands; the change can be offered without it")
             elif a["subject"] == "acceptance":
                 if decision == "approve":
                     self._record_acceptance(d, self._version(d, a["version"]), "buyer (organizer-authorized)")
@@ -1440,7 +1449,9 @@ class Engine:
 
     # ================================================================ amendments
     def prepare_reduction(self, deal_id: str, rooms_per_night: int | None = None, release: dict | None = None,
-                          message: str = "", actor: str = "seller") -> dict:
+                          message: str = "", actor: str = "seller", waive: int = 0, justification: str = "") -> dict:
+        """Draft a change releasing rooms. The contract prices it (allowance, deadline, attrition charge),
+        so it goes straight to the buyer; only a waiver of the attrition charge needs the hotel manager."""
         with self.lock:
             d = self.deal(deal_id)
             if not d.get("booking") or d["booking"]["status"] != "confirmed":
@@ -1456,7 +1467,7 @@ class Engine:
             # (pending or not yet started), so a second reduction never refunds the first one again.
             try:
                 ev = calc.evaluate_reduction(base["terms"], release, self.now(), self.hotel, self.policy, self.rms,
-                                             fin["net_received"] - fin["refund_owed"])
+                                             fin["net_received"] - fin["refund_owed"], waive=int(waive or 0))
             except ValueError as err:   # e.g. more rooms than are booked, or a night not in the booking
                 raise Refused(f"this change cannot be applied to the booking: {err}") from None
             for v in d["versions"]:
@@ -1472,17 +1483,23 @@ class Engine:
                  "message": message or self._reduction_message(d, ev, pricing), "explanation": "", "unmet": [],
                  "release": release}
             d["versions"].append(v)
+            charge = (f"; {ev['charged_room_nights']} charged at the rate, attrition charge {gbp(ev['attrition_charge'])}"
+                      f" ({'; '.join(ev['charge_reasons'])})" if ev["charged_room_nights"] else "")
             self.log(d["id"], actor, "amendment_drafted",
-                     f"Reduction v{n}: release {ev['requested_room_nights']} room-nights (allowance {ev['allowance']}, "
-                     f"already used {ev['already_released']}); new total {gbp(pricing['total'])}, revised deposit "
-                     f"{gbp(ev['revised_deposit'])}, refund {gbp(ev['refund_due'])} ({ev['refund_mode']}).")
+                     f"Reduction v{n}: release {ev['requested_room_nights']} room-nights, {ev['free_room_nights']} under "
+                     f"the allowance (allowance {ev['allowance']}, already released {ev['already_released']}){charge}"
+                     + (f", waiver {gbp(ev['waived'])}" if ev["waived"] else "")
+                     + f"; new total {gbp(pricing['total'])}, revised deposit {gbp(ev['revised_deposit'])}, refund "
+                     f"{gbp(ev['refund_due'])} ({ev['refund_mode']}).")
             if ev["needs_manager_review"]:
                 v["status"] = "pending_approval"
                 d["status"] = "amendment_review"
                 a = self._request_approval(d, "hotel_manager", "reduction",
-                                           f"{d['company']} reduction v{n} needs review: " + "; ".join(ev["review_reasons"])
-                                           + ". The existing agreement remains in effect until a change is accepted.",
-                                           ev["review_reasons"], version=n, obj_hash=v["hash"])
+                                           f"{d['company']} change v{n} {'; '.join(ev['review_reasons'])} "
+                                           f"({'; '.join(ev['charge_reasons'])}). Without the waiver the buyer owes the "
+                                           f"full charge; the existing agreement remains in effect until a change is "
+                                           f"accepted." + (f" Seller's justification: {justification}" if justification else ""),
+                                           ev["review_reasons"], version=n, obj_hash=v["hash"], amount=ev["waived"])
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": a["id"], "evaluation": ev}
             res = self._send_version(d, v, actor)
@@ -1502,11 +1519,22 @@ class Engine:
             return res
 
     def _reduction_message(self, d, ev, pricing) -> str:
-        return (f"We can release {ev['requested_room_nights']} room-nights under your attrition allowance "
-                f"({ev['remaining_after']} room-night(s) remain for later release without penalty). Breakfast and "
-                f"meeting charges stay guaranteed. Revised total {gbp(pricing['total'])}; revised deposit "
-                f"{gbp(ev['revised_deposit'])}" + (f"; we will refund {gbp(ev['refund_due'])} to your original card "
-                                                    "once you accept." if ev["refund_due"] else "."))
+        n, free, charged = ev["requested_room_nights"], ev["free_room_nights"], ev["charged_room_nights"]
+        if not charged:
+            what = (f"We can release {n} room-nights under your attrition allowance ({ev['remaining_after']} "
+                    "room-night(s) remain for later release without penalty).")
+        else:
+            why = ("they are released after the room-release deadline" if not ev["before_release_deadline"]
+                   else f"this goes beyond your attrition allowance of {ev['allowance']} room-nights")
+            what = (f"We can release {n} room-nights back to the hotel. "
+                    + (f"{free} come off your total under your attrition allowance; " if free else "")
+                    + f"{'the other ' if free else 'all '}{charged} remain payable at the contracted rate because {why} "
+                    f"(attrition charge {gbp(ev['attrition_charge'])}"
+                    + (f", of which we waive {gbp(ev['waived'])}" if ev["waived"] else "") + ").")
+        return (what + " Breakfast and meeting charges stay guaranteed. Revised total "
+                f"{gbp(pricing['total'])}; revised deposit {gbp(ev['revised_deposit'])}"
+                + (f"; we will refund {gbp(ev['refund_due'])} to your original card once you accept."
+                   if ev["refund_due"] else "."))
 
     def _apply_amendment(self, d, v):
         """Accepted reduction: update booking, release inventory exactly once, record refund owed."""
@@ -1531,7 +1559,7 @@ class Engine:
             d["finance"]["refund_owed"] += ev["refund_due"]
             d["finance"]["refund_owed_version"] = v["n"]
             d["status"] = "refund_due"
-        elif ev["refund_mode"] != "automatic":
+        elif ev["refund_mode"] == "manager reconciliation":
             d["status"] = "confirmed"
             d["flags"].append(f"amendment v{v['n']} accepted after the first installment date: payments to be "
                               "reconciled manually by the manager")
@@ -1613,7 +1641,7 @@ class Engine:
                     "operation_id": oid}
             try:
                 r = self.provider.create_refund(op["request_id"], dep["payment_intent_id"], owed,
-                                                "Group block reduction under attrition allowance", meta)
+                                                "Group block reduction", meta)
                 op.update(provider_id=r["id"], status="created")
                 self._save()   # the refund id is stored before anything else happens
                 self._apply_refund_status(op, r, notify=False)
@@ -2141,7 +2169,8 @@ class Engine:
                 "revise": "seller: revise offer", "accepted": "seller: open checkout",
                 "awaiting_payment": "buyer: pay deposit on hosted page", "refund_due": "seller: refund",
                 "refund_pending": "provider: refund completion (check status)", "amendment_sent": "buyer: accept amendment",
-                "amendment_approved": "seller: send amendment", "expired": "seller: renew offer",
+                "amendment_approved": "seller: send amendment",
+                "amendment_review": "hotel manager: attrition waiver approval", "expired": "seller: renew offer",
                 "handoff": "hotel staff", "dates_proposed": "buyer: choose from the dates offered",
                 "payment_received_booking_exception": "hotel manager: booking exception",
                 "refund_awaiting_approval": "hotel manager: refund approval",
