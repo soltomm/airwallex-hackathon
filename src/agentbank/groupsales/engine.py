@@ -23,7 +23,7 @@ import re
 import secrets
 import threading
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from . import bookable, calc, rules
@@ -36,6 +36,18 @@ from ..storage import doc
 ROOT = Path(__file__).resolve().parents[3]
 SCENARIO = ROOT / "data" / "groupsales" / "scenario.json"
 REFUND_RANK = {"RECEIVED": 1, "ACCEPTED": 2, "SETTLED": 3, "FAILED": 9}
+
+
+FREE_MAIL = {"gmail", "googlemail", "outlook", "hotmail", "live", "yahoo", "icloud", "me", "aol", "proton", "protonmail"}
+
+
+def _company_from(sender: str, domain: str) -> str:
+    """A readable name for a sender the CRM doesn't know: the domain's name, or the person for free mail."""
+    label = domain.split(".")[0] if domain else ""
+    person = sender.split("<")[0].strip().strip('"') if "<" in sender else ""
+    if label.lower() in FREE_MAIL or not label:
+        return person or sender.strip() or "Unknown sender"
+    return label[:1].upper() + label[1:]
 
 
 class Refused(Exception):
@@ -311,7 +323,8 @@ class Engine:
             preview = extract(subject, body, sender)
             crm = self.scenario["crm"].get(domain)
             deal = {
-                "id": did, "ref": ref, "domain": domain, "company": (crm or {}).get("account") or domain,
+                "id": did, "ref": ref, "domain": domain,
+                "company": (crm or {}).get("account") or _company_from(sender, domain),
                 "sender": sender, "subject": subject, "received_at": at,
                 "reply_by": preview.get("reply_by"), "status": "new", "requirements": None, "missing": [],
                 "thread": [{"id": eid, "at": at, "from": "buyer", "channel": "email", "text": body,
@@ -385,6 +398,9 @@ class Engine:
                 view["key_dates"] = self._key_dates(d)
                 view["payouts"] = self.payout_view(d)
                 view["clock"] = self.now()
+                view["staff_instruction"] = copy.deepcopy(d.get("staff_instruction"))
+                view["group_calendar"] = {"first_night": self.hotel["nights"][0], "last_night": self.hotel["nights"][-1],
+                                          "min_days_before_arrival": self.policy["min_days_before_arrival"]}
             else:
                 w = self.waiting_on(d) or ""
                 view["waiting_on"] = w if w.startswith(("buyer", "buyer's organizer")) else ("hotel" if w else None)
@@ -439,26 +455,159 @@ class Engine:
             rt = merged.get("room_type")
             if rt and rt not in self.hotel["room_types"]:
                 merged.setdefault("unsupported", []).append(f"{rt} rooms")
+            # Unsupported services go to a person. Dates the hotel can't sell are not a hand-off: the seller
+            # offers the buyer dates that are available (suggest_dates / offer_dates).
             problems = list(merged.get("unsupported") or [])
-            if merged.get("arrival") and merged.get("departure"):
-                nights = stay_nights(merged["arrival"], merged["departure"])
-                bookable_nights = set(self.hotel["nights"])
-                if not nights or any(n not in bookable_nights for n in nights):
-                    problems.append(f"dates {merged['arrival']} to {merged['departure']} are outside the bookable "
-                                    f"{bookable.window_text(self.hotel)}")
-                elif self.lead_days(merged["arrival"]) < self.policy["min_days_before_arrival"]:
-                    problems.append(f"arrival {merged['arrival']} is less than {self.policy['min_days_before_arrival']} "
-                                    "days away: short-notice groups are handled by a person")
+            merged["date_issue"] = self._date_issue(merged)
             merged["out_of_scope"] = problems
             d["requirements"] = merged
             d["missing"] = missing_info(merged)
-            if d["status"] == "new":
+            if d["status"] == "new" or (d["status"] == "dates_proposed" and not merged["date_issue"]
+                                        and merged.get("arrival")):
                 d["status"] = "intake"
             self.log(d["id"], actor, "requirements",
                      "Requirements recorded" + (f"; missing: {', '.join(d['missing'])}" if d["missing"] else "; complete")
-                     + (f"; out of scope: {', '.join(problems)}" if problems else ""), merged)
+                     + (f"; out of scope: {', '.join(problems)}" if problems else "")
+                     + (f"; {merged['date_issue']}" if merged["date_issue"] else ""), merged)
             self._save()
-            return {"requirements": merged, "missing": d["missing"], "out_of_scope": problems}
+            return {"requirements": merged, "missing": d["missing"], "out_of_scope": problems,
+                    "date_issue": merged["date_issue"]}
+
+    def _date_issue(self, req: dict) -> str | None:
+        if not (req.get("arrival") and req.get("departure")):
+            return None
+        try:
+            nights = stay_nights(req["arrival"], req["departure"])
+        except (TypeError, ValueError):
+            return f"dates {req['arrival']} to {req['departure']} could not be read"
+        if not nights:
+            return f"departure {req['departure']} is not after arrival {req['arrival']}"
+        if any(n not in self.hotel["capacity"] for n in nights):
+            return (f"requested dates {req['arrival']} to {req['departure']} are not available for groups "
+                    f"(group calendar: {bookable.window_text(self.hotel)})")
+        if self.lead_days(req["arrival"]) < self.policy["min_days_before_arrival"]:
+            return (f"arrival {req['arrival']} is less than {self.policy['min_days_before_arrival']} days away: "
+                    "groups need more notice")
+        return None
+
+    # ---- other dates, when the requested ones can't be sold -------------------------------------
+    def _windows(self, length: int) -> list[list[str]]:
+        """Runs of consecutive nights in the group calendar, `length` long (or the longest available),
+        arriving with at least the policy's minimum notice."""
+        min_lead = self.policy["min_days_before_arrival"]
+        cal = [n for n in sorted(self.hotel["nights"]) if self.lead_days(n) >= min_lead]
+        runs, cur = [], []
+        for n in cal:
+            if cur and date.fromisoformat(n) - date.fromisoformat(cur[-1]) != timedelta(days=1):
+                runs.append(cur)
+                cur = []
+            cur.append(n)
+        if cur:
+            runs.append(cur)
+        out = []
+        for r in runs:
+            size = min(length, len(r))
+            out += [r[i:i + size] for i in range(len(r) - size + 1)]
+        return out
+
+    def _window_option(self, d: dict, nights: list[str], room_type: str | None) -> dict:
+        req = d["requirements"] or {}
+        types = [room_type] if room_type else list(self.hotel["room_types"])
+        avail = {t: min(self._available(n, t) for n in nights) for t in types}
+        want = int(req.get("rooms") or 0)
+        rt = room_type or req.get("room_type")
+        last = date.fromisoformat(nights[-1]) + timedelta(days=1)
+        opt = {"arrival": nights[0], "departure": last.isoformat(), "nights": len(nights), "rooms_free": avail,
+               "fits_rooms": bool(rt and want and avail.get(rt, 0) >= want)}
+        if req.get("meeting"):
+            free = [n for n in nights + [last.isoformat()] if (self._slot(n) or {}).get("status") == "free"]
+            opt["meeting_room_free_on"] = free
+        return opt
+
+    def suggest_dates(self, deal_id: str, room_type: str | None = None, actor: str = "seller") -> dict:
+        """Dates in the group calendar with rooms free for this request, nearest to what was asked first."""
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            req = d["requirements"]
+            if not req or not (req.get("arrival") and req.get("departure")):
+                raise Refused("record the requested dates first")
+            if room_type and room_type not in self.hotel["room_types"]:
+                raise Refused(f"unknown room type {room_type}")
+            rt = room_type or (req.get("room_type") if req.get("room_type") in self.hotel["room_types"] else None)
+            try:
+                length = max(1, len(stay_nights(req["arrival"], req["departure"])))
+            except (TypeError, ValueError):
+                length = 1
+            asked = date.fromisoformat(req["arrival"]) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(req["arrival"])) else None
+            opts = [self._window_option(d, w, rt) for w in self._windows(length)]
+            opts = [o for o in opts if any(v > 0 for v in o["rooms_free"].values())]
+            opts.sort(key=lambda o: (not o["fits_rooms"], o["nights"] != length,
+                                     abs((date.fromisoformat(o["arrival"]) - asked).days) if asked else 0))
+            cal = sorted(self.hotel["nights"])
+            rec = {"system": "PMS (other dates)", "checked_at": self.now(), "query": d["ref"],
+                   "summary": ("; ".join(f"{o['arrival']} to {o['departure']}: " + ", ".join(f"{v} {t}" for t, v in o["rooms_free"].items())
+                                         + " free" for o in opts[:5]) or "no group rooms free in the calendar"),
+                   "data": {"requested": {"arrival": req["arrival"], "departure": req["departure"]}, "options": opts[:5]}}
+            d["records"] = [rec] + d["records"][:15]
+            self.log(d["id"], actor, "records", "Checked the group calendar for other dates.", rec["summary"])
+            self._save()
+            return {"requested": {"arrival": req["arrival"], "departure": req["departure"], "nights": length,
+                                  "rooms": req.get("rooms"), "room_type": rt},
+                    "date_issue": req.get("date_issue"),
+                    "group_calendar": {"first_night": cal[0], "last_night": cal[-1]},
+                    "options": opts[:5]}
+
+    def offer_dates(self, deal_id: str, options: list[dict], message: str, actor: str = "seller") -> dict:
+        """Email the buyer other dates. Each option must be in the group calendar with the rooms free now:
+        the seller can't offer inventory that doesn't exist."""
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            req = d["requirements"]
+            if not req:
+                raise Refused("record the requirements first")
+            if d.get("booking") or d.get("accepted_version"):
+                raise Refused("this deal already has an agreement; changes go through prepare_reduction")
+            if not options:
+                raise Refused("give at least one option")
+            if not (message or "").strip():
+                raise Refused("write the message to the buyer")
+            clean = []
+            for o in options[:5]:
+                try:
+                    nights = stay_nights(o["arrival"], o["departure"])
+                except (KeyError, TypeError, ValueError):
+                    raise Refused(f"option {o} needs valid arrival and departure dates")
+                if not nights:
+                    raise Refused(f"option {o['arrival']} to {o['departure']}: departure must be after arrival")
+                if any(n not in self.hotel["capacity"] for n in nights):
+                    raise Refused(f"option {o['arrival']} to {o['departure']} is outside the group calendar "
+                                  f"({bookable.window_text(self.hotel)})")
+                if self.lead_days(o["arrival"]) < self.policy["min_days_before_arrival"]:
+                    raise Refused(f"option {o['arrival']} to {o['departure']}: arrival is less than "
+                                  f"{self.policy['min_days_before_arrival']} days away")
+                rt = o.get("room_type") or req.get("room_type")
+                if rt not in self.hotel["room_types"]:
+                    raise Refused(f"option {o['arrival']} to {o['departure']}: say which room type")
+                rooms = int(o.get("rooms_per_night") or req.get("rooms") or 0)
+                if rooms <= 0:
+                    raise Refused(f"option {o['arrival']} to {o['departure']}: say how many rooms a night")
+                short = [n for n in nights if self._available(n, rt) < rooms]
+                if short:
+                    raise Refused(f"option {o['arrival']} to {o['departure']}: only "
+                                  f"{min(self._available(n, rt) for n in nights)} {rt} rooms free on {', '.join(short)}")
+                clean.append({"arrival": o["arrival"], "departure": o["departure"], "room_type": rt,
+                              "rooms_per_night": rooms})
+            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                "text": message.strip(), "date_options": clean})
+            d["status"] = "dates_proposed"
+            d["handoff"] = None
+            self._seller_acted(d)
+            self.log(d["id"], actor, "dates_offered", "Offered other dates: " + "; ".join(
+                f"{c['arrival']} to {c['departure']} ({c['rooms_per_night']} {c['room_type']})" for c in clean))
+            self._save()
+            return {"sent": True, "status": d["status"], "options": clean}
 
     def check_systems(self, deal_id: str, actor: str = "seller") -> dict:
         """Consult PMS, meeting space, breakfast, RMS, CRM and policy records for this deal."""
@@ -530,6 +679,7 @@ class Engine:
             d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                                 "text": message, "questions": questions})
             d["status"] = "needs_info"
+            self._seller_acted(d)
             self.log(d["id"], actor, "clarification", f"Asked {d['company']}: {'; '.join(questions)}")
             self._save()
             return {"sent": True, "status": d["status"]}
@@ -566,12 +716,15 @@ class Engine:
         if req.get("out_of_scope"):
             raise Refused("request is outside supported dates/services: " + "; ".join(req["out_of_scope"])
                           + ". Hand it to a person (escalate).")
+        if req.get("date_issue"):
+            raise Refused(req["date_issue"] + ". Call suggest_dates and send the buyer available dates with "
+                          "offer_dates; do not hand this to a person.")
         if not (req.get("arrival") and req.get("departure") and (room_type or req.get("room_type"))):
             raise Refused("requirements incomplete: need dates and room type")
         nights = stay_nights(req["arrival"], req["departure"])
         if self.lead_days(req["arrival"]) < self.policy["min_days_before_arrival"]:
             raise Refused(f"arrival {req['arrival']} is less than {self.policy['min_days_before_arrival']} days away: "
-                          "short-notice groups are handled by a person (escalate)")
+                          "groups need more notice. Call suggest_dates and offer the buyer later dates with offer_dates")
         n_rooms = int(rooms_per_night or req.get("rooms") or 0)
         if n_rooms <= 0:
             raise Refused("need a number of rooms")
@@ -684,6 +837,7 @@ class Engine:
         v["status"] = "sent"
         v["sent_at"] = self.now()
         d["status"] = "offer_sent" if v["kind"] == "offer" else "amendment_sent"
+        self._seller_acted(d)
         d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                             "text": v["message"], "version": v["n"]})
         p = v["pricing"]
@@ -1782,10 +1936,56 @@ class Engine:
             d["handoff"] = {"at": self.now(), "reason": reason}
             if d["status"] not in ("confirmed", "refund_due", "refund_pending"):
                 d["status"] = "handoff"
+            if not message and not d.get("booking") and not any(m["from"] == "seller" for m in d["thread"]):
+                # An inquiry nobody has answered yet: the buyer gets an acknowledgement, never silence.
+                message = ("Thank you for your inquiry. A member of our group sales team will review it and reply "
+                           "to you directly.")
+            self._seller_acted(d)
             if message:
                 d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                                     "text": message})
             self.log(d["id"], actor, "handoff", f"Handed to a person: {reason}")
+            self._save()
+            return {"status": d["status"]}
+
+    def _seller_acted(self, d: dict) -> None:
+        """A staff instruction stays in front of the seller until it next writes to the buyer or hands off."""
+        if d.get("staff_instruction"):
+            d.setdefault("staff_instructions_done", []).append({**d.pop("staff_instruction"), "done_at": self.now()})
+
+    def hand_back(self, deal_id: str, instruction: str = "", actor: str = "hotel staff") -> dict:
+        """Hotel staff return a handed-off inquiry to the seller, optionally with an instruction it follows."""
+        with self.lock:
+            d = self.deal(deal_id)
+            if d["status"] != "handoff" or d.get("booking"):
+                raise Refused("only an inquiry handed to staff (with no booking) can be handed back")
+            text = (instruction or "").strip()[:1000]
+            reason = (d.get("handoff") or {}).get("reason", "")
+            d["handoff"] = None
+            d["status"] = "intake" if d["requirements"] else "new"
+            if d["status"] == "intake" and d["thread"] and any(m.get("date_options") for m in d["thread"]):
+                d["status"] = "dates_proposed"
+            if text:
+                d["staff_instruction"] = {"at": self.now(), "by": actor, "text": text}
+            d["unread"] = True
+            self.log(d["id"], actor, "handed_back", "Handed back to the seller" + (f": {text}" if text else ".")
+                     + (f" (was: {reason})" if reason else ""))
+            self._save()
+        self._wake("staff")
+        return {"status": d["status"]}
+
+    def close_deal(self, deal_id: str, note: str = "", actor: str = "hotel staff") -> dict:
+        """Hotel staff close a handed-off inquiry without a reply from the seller."""
+        with self.lock:
+            d = self.deal(deal_id)
+            if d["status"] != "handoff" or d.get("booking"):
+                raise Refused("only an inquiry handed to staff (with no booking) can be closed here")
+            hold = self.s["holds"].get(d.get("hold_id") or "")
+            if hold and hold["status"] == "active":
+                self._release_hold(hold, "inquiry closed by hotel staff")
+            d["status"] = "lost"
+            d["closed"] = {"at": self.now(), "by": actor, "note": (note or "").strip()[:500]}
+            self.log(d["id"], actor, "closed", "Inquiry closed by hotel staff" + (f": {note.strip()}" if note.strip() else "."))
             self._save()
             return {"status": d["status"]}
 
@@ -1796,6 +1996,7 @@ class Engine:
             if hold:
                 self._release_hold(hold, "declined")
             d["status"] = "declined"
+            self._seller_acted(d)
             d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                                 "text": message})
             self.log(d["id"], actor, "declined", reason)
@@ -1850,7 +2051,8 @@ class Engine:
                 "awaiting_payment": "buyer: pay deposit on hosted page", "refund_due": "seller: refund",
                 "refund_pending": "provider: refund completion (check status)", "amendment_sent": "buyer: accept amendment",
                 "amendment_approved": "seller: send amendment", "expired": "seller: renew offer",
-                "handoff": "hotel staff", "payment_received_booking_exception": "hotel manager: booking exception",
+                "handoff": "hotel staff", "dates_proposed": "buyer: choose from the dates offered",
+                "payment_received_booking_exception": "hotel manager: booking exception",
                 "refund_awaiting_approval": "hotel manager: refund approval",
                 "refund_failed": "hotel manager: failed refund follow-up (amount still owed)"}.get(st)
 
@@ -1875,10 +2077,21 @@ class Engine:
             return ("buyer asked after the lapse: re-check availability and renew" if d.get("unread")
                     and d["thread"] and d["thread"][-1]["from"] == "buyer" else
                     "lapsed: do not renew unless the buyer asks")
+        instr = d.get("staff_instruction")
+        if instr and st in ("new", "intake", "needs_info", "dates_proposed", "offer_sent", "expired"):
+            return (f"hotel staff handed this back with an instruction: \"{instr['text']}\". Act on it with your "
+                    "tools, within the hotel's rules, and reply to the buyer")
         if st == "new":
             return "read the inquiry and record requirements"
+        req = d.get("requirements") or {}
+        if st == "intake" and req.get("date_issue"):
+            return ("the requested dates can't be sold: call suggest_dates, then offer_dates with the available "
+                    "options (do not escalate for dates)")
         if st == "intake":
             return "ask for missing details" if d["missing"] else "check systems and quote"
+        if st == "dates_proposed":
+            return ("read the buyer's reply: record_requirements with the dates they chose, then check_systems and "
+                    "quote" if d.get("unread") else "blocked: waiting for the buyer to choose dates")
         if st == "needs_info":
             return "read answers and quote" if d.get("unread") else "blocked: waiting for the buyer's answers"
         if st in ("offer_sent", "amendment_sent"):
@@ -1918,7 +2131,7 @@ class Engine:
             inv[n] = {rt: {**v, "available": v["capacity"] - v["held"] - v["booked"]} for rt, v in x.items()}
         free = {"held": 0, "booked": 0}
         bf = {m: dict(st["breakfast"].get(m) or free)
-              for m in sorted(set(self._mornings(h["nights"])) | set(st["breakfast"]))}
+              for m in sorted(set(h["mornings"]) | set(st["breakfast"]))}
         slots = st["meeting"].get("thames", {})
         meeting = {x: dict(slots.get(x) or {"status": "free", "deal_id": None})
                    for x in sorted(set(h["meeting_rooms"]["thames"]["available"]) | set(slots))}

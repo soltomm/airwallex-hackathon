@@ -245,7 +245,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
 <section class="page" id="rules" hidden></section>
 <dialog id="dlg"><form method="dialog">
   <h3 style="margin-top:0">Paste a new RFP</h3>
-  <p class="small muted">It goes through the same intake as the scenario emails. <span id="rfpScope">Requests outside the bookable nights, at short notice, or outside the hotel's services are handed to a person.</span></p>
+  <p class="small muted">It goes through the same intake as the scenario emails. <span id="rfpScope">For dates the hotel can't sell, the seller offers dates it can; requests for services the hotel doesn't offer are handed to a person.</span></p>
   <p><input type="text" id="rfpFrom" style="width:100%" placeholder="From, e.g. Sam &lt;sam@company.example&gt;"></p>
   <p><input type="text" id="rfpSubj" style="width:100%" placeholder="Subject"></p>
   <p><textarea id="rfpBody" rows="8" placeholder="Email body"></textarea></p>
@@ -273,8 +273,8 @@ const STATUS = {
   acceptance_pending_organizer: ['Buyer approval', 'warn'], accepted: ['Accepted', 'ok'], awaiting_payment: ['Deposit due', 'buyer'],
   confirmed: ['Confirmed', 'ok'], amendment_sent: ['Change offered', 'buyer'], amendment_review: ['Needs approval', 'warn'],
   amendment_approved: ['Approved', 'acc'], refund_due: ['Refund due', 'warn'], refund_awaiting_approval: ['Needs approval', 'warn'],
-  refund_pending: ['Refund pending', 'acc'], refund_failed: ['Refund failed', 'bad'], expired: ['Lapsed', 'bad'], handoff: ['With staff', 'bad'],
-  declined: ['Declined', ''], lost: ['Lost', ''], payment_received_booking_exception: ['Booking exception', 'bad']};
+  refund_pending: ['Refund pending', 'acc'], refund_failed: ['Refund failed', 'bad'], expired: ['Lapsed', 'bad'], handoff: ['With staff', 'bad'], dates_proposed: ['Dates offered', 'buyer'],
+  declined: ['Declined', ''], lost: ['Closed', ''], payment_received_booking_exception: ['Booking exception', 'bad']};
 const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class="chip ${c}">${esc(l)}</span>`; };
 const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : null;
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
@@ -319,7 +319,7 @@ function render() {
   document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; convOpen = false; render(); });
   renderDeal(S.deals.find(d => d.id === sel));
   $('avail').innerHTML = availHtml();
-  $('rfpScope').textContent = `Requests outside the bookable nights (${day(S.bookable.first_night)} to ${day(S.bookable.last_night, {year: 'numeric'})}), at less than ${S.bookable.min_days_before_arrival} days' notice, or outside the hotel's services are handed to a person.`;
+  $('rfpScope').textContent = `For dates outside the bookable nights (${day(S.bookable.first_night)} to ${day(S.bookable.last_night, {year: 'numeric'})}) or at less than ${S.bookable.min_days_before_arrival} days' notice, the seller offers dates it can sell. Requests for services the hotel doesn't offer are handed to a person.`;
   $('mailboxes').innerHTML = deals.map(d => `<div><a href="${esc(d.inbox_url)}" target="_blank">${esc(contactOf(d))} · ${esc(d.company)} ↗</a></div>`).join('') || 'No inquiries yet.';
   const changed = S.activity.filter(a => a.kind === 'rules_changed').length;
   $('rulesSub').textContent = changed ? 'Changed by hotel staff · see what the seller may agree' : 'What the seller may agree, and how to change it';
@@ -336,7 +336,10 @@ function nextOf(d) {
     title: `${co}'s organizer is signing off v${ap.version}`,
     text: "The buyer accepted, but outside what its contact can agree alone. The seller opens checkout once the organizer authorizes it."};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
-    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person', title: esc(d.handoff ? d.handoff.reason : 'Needs staff attention')};
+    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
+      staff: st === 'handoff' && !d.booking};
+  if (st === 'dates_proposed') return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
+    title: `The seller offered ${co} other dates`, text: 'The requested dates are not available. The seller quotes as soon as the buyer picks one of the dates offered.'};
   if (st === 'awaiting_payment') return {cls: 'buyer', short: 'Buyer to pay', who: 'Waiting for the buyer', mail: true, chkPay: true,
     title: `Waiting for ${co} to pay the ${gbp(v && v.pricing.deposit)} deposit`,
     text: "They pay on Airwallex's hosted page from the link the seller sent. The booking confirms once the payment is verified with Airwallex."};
@@ -388,8 +391,14 @@ function nextCard(d) {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
     if (n.chkPay) h += `<div class="row"><button data-act="chkPay">Check the payment with Airwallex</button></div>`;
     if (n.mail) h += mailLink(d);
+    if (n.staff) h += `<label class="small" for="instr" style="display:block;margin-top:10px">Instruction for the seller (optional)</label>
+      <textarea id="instr" rows="2" placeholder="For example: quote without the group dinner and explain we can recommend a restaurant nearby."></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn-p" data-act="handBack">Hand back to seller</button><button class="btn-ghost" data-act="close">Close inquiry</button></div>
+      <p class="small muted" style="margin:6px 0 0">The seller replies to the buyer. Closing sends nothing.</p>`;
   }
-  return h + lastLine(d) + '</div>';
+  // A hand-off card already says what the seller's last action said: don't repeat it underneath.
+  const ls = lastStep(d), dup = n.staff !== undefined && d.handoff && ls && ls.tool === 'escalate';
+  return h + (dup ? '' : lastLine(d)) + '</div>';
 }
 
 // ---- deal ------------------------------------------------------------------------------------
@@ -399,13 +408,14 @@ function stepsOf(d) {
   const f = d.finance_view, am = d.versions.filter(v => v.kind === 'amendment'), offers = d.versions.filter(v => v.kind === 'offer');
   const asked = d.thread.some(m => m.questions), sent = offers.some(v => v.sent_at);
   const s = [['Inquiry', true]];
+  if (d.thread.some(m => m.date_options)) s.push(['Dates', d.status !== 'dates_proposed' || offers.length > 0]);
   if (asked) s.push(['Questions', d.status !== 'needs_info' || offers.length > 0]);
   s.push(['Offer', sent], ['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]);
   if (am.length || d.thread.some(m => m.action === 'change_request')) {
     s.push(['Change', am.some(v => v.status === 'accepted')]);
     if (am.some(v => v.reduction && v.reduction.refund_due > 0)) s.push(['Refund', f.refunded > 0 && !f.refund_owed]);
   }
-  const now = s.findIndex(x => !x[1]);
+  const now = ['handoff', 'lost', 'declined'].includes(d.status) ? -1 : s.findIndex(x => !x[1]);
   return '<div class="steps">' + s.map(([l, ok], i) => `<span class="${ok ? 'done' : i === now ? 'now' : ''}">${ok ? '✓ ' : ''}${l}</span>`).join('') + '</div>';
 }
 function offerCard(d) {
@@ -460,9 +470,11 @@ function tabBody(d) {
   if (tab === 'req') {
     const r = d.requirements; if (!r) return '<p class="muted">The seller hasn\'t read this inquiry yet.</p>';
     const m = r.meeting;
-    return `<dl class="kv"><dt>Rooms</dt><dd>${r.rooms ?? '?'} ${esc(r.room_type ?? '?')} · ${r.guests ?? '?'} guests</dd><dt>Dates</dt><dd>${r.arrival ? day(r.arrival) : '?'} → ${r.departure ? day(r.departure) : '?'}</dd>
-      <dt>Breakfast</dt><dd>${r.breakfast ? 'Every morning' : 'No'}</dd><dt>Meeting</dt><dd>${m ? `${m.attendees ?? '?'} people, ${m.date ? day(m.date) : '?'} ${esc(m.hours || '')}, ${m.layout ? esc(m.layout) : '<span class="chip warn">layout?</span>'}` : 'None'}</dd>
-      <dt>Budget</dt><dd>${gbp(r.budget_total)}${r.budget_total ? (r.budget_includes_taxes == null ? ' <span class="chip warn">taxes?</span>' : r.budget_includes_taxes ? ' incl. taxes' : ' excl. taxes') : ''}${r.target_per_room_night ? ` · target ${gbp(r.target_per_room_night)} a room-night` : ''}</dd>
+    const ns = '<span class="muted">Not stated</span>';
+    const rooms = r.rooms || r.room_type ? `${r.rooms ?? 'Number not stated'} ${esc(r.room_type || 'rooms (type not stated)')}` : ns;
+    return `<dl class="kv"><dt>Rooms</dt><dd>${rooms}${r.guests ? ` · ${r.guests} guests` : ''}</dd><dt>Dates</dt><dd>${r.arrival ? day(r.arrival) : '?'} → ${r.departure ? day(r.departure) : '?'}${r.date_issue ? ' <span class="chip warn">not available</span>' : ''}</dd>
+      <dt>Breakfast</dt><dd>${r.breakfast ? 'Every morning' : r.breakfast === false ? 'No' : ns}</dd><dt>Meeting</dt><dd>${m ? `${m.attendees ?? '?'} people, ${m.date ? day(m.date) : '?'} ${esc(m.hours || '')}, ${m.layout ? esc(m.layout) : '<span class="chip warn">layout?</span>'}` : 'None'}</dd>
+      <dt>Budget</dt><dd>${r.budget_total ? gbp(r.budget_total) : ns}${r.budget_total ? (r.budget_includes_taxes == null ? ' <span class="chip warn">taxes?</span>' : r.budget_includes_taxes ? ' incl. taxes' : ' excl. taxes') : ''}${r.target_per_room_night ? ` · target ${gbp(r.target_per_room_night)} a room-night` : ''}</dd>
       <dt>Payer</dt><dd>${r.payer ? esc(r.payer) : '<span class="chip warn">missing</span>'}</dd>
       ${(r.out_of_scope || []).length ? `<dt>Out of scope</dt><dd style="color:var(--bad)">${esc(r.out_of_scope.join('; '))}</dd>` : ''}</dl>`;
   }
@@ -509,6 +521,8 @@ function wire(d) {
       else if (a === 'retry') { await api(`/api/deals/${d.id}/retry`, {}); toast('The seller is retrying'); }
       else if (a === 'retryPayout') { const r = await api(`/api/deals/${d.id}/retry_payout`, {}); toast(r.status === 'paid' ? 'Hotel paid' : 'Payout still pending'); }
       else if (a === 'jump') await api('/api/clock', {to: '2027-01-20T09:00:00+00:00'});
+      else if (a === 'handBack') { await api(`/api/deals/${d.id}/hand_back`, {instruction: ($('instr') || {}).value || ''}); toast('Handed back to the seller'); }
+      else if (a === 'close') { await api(`/api/deals/${d.id}/close`, {}); toast('Inquiry closed'); }
     } catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
   });
 }
@@ -520,7 +534,8 @@ async function decide(b) {
 // ---- activity tab: what happened, in plain words, newest first ---------------------------------
 const EVENT = {
   intake: 'Inquiry received', email: 'Email received', duplicate: 'Duplicate email ignored', requirements: 'Requirements recorded',
-  records: 'Hotel systems checked', clarification: 'Questions sent to the buyer', reasoning: 'Seller note',
+  records: 'Hotel systems checked', clarification: 'Questions sent to the buyer', dates_offered: 'Other dates offered',
+  handed_back: 'Handed back to the seller', closed: 'Inquiry closed', reasoning: 'Seller note',
   offer_drafted: 'Offer drafted', offer_sent: 'Offer sent', hold: 'Rooms held', hold_released: 'Hold released', hold_expiry: 'Hold expired, payment unclear',
   expired: 'Offer expired', lapsed: 'Buyer told the offer lapsed', approval_requested: 'Approval requested', approval_approved: 'Approved',
   approval_rejected: 'Rejected', approval_stale: 'Approval out of date', buyer_reply: 'Buyer answered', buyer_counter: 'Buyer countered',
@@ -554,6 +569,7 @@ function activityHtml(d) {
 // ---- AI agent tab: each seller run and the actions it took; click an action for details ----------
 const TOOL = {
   record_requirements: 'Recorded the requirements', check_systems: 'Checked hotel systems', ask_buyer: 'Asked the buyer',
+  suggest_dates: 'Checked other dates', offer_dates: 'Offered other dates',
   price_terms: 'Priced terms (dry run)', propose_offer: 'Proposed an offer', send_offer: 'Sent an offer', open_checkout: 'Opened checkout',
   check_payment: 'Checked the payment', prepare_reduction: 'Prepared a change', send_amendment: 'Sent a change', refund_excess: 'Started a refund',
   check_refund: 'Checked the refund', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',

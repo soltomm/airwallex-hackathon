@@ -140,6 +140,8 @@ function render() {
   $('act').innerHTML = actions();
   wire();
 }
+const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 'T12:00:00Z'), m = d => d.toLocaleDateString('en-GB', {month: 'long', timeZone: 'UTC'});
+  return x.getUTCMonth() === y.getUTCMonth() ? `${x.getUTCDate()} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}` : `${x.getUTCDate()} ${m(x)} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}`; };
 const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send'};
 function actions() {
   let h = '';
@@ -174,6 +176,8 @@ function actions() {
   if (open && !V.organizer.length && !(s && s.action === 'accept')) h += `<button class="${s ? '' : 'btn-p'}" data-act="accept">Accept v${v.n}</button>`;
   if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
   if (V.status === 'needs_info' && !s) h += `<button data-form="answers">Answer…</button>`;
+  const opts = V.status === 'dates_proposed' ? ((V.thread.slice().reverse().find(m => m.date_options) || {}).date_options || []) : [];
+  opts.forEach((o, i) => { h += `<button class="${i ? '' : 'btn-p'}" data-act="dates" data-i="${i}">Take ${esc(span(o.arrival, o.departure))}</button>`; });
   if (booked && !(s && s.action === 'change_request')) h += `<button data-form="change">Request a change…</button>`;
   h += `<button class="btn-ghost" data-form="msg">Message…</button></div>${formHtml(v)}</div>`;
   return h;
@@ -207,6 +211,10 @@ function wire() {
     let note = 'Sent to ' + V.hotel;
     try {
       if (a === 'sendSug') await act(s.action, ($('draft') && $('draft').value.trim()) || s.text, s.payload);
+      else if (a === 'dates') {
+        const o = (V.thread.slice().reverse().find(m => m.date_options) || {}).date_options[+b.dataset.i];
+        await act('reply', `${span(o.arrival, o.departure)} works for us. Please send the offer for those dates.`, {dates: {arrival: o.arrival, departure: o.departure}});
+      }
       else if (a === 'accept') {
         const r = await act('accept', `We accept version ${v.n}.`, {version: v.n});
         if (r.accepted === false) note = 'Over your own limits: your organizer needs to sign off';

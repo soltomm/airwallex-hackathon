@@ -15,10 +15,12 @@ from agentbank.groupsales.engine import SCENARIO, Engine, Refused
 from agentbank.groupsales.policy import hotel_check
 from agentbank.groupsales.provider import SimulatedProvider
 from agentbank.groupsales.seller import RulesSeller
+from agentbank.groupsales.extract import extract
 
 S = json.loads(SCENARIO.read_text())
 H, RMS, POL = S["hotel"], S["rms"], S["policy"]
 MARCH = ["2027-03-10", "2027-03-11", "2027-03-12"]     # the demo stay's nights
+H_ALL = bookable.expand(S)["hotel"]                     # with the expanded calendar
 
 
 def northstar_terms(att=20, dep=40, rate=22000):
@@ -35,7 +37,7 @@ def eng(tmp_path):
 
 
 def deal_by(e, company):
-    return next(d for d in e.s["deals"].values() if d["company"].startswith(company))
+    return next(d for d in e.s["deals"].values() if d["company"].startswith(company) or d["domain"] == company)
 
 
 def buyer_turn(e, company):
@@ -238,7 +240,110 @@ def test_out_of_scope_goes_to_person(eng):
                    "with a group dinner. Reply by 15 January.", wake=False)
     RulesSeller(e).run()
     d = deal_by(e, "b.example")
-    assert d["status"] == "handoff" and "outside" in d["handoff"]["reason"]
+    assert d["status"] == "handoff" and "group dinner" in d["handoff"]["reason"]
+
+
+def test_out_of_scope_buyer_gets_an_acknowledgement(eng):
+    e = eng
+    e.ingest_email("x <a@b.example>", "RFP", "Please quote 4 king rooms arriving 10 March and departing 13 March 2027 "
+                   "with a group dinner. Reply by 15 January.", wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "b.example")
+    assert d["status"] == "handoff"
+    assert [m for m in d["thread"] if m["from"] == "seller"], "the buyer must hear back, not silence"
+
+
+# Before the bookable window (from 11 January 2027) and at less than 31 days' notice: the nearest dates the
+# seller may offer are 11-14 February, the first arrival with enough notice.
+EARLY_RFP = ("Please quote 4 king rooms for 4 employees arriving 3 January and departing 6 January 2027 with breakfast. "
+             "No meeting room is needed. Billed to Microshift Demo Ltd. Reply by 15 January at noon.")
+
+
+def test_unavailable_dates_get_other_dates_not_a_handoff(eng):
+    e = eng
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", EARLY_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "microshift.example")
+    assert d["company"] == "Microshift"
+    assert d["status"] == "dates_proposed" and not d["handoff"]
+    last = d["thread"][-1]
+    assert last["from"] == "seller" and last["date_options"]
+    assert "unable to offer 3 to 6 January 2027" in last["text"] and "11 to 14 February 2027" in last["text"]
+    assert "staff" not in last["text"].lower() and "team will" not in last["text"].lower()
+    o = last["date_options"][0]
+    assert (o["arrival"], o["departure"], o["room_type"], o["rooms_per_night"]) == ("2027-02-11", "2027-02-14", "king", 4)
+    assert any(r["system"] == "PMS (other dates)" for r in d["records"])
+
+    # The buyer takes the dates from the mailbox: the seller quotes them.
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "11 to 14 February works.",
+                   {"dates": {"arrival": "2027-02-11", "departure": "2027-02-14"}})
+    RulesSeller(e).run()
+    d = deal_by(e, "microshift.example")
+    assert d["status"] == "offer_sent" and d["requirements"]["arrival"] == "2027-02-11"
+    assert d["versions"][-1]["terms"]["rooms"] == {"2027-02-11": 4, "2027-02-12": 4, "2027-02-13": 4}
+
+
+def test_dates_typed_in_free_text_are_understood(eng):
+    e = eng
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", EARLY_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "microshift.example")
+    e.buyer_action(d["id"], d["buyer_token"], "message", "Thanks. 11 to 14 February 2027 suits us.")
+    RulesSeller(e).run()
+    assert deal_by(e, "microshift.example")["status"] == "offer_sent"
+
+
+def test_offer_dates_cannot_offer_inventory_that_does_not_exist(eng):
+    e = eng
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", EARLY_RFP, wake=False)
+    d = deal_by(e, "microshift.example")
+    e.record_requirements(d["id"], extract(d["subject"], d["thread"][0]["text"], d["sender"]))
+    with pytest.raises(Refused, match="dates can't|not available"):
+        e.price_terms(d["id"], 19000, 30, 10)                      # no quoting the unavailable dates
+    for bad in ({"arrival": "2028-01-11", "departure": "2028-01-14"},                       # outside the calendar
+                {"arrival": "2027-01-20", "departure": "2027-01-23"},                       # less than 31 days away
+                {"arrival": "2027-03-10", "departure": "2027-03-13", "rooms_per_night": 40},  # more rooms than exist
+                {"arrival": "2027-03-13", "departure": "2027-03-10"}):                       # backwards
+        with pytest.raises(Refused):
+            e.offer_dates(d["id"], [bad], "Other dates.")
+    with pytest.raises(Refused):
+        e.offer_dates(d["id"], [], "Other dates.")
+    sug = e.suggest_dates(d["id"])
+    assert sug["options"][0]["arrival"] == "2027-02-11" and sug["options"][0]["fits_rooms"]
+    assert all(o["arrival"] >= "2027-02-11" for o in sug["options"])          # never at short notice
+
+
+def test_staff_hand_back_with_instruction_and_close(eng):
+    e = eng
+    e.ingest_email("x <a@b.example>", "RFP", "Please quote 4 king rooms for 4 guests arriving 10 March and departing "
+                   "13 March 2027 with a group dinner. Billed to B Demo Ltd. Reply by 15 January.", wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "b.example")
+    assert d["status"] == "handoff"
+    with pytest.raises(Refused):
+        e.hand_back(deal_by(e, "Northstar")["id"], "x")             # only handed-off deals
+    e.hand_back(d["id"], "Quote without the group dinner.")
+    d = deal_by(e, "b.example")
+    assert d["status"] == "intake" and not d["handoff"] and d["unread"]
+    v = e.deal_view(d["id"])
+    assert v["staff_instruction"]["text"] == "Quote without the group dinner."
+    assert "Quote without the group dinner." in e.next_step(d)
+    e.record_requirements(d["id"], {"unsupported": []})            # what the seller does on that instruction
+    RulesSeller(e).run()
+    d = deal_by(e, "b.example")
+    assert d["status"] == "offer_sent" and not d.get("staff_instruction")   # the instruction is done once it replied
+
+    e.ingest_email("y <y@c.example>", "RFP", "Please quote 2 king rooms arriving 10 March and departing 13 March 2027 "
+                   "with a spa day.", wake=False)
+    RulesSeller(e).run()
+    c = deal_by(e, "c.example")
+    assert c["status"] == "handoff"
+    n = len(c["thread"])
+    e.close_deal(c["id"])
+    c = deal_by(e, "c.example")
+    assert c["status"] == "lost" and len(c["thread"]) == n          # closing sends nothing
+    with pytest.raises(Refused):
+        e.close_deal(c["id"])
 
 
 # ------------------------------------------------------------------------------ payments & recovery
@@ -786,14 +891,17 @@ def test_a_june_stay_is_quoted_held_and_booked_on_its_own_dates(eng):
 
 
 @pytest.mark.parametrize("dates,why", [
-    ("arriving 20 January and departing 22 January 2027", "short-notice"),     # 9 days after the clock
-    ("arriving 30 December 2027 and departing 2 January 2028", "outside the bookable"),
-    ("arriving 3 January and departing 5 January 2027", "outside the bookable"),
+    ("arriving 20 January and departing 22 January 2027", "less than 31 days away"),   # 9 days after the clock
+    ("arriving 10 January and departing 12 January 2028", "not available for groups"),
+    ("arriving 3 January and departing 5 January 2027", "not available for groups"),
 ])
-def test_dates_outside_the_window_or_at_short_notice_go_to_a_person(eng, dates, why):
-    d = _rfp(eng, "edgegroup", dates)
-    assert any(why in p for p in d["requirements"]["out_of_scope"])
-    assert d["status"] == "handoff" and not d["versions"]
+def test_dates_outside_the_window_or_at_short_notice_get_other_dates(eng, dates, why):
+    e = eng
+    d = _rfp(e, "edgegroup", dates)
+    assert why in (d["requirements"]["date_issue"] or "")
+    assert d["status"] == "dates_proposed" and not d["handoff"] and not d["versions"]
+    for o in d["thread"][-1]["date_options"]:                                  # offered: bookable, with notice
+        assert o["arrival"] in H_ALL["capacity"] and e.lead_days(o["arrival"]) >= POL["min_days_before_arrival"]
 
 
 def test_engine_refuses_to_price_a_stay_that_became_short_notice(eng):
@@ -801,7 +909,7 @@ def test_engine_refuses_to_price_a_stay_that_became_short_notice(eng):
     d = _rfp(e, "lategroup", "arriving 22 February and departing 24 February 2027")
     assert d["versions"]                                                     # 42 days out: quoted
     e.advance_clock(to="2027-01-25T09:00:00+00:00")                          # now 28 days out
-    with pytest.raises(Refused, match="short-notice"):
+    with pytest.raises(Refused, match="less than 31 days away"):
         e.price_terms(d["id"], 22000, 30, 10)
 
 

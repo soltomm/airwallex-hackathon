@@ -11,6 +11,7 @@ The scenario says which nights are on sale and the defaults, and lists only the 
 `expand()` adds the derived fields the engine and the checks read:
 
     hotel["nights"]              every bookable night, in order
+    hotel["mornings"]            the breakfast morning after each of those nights
     hotel["capacity"]            {night: {room_type: rooms}}
     meeting_room["available"]    {date: hours} for every open day inside the window
 """
@@ -37,6 +38,7 @@ def expand(scenario: dict) -> dict:
     if unknown:
         raise ValueError(f"availability_by_night lists nights outside the bookable window: {', '.join(unknown)}")
     h["nights"] = nights
+    h["mornings"] = [(date.fromisoformat(n) + timedelta(days=1)).isoformat() for n in nights]   # breakfast days
     h["capacity"] = {n: {rt: int(by_night.get(n, {}).get(rt, cap)) for rt, cap in h["availability"].items()}
                      for n in nights}
     # A meeting can be on any day of the stay, including the departure day.
