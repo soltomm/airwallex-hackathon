@@ -140,3 +140,17 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 @media(max-width:760px) { .wb-bottom { display:block; border-top:1px solid #34504b; padding:9px 0 0; margin-top:10px; } .wb-tools-label { display:list-item; font-size:11px; border:0; color:#c2d2cb; } .wb-bottom .wb-property { margin-bottom:5px; } .wb-bottom button { width:auto; margin:4px; } }
 
 .wb-feedback { position:sticky; top:65px; z-index:13; margin:0; padding:12px 28px; background:#fff4dd; color:#79551b; font-size:12px; }
+
+/* FX awareness stays compact in the pipeline; country detail is opt-in. */
+.fx-risk { display:inline-block; border-radius:5px; padding:3px 7px; font-size:10px; background:#eff2f3; color:#67777c; }
+.fx-risk.stable { background:#eaf4ec; color:#347454; }
+.fx-risk.unstable { background:#fff1d9; color:#8e611d; }
+.fx-country-table { max-height:58vh; overflow:auto; margin-top:14px; border:1px solid var(--line); border-radius:8px; }
+.fx-country-table .wb-table { min-width:0; }
+.fx-country-table th { position:sticky; top:0; }
+.fx-country-table td:first-child { width:35%; }
+.fx-directory-currency + .fx-directory-currency { margin-top:14px; }
+.fx-outcome { background:#f2f6f1; padding:14px; border-radius:8px; margin-top:14px; font-size:12px; }
+.fx-outcome p { margin:5px 0; }
+.fx-reference { display:block; padding:10px; background:var(--sunk); overflow-wrap:anywhere; }
+#fxDirectoryTitle:focus { outline:none; }
