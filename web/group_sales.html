@@ -170,6 +170,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   </nav>
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
+    <button id="wbAccount">Hotel payout account ↗</button>
     <button id="wbReset">↻ Reset simulator</button>
   </details>
 </aside>
@@ -181,6 +182,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
 </main>
 <dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">INBOUND SIMULATOR</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
+<dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
 <dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
 <header hidden>
   <h1>Harbour House <span>· Group sales</span></h1>
@@ -687,6 +689,35 @@ window.Harbour = {
   next: d => nextOf(d),
   reload: load,
 };
+// ---- the hotel's Airwallex connected account (Payments for Platforms) -------------------------------
+const ONBOARD = {starting: 'Starting', account_created: 'Account created', submitted: 'Submitted for verification',
+  active: 'Activated, enabling card payments', capabilities_requested: 'Card payments requested', ready: 'Ready',
+  capabilities_pending: 'Waiting for card payments', failed: 'Failed'};
+let acctTimer = null;
+async function renderAccount(check) {
+  let a; try { a = await api('/api/hotel_account' + (check ? '?check=1' : '')); } catch (e) { return; }
+  const o = a.onboarding || {}, rec = a.provider_record;
+  const canOnboard = a.source !== 'GS_HOTEL_ACCOUNT' && a.source !== 'onboarded' && !a.running;
+  const live = a.provider === 'airwallex';
+  $('acctBody').innerHTML = `<h2 style="margin:0 0 6px">Harbour House on Airwallex</h2>
+    <p class="wb-lede" style="margin-bottom:16px">${esc(a.platform || 'The platform')} owns the Airwallex account and collects each deposit for the hotel. The hotel is a <b>connected account</b> under it; a funds split pays it its share and Airwallex pays it out to its bank.</p>
+    <dl class="kv"><dt>Platform</dt><dd>Your Airwallex account (the API key on this server)${live ? '' : ' · simulated'}</dd>
+      <dt>Hotel account</dt><dd>${a.account ? `<code>${esc(a.account)}</code>` : '<b>None yet</b>: deposits stay with the platform'}</dd>
+      <dt>Source</dt><dd>${esc({GS_HOTEL_ACCOUNT: 'GS_HOTEL_ACCOUNT on this server', onboarded: 'Onboarded from this page', simulated: 'Simulated stand-in'}[a.source] || 'Not set')}</dd>
+      ${rec ? `<dt>At Airwallex</dt><dd>${esc(rec.status || '?')} · ${rec.accepts_cards ? 'accepts card payments' : 'card payments not enabled'}${rec.name ? ' · ' + esc(rec.name) : ''}</dd>` : ''}
+      ${a.provider_error ? `<dt>At Airwallex</dt><dd style="color:var(--bad)">${esc(a.provider_error)}</dd>` : ''}
+      ${o.status ? `<dt>Onboarding</dt><dd>${esc(ONBOARD[o.status] || o.status)}${a.running ? '…' : ''}${o.error ? `<br><span style="color:var(--bad)">${esc(o.error)}</span>` : ''}</dd>` : ''}</dl>
+    ${(o.steps || []).length ? `<p class="small muted">${o.steps.map(x => `${esc(ONBOARD[x.status] || x.status)} ${when(x.at)}`).join(' · ')}</p>` : ''}
+    <div class="row" style="margin-top:14px">${canOnboard ? `<button class="wb-primary" id="acctOnboard">${o.account ? 'Resume onboarding' : 'Onboard Harbour House'}</button>` : ''}
+      ${a.account ? '<button id="acctCheck">Check with Airwallex</button>' : ''}</div>
+    ${canOnboard ? `<p class="small muted" style="margin-top:10px">Creates a connected account named Harbour House under your Airwallex account, activates it in the sandbox and enables card payments. Takes a minute or two; you can close this and come back.</p>` : ''}`;
+  if ($('acctOnboard')) $('acctOnboard').onclick = async () => { $('acctOnboard').disabled = true; try { await api('/api/hotel_account/onboard', {}); } catch (e) {} renderAccount(); };
+  if ($('acctCheck')) $('acctCheck').onclick = () => renderAccount(true);
+  clearTimeout(acctTimer);
+  if (a.running && $('acctDrawer').open) acctTimer = setTimeout(() => renderAccount(), 2000);
+}
+$('wbAccount').onclick = () => { $('acctDrawer').showModal(); renderAccount(true); };
+$('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
 <script src="/assets/openflow-demo.js"></script>

@@ -895,12 +895,13 @@ def test_access_token_gate(server, monkeypatch):
         code, _, body = _req(mod, path, {"token": "wrong", "action": "message", "text": "hi"},
                              {"Content-Type": "application/json"})
         assert code == 400 and "buyer" in body, path
-    for path in ("/", "/api/state", "/api/buyer/GS-1001/suggest", "/assets/openflow.css",
+    for path in ("/", "/api/state", "/api/hotel_account", "/api/buyer/GS-1001/suggest", "/assets/openflow.css",
                  "/assets/openflow.js", "/assets/openflow-demo.js"):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
     for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001",
-                 "/api/buyer/GS-1001/agent", "/api/deals/GS-1001/retry_payout"):
+                 "/api/buyer/GS-1001/agent", "/api/deals/GS-1001/retry_payout",
+                 "/api/hotel_account/onboard"):
         code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
         assert code == 401 and "access token required" in body, path
     assert mod.engine.s["run_id"] == run_id                                       # the refused reset changed nothing
@@ -1279,3 +1280,72 @@ def test_without_a_connected_account_the_platform_holds_the_deposit(tmp_path, mo
     assert e.provider.get_intent(e._deposit_op(n)["payment_intent_id"])["connected_account_id"] is None
     assert e._payout_ops(n, "payout") == [] and e.payout_view(n)["status"] == "no_account"
     assert any(f.startswith("no hotel connected account") for f in n["flags"])
+
+
+# ------------------------------------------------------------------------------ onboarding the hotel's connected account
+def _onboard(e):
+    e.onboard_hotel_account()
+    e._onboarding.join(5)
+    return e.hotel_account_view(check=True)
+
+
+def test_onboarding_the_hotel_account_and_paying_it(eng, monkeypatch):
+    monkeypatch.delenv("GS_HOTEL_ACCOUNT", raising=False)
+    e = eng
+    v = _onboard(e)
+    acct = v["account"]
+    assert v["source"] == "onboarded" and acct.startswith("acct_sim_") and acct != "acct_sim_harbour_house"
+    assert v["onboarding"]["status"] == "ready" and v["provider_record"]["accepts_cards"]
+    assert [x["status"] for x in v["onboarding"]["steps"]] == ["account_created", "active"]
+    with pytest.raises(Refused):
+        e.onboard_hotel_account()                                # already onboarded
+    s, n = run_to_confirmed(e)
+    assert e.provider.get_intent(e._deposit_op(n)["payment_intent_id"])["connected_account_id"] == acct
+    [split] = e.provider.find_funds_splits(e._deposit_op(n)["payment_intent_id"])
+    assert split["destination"] == acct
+    e.reset()
+    assert e.hotel_account == acct                               # a scenario reset keeps the hotel's account
+
+
+def test_onboarding_refused_then_resumed(eng, monkeypatch):
+    monkeypatch.delenv("GS_HOTEL_ACCOUNT", raising=False)
+    e = eng
+    e.provider.knobs["fail_next_onboarding"] = True
+    v = _onboard(e)
+    assert v["onboarding"]["status"] == "failed" and "simulated onboarding refusal" in v["onboarding"]["error"]
+    assert v["account"] == "acct_sim_harbour_house"              # still the stand-in, never a half-made account
+    v = _onboard(e)
+    assert v["onboarding"]["status"] == "ready" and v["source"] == "onboarded"
+    assert v["onboarding"]["request_id"]                         # the same request_id is kept across attempts
+
+
+def test_account_without_card_payments_is_not_used_yet(tmp_path, monkeypatch):
+    monkeypatch.delenv("GS_HOTEL_ACCOUNT", raising=False)
+    p = SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0)
+    p.default_account = None
+
+    def slow(name, email, request_id, account, step):
+        step("account_created", {"connected_account": "acct_sim_pending"})
+        return False                                             # card capabilities still under review
+    p.onboard_account = slow
+    e = Engine(tmp_path / "var", p)
+    v = _onboard(e)
+    assert v["onboarding"]["status"] == "capabilities_pending" and v["onboarding"]["account"] == "acct_sim_pending"
+    assert e.hotel_account is None                               # an intent tagged with it would fail
+    seen = {}
+
+    def resumed(name, email, request_id, account, step):
+        seen["account"] = account
+        return True
+    p.onboard_account = resumed
+    v = _onboard(e)
+    assert seen["account"] == "acct_sim_pending"                 # resumes the same account, no second one
+    assert v["source"] == "onboarded" and e.hotel_account == "acct_sim_pending"
+
+
+def test_gs_hotel_account_overrides_onboarding(eng, monkeypatch):
+    monkeypatch.setenv("GS_HOTEL_ACCOUNT", "acct_from_env")
+    e = eng
+    assert e.hotel_account == "acct_from_env" and e.hotel_account_view()["source"] == "GS_HOTEL_ACCOUNT"
+    with pytest.raises(Refused):
+        e.onboard_hotel_account()
