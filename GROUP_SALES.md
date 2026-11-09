@@ -202,12 +202,31 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   In-flight operations are written to `the groupsales_followups document`. Events tagged with an earlier
   run are logged and not applied.
 
-## Verified live (Airwallex sandbox, 2026-11-02)
+## Verified live (Airwallex sandbox)
+
+### 2026-11-09: hotel payouts (Payments for Platforms), on staging
+
+The full demo story ran on the staging deploy (Render) against the Airwallex sandbox, with the hotel
+onboarded from the dashboard as a connected account named Harbour House under the platform account:
+
+| Step | Amount | Airwallex id | Status |
+|---|---|---|---|
+| Deposit Payment Intent (tagged with the hotel's connected account) | £3,840.00 | `int_sgpvtdh4nhnzikulbcb` | SUCCEEDED |
+| Funds split to the hotel | £3,456.00 | `spt_sgpvn2l8vhnzimhiz8z` | CREATED |
+| Refund to the buyer | £528.00 | `rfd_sgpvzc9hjhnzipknrw4_kulbcb` | ACCEPTED |
+| Funds split reversal (hotel's share of the refund) | £475.20 | `rev_sgpvn2l8vhnzipma9ic` | CREATED |
+
+Result on the dashboard: £3,312 net received, £2,980.80 net to the hotel, £331.20 Group Desk fee.
+Airwallex accepted the split and the reversal, but both were still CREATED when checked, and the
+connected account's balance had not moved: the money follows when the card payment settles, which had
+not happened in the sandbox at the time. Not yet observed: the split reaching RELEASED/settled and the
+hotel's balance changing.
+
+### 2026-11-02: deposit and refund, before payouts
 
 Changes made after this run (the privacy fix, the two refund fixes and the dashboard polish on
-`group-sales-next`, and the hotel payouts by funds split and reversal) were tested offline only. The
-earlier Hotel Negotiation Desk did verify funds splits to a connected account live (2026-10-23); this
-build's splits and reversals have not yet run against the sandbox.
+`group-sales-next`) were tested offline only until the 2026-11-09 run above, which exercised them again
+on the same story.
 
 The full story ran against the sandbox with the rules seller, paying through hosted checkout in Chrome:
 - Deposit Payment Intent `int_sgpvzhfh9hnsz4b1uwl`, £3,840.00 GBP, SUCCEEDED; checked on return,

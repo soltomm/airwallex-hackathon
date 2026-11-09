@@ -15,32 +15,20 @@ The dashboard cookie gate and backend authority, inventory, immutable offer
 versions, payment verification and webhook contracts are unchanged. The three new
 static assets use explicit authenticated routes, not a directory-serving route.
 
-## Isolated reference demo
+## New inquiries
 
-**Simulate inbound** creates labelled browser-only fixtures. These are stored
-under `openflow-harbour-demo-v1` in localStorage. Reset simulator removes only
-these fixtures; Harbour's own scenario reset is no longer
-reachable from the dashboard (the Harbour demo controls button was removed).
-Simulator interactions never send a POST to a Harbour API or contact a payment
-provider. They are suitable for demonstrating the reference UX, not for making
-real bookings or authorizing real transactions.
+**＋ New inquiry** sends a real inquiry to Harbour House (`POST /api/inbox`, the same intake as an
+email), so the seller agent works it with the real rules: it checks rooms and rates, asks for anything
+missing, quotes, asks the hotel manager only when a seller rule would be exceeded, and takes the deposit
+through Airwallex like any other deal. The drawer offers two samples (a corporate offsite by email, a
+wedding block from a phone transcript), each with a choice of asking for rooms that are free or for more
+rooms than are free (the agent then offers what it has), and a form to write your own: from, subject and
+the inquiry text. Harbour House sells twin and king rooms, breakfast and the Thames Room for stays
+10–13 March 2027; anything else is handed to hotel staff.
 
-Harbour's real scenario supports 10–13 March 2027. The simulator uses its own
-April 2027 inventory so it can show alternative dates without changing that
-backend contract. Email and phone samples are deterministic corporate-offsite and
-wedding fixtures, with sample requirements and original text. They do not claim
-to parse arbitrary emails or transcribe real calls. Random inventory chooses
-available or unavailable with equal probability; deterministic options exercise
-both paths. Full-stay validation excludes checkout and subtracts other confirmed
-simulator groups. No viable stay can be confirmed without a current exact-terms
-approval. Dates, rate or service changes invalidate approval. Deposits are always
-30%, labelled simulated, and recorded once on confirmation.
-
-Approval links are simulated deliveries and work only in the browser that holds
-the fixture. They expose a manager review view, not a remotely authenticated
-manager role. No manager email or operations message is actually delivered.
-Simulator pricing and service choices are demonstrative, independent of Harbour's
-RMS and real policy. Real inquiries continue to use Harbour's policy engine.
+Inquiries created by the earlier browser-only simulator (stored under `openflow-harbour-demo-v1` in
+localStorage) still display, labelled as simulated, and **Reset simulator** removes them. No new ones
+are created.
 
 ## Summary definitions
 

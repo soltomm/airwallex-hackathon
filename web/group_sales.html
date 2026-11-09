@@ -205,13 +205,14 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
 </aside>
 <div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
 <main class="wb-content" id="workbench">
-  <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ Simulate inbound</button></div>
+  <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ New inquiry</button></div>
   <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
   <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
 </main>
 <dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">INBOUND SIMULATOR</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
 <dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
+<dialog id="fxDirectory" class="wb-drawer" aria-labelledby="fxDirectoryTitle"><div class="wb-drawer-head"><span>SELLER RULES · CURRENCY POLICY</span><button class="wb-close" aria-label="Close currency directory" data-wb-close>×</button></div><div class="wb-drawer-body" id="fxDirectoryBody"></div></dialog>
 <dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
 <header hidden>
   <h1>Harbour House <span>· Group sales</span></h1>
@@ -507,6 +508,7 @@ function renderDeal(d) {
     ${nextCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
+  if (window.FX) window.FX.mount(d);
 }
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
@@ -750,6 +752,7 @@ function renderRules() {
   const changes = S ? S.activity.filter(a => a.kind === 'rules_changed').slice(-5).reverse() : [];
   $('rules').innerHTML = `<button class="btn-ghost back" id="rulesBack">← Back to deals</button><h2>Seller rules</h2>
     <p class="lede">The seller agent works inside these rules. They are enforced in code, not just in the prompt: an offer outside them is refused, and anything between the seller's limit and the hard limit waits for the hotel manager. Nothing in a buyer's email can change them.</p>
+    <div class="card"><div class="label">Automated FX policy</div><p class="small muted">Stable foreign currency: hold. Unstable foreign currency: convert to GBP after verified sandbox receipt. Current GBP card deposits are already in hotel currency.</p><button id="fxDirectoryOpen">Countries & currency risk ↗</button></div>
     <div class="card"><div class="label">Who decides</div><div style="overflow-x:auto"><table class="t"><tr><th></th><th>Seller alone</th><th>Hotel manager approves</th><th>Never</th></tr>
       ${decisions().map(r => `<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="muted">${esc(r[3])}</td></tr>`).join('')}</table></div></div>
     <div class="card"><div class="label"><span>Change the rules</span><span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">${R.changed ? R.changed + ' changed from the defaults' : 'All at their defaults'}</span></div>
@@ -806,6 +809,8 @@ window.Harbour = {
   open: id => { sel = id; form = null; convOpen = false; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
   next: d => nextOf(d),
   reload: load,
+  // A new inquiry for the seller agent: the same intake as an email to Harbour House.
+  inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r.deal_id; },
 };
 // ---- the hotel's Airwallex connected account (Payments for Platforms) -------------------------------
 const ONBOARD = {starting: 'Starting', account_created: 'Account created', submitted: 'Submitted for verification',
@@ -839,6 +844,7 @@ $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
 <script src="/assets/openflow-demo.js"></script>
+<script src="/assets/fx.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>
 </html>
