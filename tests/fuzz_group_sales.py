@@ -172,7 +172,8 @@ class ChaosSeller:
                  "room_type": r.choice([None, "twin", "king"]), "rooms_per_night": r.choice([None, 0, 2, 12, 40])}
                 for _ in range(r.randint(0, 2))]}
         if name == "prepare_reduction":
-            return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": ""}
+            return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": "",
+                    "waive_gbp": r.choice([0, 0, 0, 50, 220, 440, 100000, -10]), "justification_for_manager": "client"}
         if name == "refund_excess":
             return {**a, "justification": "owed"}
         if name == "escalate":
@@ -500,6 +501,21 @@ def check(e: Engine, provider: SimulatedProvider):
             _fail(f"{d['ref']} has unknown status {d['status']}")
         mandate = scen["buyers"].get(d.get("buyer_profile") or "")
         for v in d["versions"]:
+            if v["kind"] == "amendment":
+                # A change is priced by its contract; the only concession, a waiver of the attrition charge,
+                # never reaches the buyer without the manager's approval of that exact version.
+                if calc.price(v["terms"], hotel, e.rms) != v["pricing"]:
+                    _fail(f"{d['ref']} v{v['n']}: pricing does not match its terms")
+                base = next(x for x in d["versions"] if x["n"] == v["base_version"])
+                waived = int(v["terms"].get("waived") or 0) - int(base["terms"].get("waived") or 0)
+                if waived > v["reduction"]["attrition_charge"] or waived < 0:
+                    _fail(f"{d['ref']} v{v['n']}: waiver {waived} outside its charge")
+                if waived and (v.get("sent_at") or v["status"] in SENT_STATES) and not any(
+                        a["deal_id"] == d["id"] and a["subject"] == "reduction" and a["approver"] == "hotel_manager"
+                        and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
+                        for a in s["approvals"].values()):
+                    _fail(f"{d['ref']} v{v['n']} waived {gbp(waived)} without the manager's approval")
+                continue
             if v["kind"] != "offer":
                 continue
             # The price on a version is what the calculator says for its terms (nothing edited in between).
