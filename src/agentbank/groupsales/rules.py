@@ -89,8 +89,6 @@ def validate(sc: dict) -> list[str]:
             out.append(f"{rt.capitalize()} rates must go absolute minimum ≤ seller's floor ≤ target "
                        f"(now {gbp(b['absolute_min'])}, {gbp(b['autonomous_floor'])}, {gbp(b['target'])})")
         cost = sc["rms"]["delivery_costs"].get(rt)
-        if cost is not None:
-            cost += (sc["rms"].get("holding_costs") or {}).get(rt, 0)
         if cost is not None and b["absolute_min"] <= cost:
             out.append(f"{rt.capitalize()} absolute minimum must be above the {gbp(cost)} cost of a room-night")
     dep, att = sc["policy"]["deposit"], sc["policy"]["attrition"]
@@ -139,14 +137,25 @@ def describe(sc: dict, base: dict) -> dict:
          f"capped at {h['breakfast']['group_capacity_per_day']} covers a morning. The backend refuses any offer that "
          "would oversell them."},
         {"label": "Costs", "text": "Delivery costs from the RMS: " + ", ".join(
-            f"{k.replace('_', ' ')} {gbp(v)}" for k, v in rms["delivery_costs"].items()) + ". Holding cost per contracted "
-         "room-night, kept even when a room is released: " + ", ".join(
-            f"{k} {gbp(v)}" for k, v in (rms.get("holding_costs") or {}).items()) + ". The margin rule uses them."},
+            f"{k.replace('_', ' ')} {gbp(v)}" for k, v in rms["delivery_costs"].items()) + ". Displacement (what a blocked room "
+         "would have earned from other guests): " + _displacement_text(rms) + ". The margin rule uses both."},
         {"label": "What never changes", "text": "Nothing in a buyer's email can change these rules. The seller never "
          "tells buyers its floors, costs or margins. A refund that exists is checked, never created twice. Approvals "
          "bind to the exact version or amount the manager saw."},
     ]
     return {"editable": editable, "fixed": fixed, "changed": sum(e["changed"] for e in editable)}
+
+
+def _displacement_text(rms: dict) -> str:
+    cfg = rms.get("displacement")
+    if not cfg:
+        return "none"
+    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+    days = "Mon Tue Wed Thu Fri Sat Sun".split()
+    return (", ".join(f"{k} {gbp(v)}" for k, v in cfg["full_demand"].items()) + " per room-night at full demand, "
+            "times forecast demand (by month: " + ", ".join(f"{m} {p}%" for m, p in zip(months, cfg["demand_by_month_pct"]))
+            + "; scaled by weekday: " + ", ".join(f"{w} {p}%" for w, p in zip(days, cfg["demand_by_weekday_pct"]))
+            + f"). Rooms released before the cutoff are {cfg['resale_pct']}% resold")
 
 
 def _service_prices(h: dict) -> list[dict]:
@@ -180,6 +189,7 @@ def seller_brief(sc: dict) -> str:
         f"  A rate below your floor or attrition above {att['standard_pct']}% requires a "
         f"{dep['required_pct_for_exceptions']}% deposit. Contribution margin must stay at least "
         f"{sc['rms']['min_contribution_margin_pct']}% with all rooms used and with the full free-release allowance "
-        f"used; rooms released free still carry their holding cost, so a rate cut and a larger free release "
-        f"together can break it (check with price_terms). Service prices and other terms are fixed. Quotes/holds last "
+        f"used. Margin counts displacement: on busy nights a blocked room would have sold to other guests, and "
+        f"released rooms are only partly resold, so on busy dates a rate cut and a larger free release together "
+        f"can break it; quiet dates leave more room (check with price_terms). Service prices and other terms are fixed. Quotes/holds last "
         f"{sc['policy']['quote_validity_hours']} scenario hours.")
