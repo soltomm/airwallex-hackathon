@@ -433,7 +433,7 @@ function offerCard(d) {
     <div class="facts"><span>Deposit <b>${t.deposit_pct}% · ${gbp(p.deposit)}</b></span><span>Free release <b>${t.attrition_pct}%</b> · ${p.allowance_remaining} of ${p.attrition_allowance} room-nights left</span>
       <span>${gbp(p.per_room_night_incl_breakfast)} per room-night incl. breakfast</span>${v.expires_at && !d.booking ? `<span>Held until <b>${when(v.expires_at)}</b></span>` : ''}</div>`;
   if (v.unmet && v.unmet.length) h += `<p class="small" style="margin:10px 0 0"><b>Differs from the request:</b> ${esc(v.unmet.join('; '))}</p>`;
-  h += `<div class="hotel">Hotel only: margin ${p.margin_all_rooms.margin_pct}% (${p.margin_full_release.margin_pct}% if all free room-nights are released)${v.hotel_check && v.hotel_check.approvals.length ? ' · Approval needed: ' + esc(sentences(v.hotel_check.approvals)) : ''}</div></div>`;
+  h += `<div class="hotel">Hotel only: margin ${p.margin_all_rooms.margin_pct}% (${p.margin_full_release.margin_pct}% if all free room-nights are released)${p.displacement && p.displacement.blocked ? ` · displacement ${gbp(p.displacement.blocked)} (demand ${p.displacement.nights.map(x => x.demand_pct + '%').join(' / ')})` : ''}${v.hotel_check && v.hotel_check.approvals.length ? ' · Approval needed: ' + esc(sentences(v.hotel_check.approvals)) : ''}</div></div>`;
   if (f.received || f.refund_owed) {
     const due = f.schedule ? f.schedule.filter(x => x.amount) : [];
     h += `<div class="card"><div class="label">Money</div><div class="tiles">

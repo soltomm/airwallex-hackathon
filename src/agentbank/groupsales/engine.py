@@ -514,6 +514,8 @@ class Engine:
         if for_ == "seller":
             out["pricing"]["margin_all_rooms"] = p["margin_all_rooms"]
             out["pricing"]["margin_full_release"] = p["margin_full_release"]
+            if "displacement" in p:
+                out["pricing"]["displacement"] = p["displacement"]
             out["hotel_check"] = v.get("hotel_check")
             out["reduction"] = v.get("reduction")
         elif v.get("reduction"):
@@ -739,7 +741,8 @@ class Engine:
                                                                  for m, v in bf.items()), "data": bf},
                 {"system": "RMS", "summary": (f"{rt}: target {gbp(rates['target'])}, seller floor {gbp(rates['autonomous_floor'])}, "
                                               f"absolute min {gbp(rates['absolute_min'])}; min margin {self.rms['min_contribution_margin_pct']}%")
-                 if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"]}},
+                 if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"],
+                                                                   "displacement": self.rms.get("displacement", {})}},
                 {"system": "CRM", "summary": f"{crm.get('account') or d['domain']}: {crm.get('type')}, "
                                              f"credit terms {'yes' if crm.get('credit_terms') else 'no'}", "data": crm},
                 {"system": "Policy", "summary": "Deposit 30% standard (up to 40%; 20-29% needs manager); attrition 10% "
