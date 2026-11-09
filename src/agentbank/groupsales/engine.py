@@ -24,6 +24,7 @@ import secrets
 import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from . import calc, rules
@@ -31,6 +32,8 @@ from .calc import gbp
 from .extract import extract, missing_info, stay_nights
 from .policy import buyer_check, hotel_check
 from .provider import AirwallexError, AmbiguousResult
+from . import fx
+from .fx_provider import SandboxFX, SimulatedFX
 from ..storage import doc
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -91,11 +94,21 @@ class Engine:
         # scenario state so a reset never forgets it (Airwallex doesn't forget it either).
         self.account_store = doc(self.var / "groupsales_hotel_account.json")
         self._onboarding = None   # the background onboarding thread, while it runs
+        self.fx_journal = fx.FXJournal(self.var)
+        self.fx_provider = SimulatedFX(self.var) if provider.name == 'simulated' else SandboxFX(provider.c)
+        self.fx_scan_lock = threading.Lock()
         self.scenario = self._load_scenario()
         self.listeners: list = []          # called after state changes that should wake an agent
         saved = self.store.read()
         if saved:
             self.s = saved
+            migrated = False
+            for d in self.s['deals'].values():
+                if not d.get('fx_reference'):
+                    d['fx_reference'] = 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + d['id']).hex[:24]
+                    migrated = True
+            if migrated:
+                self._save()
         else:
             self.s = {}
             self.reset(reason="first start", archive=False)
@@ -185,6 +198,76 @@ class Engine:
         return {"run_id": self.s["run_id"], "followups": len(followups)}
 
     # ================================================================ seller rules
+    def update_payer(self, deal_id, country_code, currency=None, actor='hotel staff'):
+        try:
+            profile = fx.payer_profile(country_code, currency)
+        except (ValueError, TypeError) as exc:
+            raise Refused(str(exc))
+        with self.lock:
+            d = self.deal(deal_id)
+            d['payer_origin'] = profile
+            d['fx_reference'] = 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + d['id']).hex[:24]
+            self.log(d['id'], actor, 'payer_origin', f"Payer origin recorded: {profile['country']} · {profile['local_currency']}. This does not establish received currency.")
+            self._save()
+            return self.payer_view(d)
+
+    def payer_view(self, d):
+        origin = copy.deepcopy(d.get('payer_origin'))
+        if origin:
+            origin['classification'] = fx.risk(origin['local_currency'])
+        return {'origin': origin, 'reference': d.get('fx_reference'), **self.fx_journal.view(self.s['run_id'] + ':' + d['id'])}
+
+    def scan_fx(self):
+        """Automatic sandbox treasury scan. Network calls happen outside the booking lock."""
+        if not self.fx_scan_lock.acquire(blocking=False):
+            return {'busy': True}
+        try:
+            with self.lock:
+                account = self.hotel_account
+                run_id = self.s['run_id']
+                watched = [(d['id'], d['fx_reference']) for d in self.s['deals'].values() if d.get('fx_reference')]
+            processed = 0
+            if account:
+                by_reference = {reference: did for did, reference in watched}
+                for receipt in self.fx_provider.receipts(account, list(by_reference)) if by_reference else []:
+                    if receipt.get('reference') in by_reference:
+                        did = by_reference[receipt['reference']]
+                        receipt['deal_id'] = run_id + ':' + did
+                        with self.fx_journal.lock:
+                            before = copy.deepcopy(self.fx_journal.state['receipts'].get(receipt['account'] + ':' + receipt['id']))
+                        row = self.fx_journal.process(receipt, self.fx_provider)
+                        if not before or before['status'] != row['status']:
+                            with self.lock:
+                                if self.s['run_id'] == run_id:
+                                    self.log(did, 'FX agent', 'fx_decision', f"{row['currency']} {row['amount']}: {row['action']} · {row['status']}. {row['reason']}")
+                                    self._save()
+                        processed += 1
+            with self.fx_journal.lock:
+                self.fx_journal.state.update(last_scan=_iso(datetime.now(timezone.utc)), scan_error=None if account else 'Connect the hotel account to monitor foreign bank receipts.')
+                self.fx_journal.save()
+            return {'processed': processed, 'account': account}
+        except Exception as exc:
+            with self.fx_journal.lock:
+                self.fx_journal.state.update(last_scan=_iso(datetime.now(timezone.utc)), scan_error=str(exc)[:400])
+                self.fx_journal.save()
+            return {'error': str(exc)[:400]}
+        finally:
+            self.fx_scan_lock.release()
+
+    def simulate_fx_receipt(self, deal_id):
+        if not self.fx_provider.simulated:
+            raise Refused('Local FX receipt fixtures are only available with simulated payments.')
+        with self.lock:
+            d = self.deal(deal_id)
+            origin = d.get('payer_origin')
+            if not origin or not d.get('fx_reference'):
+                raise Refused('Record the payer country and local currency first.')
+            if not self.hotel_account:
+                raise Refused('Connect a simulated hotel account first.')
+            self.fx_provider.add_receipt(self.hotel_account, d['fx_reference'], origin['local_currency'], '1000')
+        self.scan_fx()
+        return self.payer_view(d)
+
     def _load_scenario(self) -> dict:
         return rules.apply(json.loads(self.scenario_path.read_text()), self.rule_store.read() or {})
 
@@ -331,6 +414,7 @@ class Engine:
                 "finance": {"refund_owed": 0, "refund_owed_version": None}, "flags": [],
                 "buyer_token": secrets.token_urlsafe(12), "unread": True, "handoff": None,
                 "buyer_profile": domain if domain in self.scenario["buyers"] else None,
+                "fx_reference": 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + did).hex[:24],
                 "pending_acceptance": None,
             }
             self.s["deals"][did] = deal
@@ -1264,6 +1348,10 @@ class Engine:
             return
         op["status"] = "succeeded"
         new = self._ledger(f"receipt:{pi['id']}", d, "deposit_received", op["amount"], op, pi["id"])
+        self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
+                                 'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
+                                 'amount': str(Decimal(op['amount']) / 100),
+                                 'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
         if not new and d.get("booking"):
             return
         v = self._version(d, op["version"])
@@ -2066,6 +2154,7 @@ class Engine:
             deals = []
             for d in self.s["deals"].values():
                 x = copy.deepcopy(d)
+                x['payer_fx'] = self.payer_view(d)
                 x["waiting_on"] = self.waiting_on(d)
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)

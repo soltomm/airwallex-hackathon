@@ -33,6 +33,7 @@ load_dotenv(ROOT / ".env")
 from agentbank.groupsales.buyer import BuyerAgent, act, suggest  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
+from agentbank.groupsales import fx  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.webhooks import signature_ok  # noqa: E402
@@ -213,7 +214,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
             assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow-demo.js": ("openflow-demo.js", "text/javascript"),
-                      "/assets/openflow.js": ("openflow.js", "text/javascript")}
+                      "/assets/openflow.js": ("openflow.js", "text/javascript"),
+                      "/assets/fx.js": ("fx.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
@@ -234,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.hotel_account_view(check=q.get("check") == "1"))
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
+            if p == "/api/fx/countries":
+                return self._send(200, fx.directory())
             if p.startswith("/pay/"):
                 parts = p.split("/")
                 return self._pay(parts[2], q.get("t", ""), returned=len(parts) > 3 and parts[3] == "return")
@@ -262,6 +266,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.update_rules(b.get("changes") or {}, actor="hotel manager"))
             if p == "/api/rules/reset":
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
+            if p == "/api/fx/scan":
+                return self._send(200, engine.scan_fx())
+            if p.startswith("/api/deals/") and p.endswith("/payer"):
+                return self._send(200, engine.update_payer(p.split("/")[3], b.get('country_code'), b.get('currency')))
+            if p.startswith("/api/deals/") and p.endswith("/fx_simulate"):
+                return self._send(200, engine.simulate_fx_receipt(p.split("/")[3]))
             if p.startswith("/api/deals/") and p.endswith("/hand_back"):
                 return self._send(200, engine.hand_back(p.split("/")[3], b.get("instruction", ""), actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/close"):
@@ -301,8 +311,16 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
-                return self._send(200, engine.ingest_email(b["from"], b.get("subject") or "(no subject)", b["body"],
-                                                           message_id=b.get("message_id") or None))
+                if b.get('payer_country'):
+                    try:
+                        fx.payer_profile(b['payer_country'], b.get('payer_currency'))
+                    except ValueError as exc:
+                        raise Refused(str(exc))
+                result = engine.ingest_email(b["from"], b.get("subject") or "(no subject)", b["body"],
+                                            message_id=b.get("message_id") or None)
+                if b.get('payer_country'):
+                    engine.update_payer(result['deal_id'], b['payer_country'], b.get('payer_currency'))
+                return self._send(200, result)
             if p.startswith("/api/approvals/"):
                 return self._send(200, engine.decide_approval(p.split("/")[3], b.get("decision"), b.get("actor"),
                                                               b.get("note", "")))
@@ -409,6 +427,11 @@ button{{width:100%;padding:12px;border:0;border-radius:8px;background:#612fff;co
 
 def main():
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    def watch_fx():
+        while True:
+            engine.scan_fx()
+            time.sleep(30)
+    threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
     print(f"Harbour House group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
           f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']})")

@@ -31,3 +31,4 @@ jobs:
           node --test tests/test_openflow_demo.cjs
           node --check web/openflow.js
           node --check web/openflow-demo.js
+          node --check web/fx.js

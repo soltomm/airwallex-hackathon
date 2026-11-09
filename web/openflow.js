@@ -21,7 +21,7 @@
       const status=['confirmed','declined','expired'].includes(d.status) ? d.status : n.cls==='you' ? 'approval' : ['new','intake','needs_info'].includes(d.status) ? 'draft' : d.status==='handoff' ? 'unavailable' : 'proposal';
       const rooms = d.booking?.rooms || v?.terms.rooms;
       return {id:d.id, demo:false, company:d.company, contact:d.sender, arrival:r.arrival, departure:r.departure, rooms:r.rooms || (rooms ? Math.max(...Object.values(rooms)) : 0),
-        status, label:({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
+        payer:d.payer_fx, status, label:({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
         nights:rooms ? Object.values(rooms).reduce((a,b)=>a+b,0) : (r.arrival && r.departure ? Math.max(0,(Date.parse(r.departure)-Date.parse(r.arrival))/864e5)*(r.rooms||0) : 0),
         next:n.short, review:['you','bad'].includes(n.cls) || ['new','intake'].includes(d.status), open:!['confirmed','declined','expired'].includes(d.status)};
     });
@@ -38,8 +38,8 @@
     if (view==='payments') renderPayments(all); else renderPipeline(all);
   }
   function table(all) {
-    const filtered=all.filter(d=>(filter==='all'||filter==='new'&&['draft','unavailable','alternative_draft'].includes(d.status)||filter===d.status) && `${d.company} ${d.contact||''}`.toLowerCase().includes(search.toLowerCase()));
-    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th><th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(d.demo ? `${d.channel==='phone'?'Phone':'Email'} · Simulated` : 'Harbour House · Connected')}</span></button></td><td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="5" class="wb-empty">No inquiries match. Try another filter or simulate an inbound.</td></tr>'}</tbody></table></div>`;
+    const filtered=all.filter(d=>(filter==='all'||filter==='new'&&['draft','unavailable','alternative_draft'].includes(d.status)||filter===d.status) && `${d.company} ${d.contact||''} ${d.payer?.origin?.country||''} ${d.payer?.origin?.local_currency||''}`.toLowerCase().includes(search.toLowerCase()));
+    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th><th>Payer origin</th><th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(d.demo ? `${d.channel==='phone'?'Phone':'Email'} · Simulated` : 'Harbour House · Connected')}</span></button></td><td>${window.FX?.summary(d.payer)||'<span class="muted">Not recorded</span>'}</td><td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="6" class="wb-empty">No inquiries match. Try another filter or simulate an inbound.</td></tr>'}</tbody></table></div>`;
   }
   function renderPipeline(all) {
     const moves=all.filter(d=>d.review).slice(0,6);
