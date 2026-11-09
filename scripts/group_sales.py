@@ -262,6 +262,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.update_rules(b.get("changes") or {}, actor="hotel manager"))
             if p == "/api/rules/reset":
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
+            if p.startswith("/api/deals/") and p.endswith("/hand_back"):
+                return self._send(200, engine.hand_back(p.split("/")[3], b.get("instruction", ""), actor="hotel staff"))
+            if p.startswith("/api/deals/") and p.endswith("/close"):
+                return self._send(200, engine.close_deal(p.split("/")[3], b.get("note", ""), actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/retry"):
                 return self._send(200, engine.retry_seller(p.split("/")[3], actor="hotel staff"))
             if p == "/api/hotel_account/onboard":

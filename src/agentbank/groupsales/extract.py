@@ -67,7 +67,7 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
     if m and m.group(2) in MONTHS:
         req["departure"] = _date(m.group(1), m.group(2), year)
     if not (req["arrival"] and req["departure"]):
-        m = re.search(r"(\d{1,2})\s*[–-]\s*(\d{1,2})\s+([a-z]+)", low)
+        m = re.search(r"(\d{1,2})\s*(?:[–-]|to)\s*(\d{1,2})\s+([a-z]+)", low)
         if m and m.group(3) in MONTHS:
             req["arrival"] = _date(m.group(1), m.group(3), year)
             req["departure"] = _date(m.group(2), m.group(3), year)
