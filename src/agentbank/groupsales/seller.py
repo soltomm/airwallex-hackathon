@@ -16,6 +16,7 @@ from datetime import date, timedelta
 
 from . import rules
 from .calc import gbp
+from .bookable import window_text
 from .engine import Engine, Refused
 from .extract import extract
 from .trace import Traced
@@ -416,8 +417,8 @@ class RulesSeller:
         pr, t = p["pricing"], p["terms"]
         lines = "\n".join(f"- {l['item']}: {l['qty']} x {gbp(l['unit'])} = {gbp(l['amount'])}" for l in pr["lines"])
         kd = self.e.policy
-        from .calc import key_dates
-        dates = key_dates(self.e.hotel, kd)
+        from .calc import arrival_of, key_dates
+        dates = key_dates(arrival_of(t), kd)
         body = (f"Itemized offer for {d['company']}:\n{lines}\nTotal {gbp(pr['total'])} (GBP, taxes included). "
                 f"Deposit {t['deposit_pct']}% = {gbp(pr['deposit'])} on signing; cumulative 50% by "
                 f"{dates['first_installment_due']}, 100% by {dates['final_installment_due']}. Attrition {t['attrition_pct']}% "
@@ -467,11 +468,11 @@ How to work:
 - For a new inquiry: read_deal, then record_requirements from the email (only what it says; leave
   unknowns null), then check_systems. If details you need are missing (meeting layout, legal payer,
   whether the budget includes taxes), ask_buyer for them; do not guess.
-- Dates: if the requested dates can't be sold (outside the group calendar, or not enough rooms free),
+- Dates: if the requested dates can't be sold (outside the group calendar: {WINDOW}; or not enough rooms free),
   do not hand the deal to a person and do not tell the buyer it is going to staff. Call suggest_dates,
   then offer_dates with the best one to three options, in a short email that says which dates are not
-  available and which are, for example: "We are unable to offer 11 to 14 May. We can accommodate your
-  group from 10 to 13 March 2027." Ask any missing questions in the same email. When the buyer picks
+  available and which are, for example: "We are unable to offer 3 to 6 January. We can accommodate your
+  group from 11 to 14 February 2027." Ask any missing questions in the same email. When the buyer picks
   dates, record_requirements with them and carry on to a quote.
 - Services the hotel does not offer (anything beyond twin/king rooms, breakfast and the Thames Room):
   escalate to a person with a clear reason. If hotel staff later hand the deal back telling you to
@@ -514,7 +515,9 @@ How to work:
 def system_prompt(engine) -> str:
     """SYSTEM with the hotel's current rule values (rules.seller_brief), so the prompt matches the engine."""
     return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario))
-            .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"])))
+            .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
+            .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
+                                 f"{engine.policy['min_days_before_arrival']} days ahead"))
 
 
 _I = {"type": "integer"}

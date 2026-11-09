@@ -8,6 +8,7 @@ sandbox payments. This is the build for product spec v2 (Airwallex hackathon).
 data/groupsales/scenario.json        hotel, PMS/RMS/CRM/policy data, the two RFPs, buyer mandates
 src/agentbank/groupsales/
   calc.py       pricing, deposits, attrition allowance, contribution margin, reductions, schedules
+  bookable.py   expands the scenario's bookable window (defaults + per-night overrides) into a calendar
   policy.py     hotel authority (seller vs manager vs hard limits) and buyer mandate checks
   engine.py     shared hotel state + every enforced operation (intake, holds, versions, approvals,
                 payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)
@@ -192,8 +193,9 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   before 8 Feb, the deposit is recalculated and the excess refunded. From 8 Feb on, the amendment is
   recorded and the manager reconciles payments. Going over the allowance or past the deadline goes to
   manager review, and the existing agreement stays in effect until a change is accepted.
-- **Other dates.** The seller can only offer dates inside the group calendar with the rooms free at
-  that moment (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
+- **Other dates.** The seller can only offer dates inside the group calendar (11 January to 31 December
+  2027), arriving at least 31 days after the scenario clock, with the rooms free at that moment
+  (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
 - **Hand-offs.** Only an inquiry handed to staff with no booking can be handed back or closed. A staff
   instruction stays in front of the seller until it next writes to the buyer.
 - **Reset.** A reset creates a new run id and restores the hotel data. Airwallex is not reset.

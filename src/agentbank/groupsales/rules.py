@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 
+from .bookable import window_text
 from .calc import gbp
 
 # path, label, kind, group, what it means
@@ -122,7 +123,8 @@ def describe(sc: dict, base: dict) -> dict:
     services = [f"{line['label']}: {gbp(line['price'])}" for line in _service_prices(h)]
     fixed = [
         {"label": "What the hotel sells", "text": f"{', '.join(pol['supported_services'])}, for the "
-         f"{h['arrival']} to {h['departure']} stay only. Anything else is handed to a person."},
+         f"{window_text(h)} only, arriving at least {pol['min_days_before_arrival']} days ahead. Anything else "
+         "is handed to a person."},
         {"label": "Service prices", "text": "; ".join(services) + "." if services else "Fixed in the contract."},
         {"label": "Payment schedule", "text": "Deposit on signing, then " + ", ".join(
             f"{i['cumulative_pct']}% paid in total {i['days_before_arrival']} days before arrival"

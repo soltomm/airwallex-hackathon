@@ -9,19 +9,22 @@ import json
 
 import pytest
 
-from agentbank.groupsales import calc
+from agentbank.groupsales import bookable, calc
 from agentbank.groupsales.buyer import act, suggest
 from agentbank.groupsales.engine import SCENARIO, Engine, Refused
+from agentbank.groupsales.policy import hotel_check
 from agentbank.groupsales.provider import SimulatedProvider
 from agentbank.groupsales.seller import RulesSeller
 from agentbank.groupsales.extract import extract
 
 S = json.loads(SCENARIO.read_text())
 H, RMS, POL = S["hotel"], S["rms"], S["policy"]
+MARCH = ["2027-03-10", "2027-03-11", "2027-03-12"]     # the demo stay's nights
+H_ALL = bookable.expand(S)["hotel"]                     # with the expanded calendar
 
 
 def northstar_terms(att=20, dep=40, rate=22000):
-    return {"room_type": "twin", "rate": rate, "rooms": {n: 12 for n in H["nights"]}, "released": {n: 0 for n in H["nights"]},
+    return {"room_type": "twin", "rate": rate, "rooms": {n: 12 for n in MARCH}, "released": {n: 0 for n in MARCH},
             "breakfast": {m: 24 for m in ("2027-03-11", "2027-03-12", "2027-03-13")},
             "meeting": {"room": "thames", "date": "2027-03-11", "layout": "classroom", "attendees": 24},
             "attrition_pct": att, "deposit_pct": dep, "currency": "GBP"}
@@ -77,15 +80,42 @@ def test_spec_figures():
     assert (p["total"], p["deposit"], p["attrition_allowance"]) == (960000, 384000, 7)
     assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 313200, "contribution": 646800, "margin_pct": 67.4}
     assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 264200
-    r = calc.evaluate_reduction(northstar_terms(), {n: 2 for n in H["nights"]}, "2027-01-20", H, POL, RMS, 384000)
+    r = calc.evaluate_reduction(northstar_terms(), {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     assert (r["new_pricing"]["total"], r["revised_deposit"], r["refund_due"], r["remaining_after"]) == (828000, 331200, 52800, 1)
     assert r["new_pricing"]["margin_all_rooms"]["costs"] == 271200
-    sched = calc.schedule(828000, 40, 331200, H, POL, "2027-01-11")
+    sched = calc.schedule(828000, 40, 331200, "2027-03-10", POL, "2027-01-11")
     assert [x["amount"] for x in sched] == [0, 82800, 414000]
 
 
+def june_terms():
+    """Northstar's contract moved to a 10-13 June 2027 stay: same rooms, different arrival."""
+    t = northstar_terms()
+    nights = ("2027-06-10", "2027-06-11", "2027-06-12")
+    return {**t, "rooms": {n: 12 for n in nights}, "released": {n: 0 for n in nights},
+            "breakfast": {m: 24 for m in ("2027-06-11", "2027-06-12", "2027-06-13")},
+            "meeting": {**t["meeting"], "date": "2027-06-11"}}
+
+
+def test_deadlines_follow_the_contract_arrival():
+    assert calc.arrival_of(june_terms()) == "2027-06-10"
+    assert calc.key_dates("2027-06-10", POL) == {
+        "arrival": "2027-06-10", "release_deadline": "2027-05-27", "rooming_list_due": "2027-05-20",
+        "first_installment_due": "2027-05-11", "final_installment_due": "2027-06-03"}
+    due = [x["due"] for x in calc.schedule(960000, 40, 384000, "2027-06-10", POL, "2027-01-11")]
+    assert due == ["2027-01-11", "2027-05-11", "2027-06-03"]
+
+
+def test_reduction_deadlines_follow_the_contract_arrival():
+    # 20 March is past a March stay's release deadline (24 Feb) but well before a June stay's (27 May).
+    r = calc.evaluate_reduction(june_terms(), {"2027-06-10": 2}, "2027-03-20", H, POL, RMS, 384000)
+    assert r["before_release_deadline"] and r["before_first_installment"] and not r["needs_manager_review"]
+    assert r["refund_mode"] == "automatic"
+    r = calc.evaluate_reduction(june_terms(), {"2027-06-10": 2}, "2027-05-28", H, POL, RMS, 384000)
+    assert not r["before_release_deadline"] and "after the room-release deadline (2027-05-27)" in r["review_reasons"]
+
+
 def test_summit_offer():
-    t = {"room_type": "king", "rate": 19000, "rooms": {n: 8 for n in H["nights"]}, "released": {},
+    t = {"room_type": "king", "rate": 19000, "rooms": {n: 8 for n in MARCH}, "released": {},
          "breakfast": {m: 8 for m in ("2027-03-11", "2027-03-12", "2027-03-13")}, "meeting": None,
          "attrition_pct": 10, "deposit_pct": 30}
     p = calc.price(t, H, RMS)
@@ -94,14 +124,14 @@ def test_summit_offer():
 
 def test_cumulative_attrition_and_rules():
     t = northstar_terms()
-    first = calc.evaluate_reduction(t, {n: 2 for n in H["nights"]}, "2027-01-20", H, POL, RMS, 384000)
+    first = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     later = calc.evaluate_reduction(first["new_terms"], {"2027-03-10": 2}, "2027-01-25", H, POL, RMS, 331200)
     assert later["already_released"] == 6 and not later["within_allowance"] and later["needs_manager_review"]
-    nine = calc.evaluate_reduction(t, {n: 3 for n in H["nights"]}, "2027-01-20", H, POL, RMS, 384000)
+    nine = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     assert not nine["within_allowance"] and nine["refund_due"] == 0
-    late = calc.evaluate_reduction(t, {n: 2 for n in H["nights"]}, "2027-02-25", H, POL, RMS, 384000)
+    late = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-02-25", H, POL, RMS, 384000)
     assert not late["before_release_deadline"] and late["needs_manager_review"]
-    after_inst = calc.evaluate_reduction(t, {n: 2 for n in H["nights"]}, "2027-02-10", H, POL, RMS, 384000)
+    after_inst = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-02-10", H, POL, RMS, 384000)
     assert after_inst["refund_mode"] == "manager reconciliation" and after_inst["refund_due"] == 0
 
 
@@ -115,19 +145,19 @@ def test_full_story(eng):
     assert n["status"] == "confirmed"
     v2 = n["versions"][-1]
     assert (v2["terms"]["rate"], v2["terms"]["attrition_pct"], v2["terms"]["deposit_pct"]) == (22000, 20, 40)
-    inv = e.s["inventory"]["2027-03-10"]["twin"]
+    inv = e.inventory_at("2027-03-10")["twin"]
     assert (inv["held"], inv["booked"]) == (0, 12)
     assert [x["amount"] for x in e.s["ledger"]] == [384000]
 
     e.advance_clock(to="2027-01-20T09:00:00+00:00")
     assert deal_by(e, "Summit")["status"] == "expired"          # unaccepted hold lapsed and released
-    assert e.s["inventory"]["2027-03-10"]["king"]["held"] == 0
+    assert e.inventory_at("2027-03-10")["king"]["held"] == 0
     buyer_turn(e, "Northstar")                                  # change request
     s.run()
     assert n["status"] == "amendment_sent"
     buyer_turn(e, "Northstar")                                  # accept amendment
     assert n["finance"]["refund_owed"] == 52800
-    assert e.s["inventory"]["2027-03-10"]["twin"]["booked"] == 10
+    assert e.inventory_at("2027-03-10")["twin"]["booked"] == 10
     s.run()                                                      # refund above £500 -> approval
     appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
     assert appr["amount"] == 52800 and appr["status"] == "pending"
@@ -145,7 +175,7 @@ def test_full_story(eng):
     e.handle_event(evt, verified=True)
     e.handle_event(evt, verified=True)
     assert len([x for x in e.s["ledger"] if x["type"] == "refund_completed"]) == 1
-    assert e.s["inventory"]["2027-03-10"]["twin"]["booked"] == 10
+    assert e.inventory_at("2027-03-10")["twin"]["booked"] == 10
 
 
 # ------------------------------------------------------------------------------ authority & versions
@@ -188,8 +218,8 @@ def test_no_overselling(eng):
     other = deal_by(e, "other.example")
     v = other["versions"][-1]
     assert v["terms"]["rooms"]["2027-03-10"] == 2 and v["unmet"]     # alternative: only 2 left
-    for night in H["nights"]:
-        inv = e.s["inventory"][night]["twin"]
+    for night in MARCH:
+        inv = e.inventory_at(night)["twin"]
         assert inv["held"] + inv["booked"] <= inv["capacity"]
 
 
@@ -223,52 +253,55 @@ def test_out_of_scope_buyer_gets_an_acknowledgement(eng):
     assert [m for m in d["thread"] if m["from"] == "seller"], "the buyer must hear back, not silence"
 
 
-MAY_RFP = ("Please quote 4 king rooms for 4 employees arriving 11 May and departing 14 May 2027 with breakfast. "
-           "No meeting room is needed. Billed to Microshift Demo Ltd. Reply by 15 January at noon.")
+# Before the bookable window (from 11 January 2027) and at less than 31 days' notice: the nearest dates the
+# seller may offer are 11-14 February, the first arrival with enough notice.
+EARLY_RFP = ("Please quote 4 king rooms for 4 employees arriving 3 January and departing 6 January 2027 with breakfast. "
+             "No meeting room is needed. Billed to Microshift Demo Ltd. Reply by 15 January at noon.")
 
 
 def test_unavailable_dates_get_other_dates_not_a_handoff(eng):
     e = eng
-    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", MAY_RFP, wake=False)
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", EARLY_RFP, wake=False)
     RulesSeller(e).run()
     d = deal_by(e, "microshift.example")
     assert d["company"] == "Microshift"
     assert d["status"] == "dates_proposed" and not d["handoff"]
     last = d["thread"][-1]
     assert last["from"] == "seller" and last["date_options"]
-    assert "unable to offer 11 to 14 May 2027" in last["text"] and "10 to 13 March 2027" in last["text"]
+    assert "unable to offer 3 to 6 January 2027" in last["text"] and "11 to 14 February 2027" in last["text"]
     assert "staff" not in last["text"].lower() and "team will" not in last["text"].lower()
     o = last["date_options"][0]
-    assert (o["arrival"], o["departure"], o["room_type"], o["rooms_per_night"]) == ("2027-03-10", "2027-03-13", "king", 4)
+    assert (o["arrival"], o["departure"], o["room_type"], o["rooms_per_night"]) == ("2027-02-11", "2027-02-14", "king", 4)
     assert any(r["system"] == "PMS (other dates)" for r in d["records"])
 
     # The buyer takes the dates from the mailbox: the seller quotes them.
-    e.buyer_action(d["id"], d["buyer_token"], "reply", "10 to 13 March works.",
-                   {"dates": {"arrival": "2027-03-10", "departure": "2027-03-13"}})
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "11 to 14 February works.",
+                   {"dates": {"arrival": "2027-02-11", "departure": "2027-02-14"}})
     RulesSeller(e).run()
     d = deal_by(e, "microshift.example")
-    assert d["status"] == "offer_sent" and d["requirements"]["arrival"] == "2027-03-10"
-    assert d["versions"][-1]["terms"]["rooms"] == {"2027-03-10": 4, "2027-03-11": 4, "2027-03-12": 4}
+    assert d["status"] == "offer_sent" and d["requirements"]["arrival"] == "2027-02-11"
+    assert d["versions"][-1]["terms"]["rooms"] == {"2027-02-11": 4, "2027-02-12": 4, "2027-02-13": 4}
 
 
 def test_dates_typed_in_free_text_are_understood(eng):
     e = eng
-    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", MAY_RFP, wake=False)
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", EARLY_RFP, wake=False)
     RulesSeller(e).run()
     d = deal_by(e, "microshift.example")
-    e.buyer_action(d["id"], d["buyer_token"], "message", "Thanks. 10 to 13 March 2027 suits us.")
+    e.buyer_action(d["id"], d["buyer_token"], "message", "Thanks. 11 to 14 February 2027 suits us.")
     RulesSeller(e).run()
     assert deal_by(e, "microshift.example")["status"] == "offer_sent"
 
 
 def test_offer_dates_cannot_offer_inventory_that_does_not_exist(eng):
     e = eng
-    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", MAY_RFP, wake=False)
+    e.ingest_email("Jo <jo@microshift.example>", "Group RFP", EARLY_RFP, wake=False)
     d = deal_by(e, "microshift.example")
     e.record_requirements(d["id"], extract(d["subject"], d["thread"][0]["text"], d["sender"]))
     with pytest.raises(Refused, match="dates can't|not available"):
         e.price_terms(d["id"], 19000, 30, 10)                      # no quoting the unavailable dates
-    for bad in ({"arrival": "2027-05-11", "departure": "2027-05-14"},                       # outside the calendar
+    for bad in ({"arrival": "2028-01-11", "departure": "2028-01-14"},                       # outside the calendar
+                {"arrival": "2027-01-20", "departure": "2027-01-23"},                       # less than 31 days away
                 {"arrival": "2027-03-10", "departure": "2027-03-13", "rooms_per_night": 40},  # more rooms than exist
                 {"arrival": "2027-03-13", "departure": "2027-03-10"}):                       # backwards
         with pytest.raises(Refused):
@@ -276,7 +309,8 @@ def test_offer_dates_cannot_offer_inventory_that_does_not_exist(eng):
     with pytest.raises(Refused):
         e.offer_dates(d["id"], [], "Other dates.")
     sug = e.suggest_dates(d["id"])
-    assert sug["options"][0]["arrival"] == "2027-03-10" and sug["options"][0]["fits_rooms"]
+    assert sug["options"][0]["arrival"] == "2027-02-11" and sug["options"][0]["fits_rooms"]
+    assert all(o["arrival"] >= "2027-02-11" for o in sug["options"])          # never at short notice
 
 
 def test_staff_hand_back_with_instruction_and_close(eng):
@@ -370,7 +404,7 @@ def test_refund_failure_stays_visible(eng):
     s.run()
     assert n["finance"]["refund_owed"] == 52800 and n["status"] == "refund_failed" and n["handoff"]
     assert len(e._refund_ops(n)) == 1                                # no automatic retry
-    assert e.s["inventory"]["2027-03-10"]["twin"]["booked"] == 10    # released rooms not reinstated
+    assert e.inventory_at("2027-03-10")["twin"]["booked"] == 10    # released rooms not reinstated
 
 
 def test_reduction_after_installment_and_beyond_allowance(eng):
@@ -419,7 +453,7 @@ def test_hold_expiry_during_checkout(eng):
     assert n["status"] == "awaiting_payment"
     e.advance_clock(hours=30)                                       # unpaid: intent cancelled, hold released
     assert n["status"] == "expired" and e._deposit_op(n)["status"] == "cancelled"
-    assert e.s["inventory"]["2027-03-10"]["twin"]["held"] == 0
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 0
     with pytest.raises(Refused):
         e.open_checkout(n["id"])
 
@@ -622,7 +656,7 @@ def test_hold_expiry_with_payment_outcome_open_keeps_inventory(eng, outcome):
     e.advance_clock(hours=30)
     hold = e.s["holds"][n["hold_id"]]
     assert hold["status"] == "expired_payment_pending"
-    assert e.s["inventory"]["2027-03-10"]["twin"]["held"] == 12      # inventory kept, not released
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 12      # inventory kept, not released
     assert e.s["meeting"]["thames"]["2027-03-11"]["status"] == "held"
     assert n["handoff"] and "payment outcome unknown" in n["handoff"]["reason"]
     assert any("manager review" in f for f in n["flags"])
@@ -631,7 +665,7 @@ def test_hold_expiry_with_payment_outcome_open_keeps_inventory(eng, outcome):
         e.provider.db["intents"][op["payment_intent_id"]]["status"] = "SUCCEEDED"
         e.check_payment(n["id"])
         assert n["status"] == "confirmed" and hold["status"] == "converted"
-        inv = e.s["inventory"]["2027-03-10"]["twin"]
+        inv = e.inventory_at("2027-03-10")["twin"]
         assert (inv["held"], inv["booked"]) == (0, 12)
 
 
@@ -672,7 +706,7 @@ def test_negotiated_versions_reuse_hold_without_extending(eng):
     assert n["hold_id"] == hold_id and v2["expires_at"] == expiry
     assert e.s["holds"][hold_id]["expires_at"] == expiry and e.s["holds"][hold_id]["status"] == "active"
     assert len([h for h in e.s["holds"].values() if h["deal_id"] == n["id"]]) == 1
-    assert e.s["inventory"]["2027-03-10"]["twin"]["held"] == 12      # held once, not twice
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 12      # held once, not twice
 
 
 def test_renewed_offer_after_expiry_needs_fresh_hold_and_acceptance(eng):
@@ -687,7 +721,7 @@ def test_renewed_offer_after_expiry_needs_fresh_hold_and_acceptance(eng):
     e.advance_clock(hours=30)
     assert sm["status"] == "expired" and sm["accepted_version"] is None
     assert e.s["holds"][old_hold]["status"] == "expired" and e._deposit_op(sm)["status"] == "cancelled"
-    assert e.s["inventory"]["2027-03-10"]["king"]["held"] == 0
+    assert e.inventory_at("2027-03-10")["king"]["held"] == 0
     with pytest.raises(Refused):
         e.open_checkout(sm["id"])
     with pytest.raises(Refused):
@@ -772,7 +806,7 @@ def test_package_below_margin_floor_is_refused(tmp_path):
     with pytest.raises(Refused, match="contribution margin"):
         e.propose_offer(n["id"], 22000, 30, 10, "thin margin")
     assert not n["versions"] and not n["hold_id"]
-    assert e.s["inventory"]["2027-03-10"]["twin"]["held"] == 0
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 0
 
 
 def test_instructions_inside_an_rfp_change_nothing(eng):
@@ -802,6 +836,87 @@ def test_instructions_inside_an_rfp_change_nothing(eng):
     with pytest.raises(Refused):
         e.decide_approval("ap0000", "approve", "seller")
     assert RMS["rates"]["twin"]["autonomous_floor"] == 21000          # the hotel data is untouched
+
+
+
+# ------------------------------------------------------------------------------ bookable calendar
+def test_bookable_calendar_expands_from_the_scenario():
+    h = bookable.expand(S)["hotel"]
+    assert h["nights"][0] == "2027-01-11" and h["nights"][-1] == "2027-12-31" and len(h["nights"]) == 355
+    assert h["capacity"]["2027-03-10"] == {"twin": 14, "king": 16}        # the demo stay stays tight
+    assert h["capacity"]["2027-06-10"] == {"twin": 20, "king": 20}
+    thames = h["meeting_rooms"]["thames"]["available"]
+    assert thames["2027-03-11"] == "08:00-18:00"                          # Thursday
+    assert "2027-03-13" not in thames                                      # Saturday
+    assert "2027-12-24" not in thames                                      # closed by override
+    assert "2028-01-01" not in thames                                      # Saturday after the last night
+    bad = json.loads(json.dumps(S))
+    bad["hotel"]["availability_by_night"]["2028-02-01"] = {"twin": 1}
+    with pytest.raises(ValueError, match="outside the bookable window"):
+        bookable.expand(bad)
+
+
+def _rfp(e, who, dates):
+    e.ingest_email(f"Sam <sam@{who}.example>", "Group RFP",
+                   f"Please quote 6 twin rooms for 12 guests {dates}, breakfast each morning, no meeting room. "
+                   f"Billed to {who.title()} Demo Ltd; total budget £9,000 inclusive of taxes. Reply by 14 January at noon.",
+                   wake=False)
+    RulesSeller(e).run()
+    return deal_by(e, f"{who}.example")
+
+
+def test_a_june_stay_is_quoted_held_and_booked_on_its_own_dates(eng):
+    e = eng
+    d = _rfp(e, "junegroup", "arriving 10 June and departing 13 June 2027")
+    assert not d["requirements"]["out_of_scope"] and d["status"] != "handoff"
+    v = d["versions"][-1]
+    june = ["2027-06-10", "2027-06-11", "2027-06-12"]
+    assert list(v["terms"]["rooms"]) == june and list(v["terms"]["breakfast"]) == ["2027-06-11", "2027-06-12", "2027-06-13"]
+    assert e.inventory_at("2027-06-10")["twin"] == {"capacity": 20, "held": 6, "booked": 0}
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 0              # the March block is untouched
+    msg = d["thread"][-1]["text"]
+    assert "2027-05-11" in msg and "2027-06-03" in msg and "2027-05-27" in msg   # June deadlines, not March
+    assert e.deal_view(d["id"], for_="seller")["key_dates"]["arrival"] == "2027-06-10"
+    assert act(e, d["id"], {"action": "accept", "text": "We accept.", "payload": {"version": v["n"]}})["accepted"]
+    RulesSeller(e).run()                                                     # requests the deposit
+    pay(e, d)
+    assert d["status"] == "confirmed" and d["booking"]["rooms"] == {n: 6 for n in june}
+    assert e.inventory_at("2027-06-10")["twin"] == {"capacity": 20, "held": 0, "booked": 6}
+    assert [x["due"] for x in e.finance(d)["schedule"]][1:] == ["2027-05-11", "2027-06-03"]
+    # Only touched dates are stored; the snapshot still shows the whole calendar.
+    assert len(e.s["inventory"]) < 10
+    snap = e.snapshot()
+    assert len(snap["inventory"]) == 355 and snap["inventory"]["2027-06-10"]["twin"]["available"] == 14
+    assert snap["bookable"] == {"first_night": "2027-01-11", "last_night": "2027-12-31", "min_days_before_arrival": 31}
+
+
+@pytest.mark.parametrize("dates,why", [
+    ("arriving 20 January and departing 22 January 2027", "less than 31 days away"),   # 9 days after the clock
+    ("arriving 10 January and departing 12 January 2028", "not available for groups"),
+    ("arriving 3 January and departing 5 January 2027", "not available for groups"),
+])
+def test_dates_outside_the_window_or_at_short_notice_get_other_dates(eng, dates, why):
+    e = eng
+    d = _rfp(e, "edgegroup", dates)
+    assert why in (d["requirements"]["date_issue"] or "")
+    assert d["status"] == "dates_proposed" and not d["handoff"] and not d["versions"]
+    for o in d["thread"][-1]["date_options"]:                                  # offered: bookable, with notice
+        assert o["arrival"] in H_ALL["capacity"] and e.lead_days(o["arrival"]) >= POL["min_days_before_arrival"]
+
+
+def test_engine_refuses_to_price_a_stay_that_became_short_notice(eng):
+    e = eng
+    d = _rfp(e, "lategroup", "arriving 22 February and departing 24 February 2027")
+    assert d["versions"]                                                     # 42 days out: quoted
+    e.advance_clock(to="2027-01-25T09:00:00+00:00")                          # now 28 days out
+    with pytest.raises(Refused, match="less than 31 days away"):
+        e.price_terms(d["id"], 22000, 30, 10)
+
+
+def test_breakfast_must_follow_a_contracted_night():
+    t = {**northstar_terms(), "breakfast": {"2027-03-11": 24, "2027-03-12": 24, "2027-03-14": 24}}
+    hard = hotel_check(t, calc.price(t, H, RMS), bookable.expand(S))["hard"]
+    assert "breakfast on 2027-03-14 is outside the stay" in hard and not any("03-11" in x for x in hard)
 
 
 # ------------------------------------------------------------------------------ refunds
@@ -1101,7 +1216,7 @@ def test_change_request_beyond_the_booking_is_handed_to_a_person(eng):
     e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please drop 99 rooms a night.", {"rooms_per_night": 99})
     s.run()                                                          # no crash
     assert n["handoff"] and "cannot be applied" in n["handoff"]["reason"]
-    assert n["status"] == "confirmed" and n["booking"]["rooms"] == {night: 12 for night in H["nights"]}
+    assert n["status"] == "confirmed" and n["booking"]["rooms"] == {night: 12 for night in MARCH}
     assert n["thread"][-1]["from"] == "seller" and "current booking stays as agreed" in n["thread"][-1]["text"]
     assert not n["unread"]                                            # the next run does not trip on it again
 
