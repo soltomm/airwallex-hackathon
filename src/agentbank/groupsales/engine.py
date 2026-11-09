@@ -64,9 +64,6 @@ class Engine:
         self.var = Path(var_dir)
         self.var.mkdir(parents=True, exist_ok=True)
         self.provider = provider
-        # The hotel's Airwallex connected account (Payments for Platforms): deposits are collected by the
-        # platform for it, and its share is paid out by funds split. Unset with live Airwallex = no payouts.
-        self.hotel_account = os.environ.get("GS_HOTEL_ACCOUNT") or getattr(provider, "default_account", None)
         self.scenario_path = Path(scenario_path)
         self.public_base = public_base.rstrip("/")
         self.lock = threading.RLock()
@@ -78,6 +75,10 @@ class Engine:
         # Hotel staff's changes to the seller's rules (rules.EDITABLE), kept apart from the scenario
         # state so they survive a reset.
         self.rule_store = doc(self.var / "groupsales_rules.json")
+        # The hotel's Airwallex connected account, once onboarded from the dashboard. Kept apart from the
+        # scenario state so a reset never forgets it (Airwallex doesn't forget it either).
+        self.account_store = doc(self.var / "groupsales_hotel_account.json")
+        self._onboarding = None   # the background onboarding thread, while it runs
         self.scenario = self._load_scenario()
         self.listeners: list = []          # called after state changes that should wake an agent
         saved = self.store.read()
@@ -1416,6 +1417,84 @@ class Engine:
     # share and the commission stays with the platform. A refund is paid from the platform; a funds split
     # reversal then takes the hotel's share of it back. Payouts are backend bookkeeping: no agent tool
     # moves them, and the buyer's view never shows them.
+    @property
+    def hotel_account(self) -> str | None:
+        """The hotel's Airwallex connected account (Payments for Platforms): deposits are collected by the
+        platform for it, and its share is paid out by funds split. GS_HOTEL_ACCOUNT wins; otherwise the
+        account onboarded from the dashboard, once it accepts cards (an intent tagged with an account that
+        doesn't would fail); otherwise the simulated provider's stand-in. None = no payouts."""
+        env = os.environ.get("GS_HOTEL_ACCOUNT")
+        if env:
+            return env
+        rec = self.account_store.read() or {}
+        if rec.get("status") == "ready" and rec.get("account"):
+            return rec["account"]
+        return getattr(self.provider, "default_account", None)
+
+    def hotel_account_view(self, check: bool = False) -> dict:
+        """What the dashboard shows about the hotel's connected account; check=True asks the provider."""
+        rec = dict(self.account_store.read() or {})
+        out = {"account": self.hotel_account, "source": "GS_HOTEL_ACCOUNT" if os.environ.get("GS_HOTEL_ACCOUNT")
+               else "onboarded" if rec.get("status") == "ready" and rec.get("account")
+               else "simulated" if self.hotel_account else None,
+               "onboarding": rec or None, "running": bool(self._onboarding and self._onboarding.is_alive()),
+               "provider": self.provider.name, "platform": self.platform.get("name")}
+        if check and self.hotel_account:
+            try:
+                out["provider_record"] = self.provider.account_status(self.hotel_account)
+            except Exception as e:
+                out["provider_error"] = str(e)
+        return out
+
+    def onboard_hotel_account(self, actor: str = "hotel staff") -> dict:
+        """Create (or resume) the hotel's connected account under the platform, in the background: the
+        sandbox takes a minute or two to activate it and enable card payments. Progress is saved after
+        every step, so a retry resumes the same account instead of opening a second one."""
+        with self.lock:
+            if os.environ.get("GS_HOTEL_ACCOUNT"):
+                raise Refused("GS_HOTEL_ACCOUNT is set, so that account is used; unset it to onboard from here")
+            if self._onboarding and self._onboarding.is_alive():
+                raise Refused("onboarding is already running")
+            rec = self.account_store.read() or {}
+            if rec.get("status") == "ready":
+                raise Refused(f"the hotel's account {rec['account']} is already onboarded")
+            rec = {**rec, "status": "starting", "error": None, "started_at": _iso(datetime.now(timezone.utc)),
+                   "request_id": rec.get("request_id") or str(uuid.uuid4()), "steps": rec.get("steps") or []}
+            self.account_store.write(rec)
+            self.log(None, actor, "account_onboarding", "Started onboarding the hotel's Airwallex connected account.")
+            self._save()
+            self._onboarding = threading.Thread(target=self._run_onboarding, args=(rec["request_id"], rec.get("account")),
+                                                daemon=True)
+            self._onboarding.start()
+        return self.hotel_account_view()
+
+    def _onboarding_step(self, status: str, info: dict):
+        with self.lock:
+            rec = self.account_store.read() or {}
+            rec["steps"] = (rec.get("steps") or []) + [{"at": _iso(datetime.now(timezone.utc)), "status": status}]
+            rec["status"] = status
+            if info.get("connected_account"):
+                rec["account"] = info["connected_account"]
+            self.account_store.write(rec)
+
+    def _run_onboarding(self, request_id: str, account: str | None):
+        h = self.hotel
+        try:
+            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@harbourhouse.example",
+                                               request_id, account, self._onboarding_step)
+            final, error = ("ready", None) if ok else ("capabilities_pending",
+                                                       "card payments not enabled yet; retry in a minute")
+        except Exception as e:
+            final, error = "failed", str(e)
+        with self.lock:
+            rec = self.account_store.read() or {}
+            rec.update(status=final, error=error, finished_at=_iso(datetime.now(timezone.utc)))
+            self.account_store.write(rec)
+            self.log(None, "system", "account_onboarding",
+                     f"Hotel connected account {rec.get('account') or '(not created)'}: "
+                     + ("ready, accepts card payments; hotel payouts will use it." if final == "ready" else error))
+            self._save()
+
     @property
     def platform(self) -> dict:
         return self.scenario.get("platform") or {"name": "platform", "commission_bps": 0}

@@ -66,7 +66,8 @@ variables or GitHub settings, and don't trigger deploys. Ask a person.
 - Money calls: save the operation before calling the provider, look up on timeout instead of
   resubmitting, one unresolved refund at a time, ledger entries keyed so repeats change nothing.
 - Hotel payouts (Payments for Platforms): the platform collects for the hotel's connected account
-  (`GS_HOTEL_ACCOUNT`), pays its share by funds split after a verified deposit, and reverses its share
+  (`GS_HOTEL_ACCOUNT`, or the one onboarded from the dashboard), pays its share by funds split after a
+  verified deposit, and reverses its share
   of each completed refund. Hotel net + platform fee must equal the buyer's net payment. No agent tool
   moves payouts, and the buyer never sees them.
 - Amounts are `Decimal` / integer pence, never floats.

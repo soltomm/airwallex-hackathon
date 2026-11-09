@@ -134,8 +134,21 @@ looked up (`GET /pa/funds_splits?source_id=`) and never resent as a second split
 only with its original `request_id` (Airwallex refuses a reused one), and each payout and reversal is
 recorded once in a separate payout ledger. A refused split leaves the booking standing and the deposit
 with the platform; **Retry payout** sends it again once the cause is fixed. Payouts are backend
-bookkeeping: no agent tool moves them, and the buyer's view never shows them. Without `GS_HOTEL_ACCOUNT`
+bookkeeping: no agent tool moves them, and the buyer's view never shows them. Without a hotel account
 (live Airwallex), deposits are collected untagged and the card shows "No hotel account connected".
+
+**Onboarding the hotel.** Property tools → **Hotel payout account** shows the hotel's connected account
+and offers **Onboard Harbour House**. On the server (so it works on Render, inside the key's IP
+whitelist) it creates a connected account named Harbour House under your Airwallex account
+(`POST /accounts/create`), submits it, activates it in the sandbox and enables card payments (Visa and
+Mastercard capabilities), reusing the onboarding the Hotel Negotiation Desk verified live. It takes a
+minute or two and runs in the background; progress is saved after each step, and a retry resumes the
+same account with the same `request_id` rather than opening another. The account is used only once it
+accepts cards, because an intent tagged with an account that doesn't is refused. It is stored apart from
+the scenario state, so a reset keeps it; staging and the live demo keep their own (separate storage
+namespaces), or share one by setting `GS_HOTEL_ACCOUNT`, which always wins. **Check with Airwallex**
+reads the account's status and capabilities. Your Airwallex account must have Payments for Platforms
+enabled and an API key allowed to create accounts; otherwise the drawer shows Airwallex's refusal.
 
 ### When a payment provider refuses
 

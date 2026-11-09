@@ -9,6 +9,8 @@ Airwallex endpoints used (Payment Acceptance and Payments for Platforms):
   POST /pa/refunds/create                  GET /pa/refunds/{id}      GET /pa/refunds?payment_intent_id=
   POST /pa/funds_splits/create             GET /pa/funds_splits?source_id=
   POST /pa/funds_split_reversals/create
+  POST /accounts/create, /accounts/{id}/submit, /account_capabilities/{cap}/enable   (hotel onboarding)
+  GET  /accounts/{id}, /account_capabilities/payments_visa
 
 The platform owns each card payment ("collect payments directly") and tags it with the hotel's
 connected account; once the payment has SUCCEEDED, a funds split pays the hotel its share and the
@@ -118,6 +120,20 @@ class AirwallexProvider:
         return {"id": r.get("id"), "status": r.get("status"),
                 "amount": to_pence(r["amount"]) if r.get("amount") is not None else amount,
                 "funds_split_id": r.get("funds_split_id", split_id), "request_id": r.get("request_id")}
+
+    # Hotel onboarding: a connected account under the platform, activated in the sandbox, with card
+    # capabilities (without them, intents tagged with the account fail "not enabled for payment acceptance").
+    def onboard_account(self, name: str, email: str, request_id: str, account: str | None, step) -> bool:
+        """Create (or resume) the connected account; step(status, info) reports progress. True once it
+        accepts cards. Reuses the onboarding the Hotel Negotiation Desk verified against the sandbox."""
+        from ..hotel_onboarding import open_account
+        return open_account(self.c, name, email, request_id=request_id, account=account, step=step)
+
+    def account_status(self, account: str) -> dict:
+        from ..hotel_onboarding import accepts_cards
+        a = self.c.get(f"/accounts/{account}")
+        return {"id": a.get("id", account), "status": a.get("status"), "name": (a.get("account_details") or {})
+                .get("business_details", {}).get("business_name"), "accepts_cards": accepts_cards(self.c, account)}
 
     def find_refunds(self, intent_id: str) -> list[dict]:
         r = self.c.get("/pa/refunds", params={"payment_intent_id": intent_id})
@@ -233,6 +249,26 @@ class SimulatedProvider:
             if self._maybe_timeout(request_id, "POST", "/pa/refunds/create"):
                 raise AmbiguousResult("POST", "/pa/refunds/create", request_id, "simulated timeout")
             return self._public_refund(rid)
+
+    def onboard_account(self, name, email, request_id, account, step) -> bool:
+        if self._knob("fail_next_onboarding"):
+            raise AirwallexError(400, "invalid_argument", "simulated onboarding refusal", {})
+        acct = account or "acct_sim_" + uuid.uuid4().hex[:12]
+        with self.lock:
+            self.db.setdefault("accounts", {})[acct] = {"id": acct, "name": name, "status": "ACTIVE", "cards": True}
+            self._save()
+        if not account:
+            step("account_created", {"connected_account": acct})
+        step("active", {})
+        return True
+
+    def account_status(self, account):
+        a = self.db.get("accounts", {}).get(account) or (
+            {"id": account, "name": "Harbour House", "status": "ACTIVE", "cards": True}
+            if account == self.default_account else None)
+        if not a:
+            raise AirwallexError(404, "resource_not_found", "no such connected account", {})
+        return {"id": a["id"], "status": a["status"], "name": a["name"], "accepts_cards": a["cards"]}
 
     def _knob(self, name: str) -> bool:
         on = bool(self.knobs.get(name))
