@@ -190,6 +190,18 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     // 9. Availability button under the inquiries, and back.
     await click('#availBtn');
     check('Availability page opens from the left column', await page.isVisible('#avail') && !(await page.isVisible('#desk')));
+    check('availability opens on the demo stay month', (await page.innerText('#availMonth')) === 'March 2027'
+      && /10 Mar night/.test(await page.innerText('#availDay')));
+    check('the year strip offers every month of the bookable window', (await page.$$('#availMonths button')).length === 12);
+    await click('#availMonths [data-month="2027-06"]');
+    await click('#availCal [data-day="2027-06-15"]');
+    check('picking June and a night shows that night', (await page.innerText('#availMonth')) === 'June 2027'
+      && /15 Jun night/.test(await page.innerText('#availDay')) && /20 free of 20/.test(await page.innerText('#availDay')));
+    await click('#avail [data-step="-1"]');
+    check('previous month goes back to May', (await page.innerText('#availMonth')) === 'May 2027');
+    await page.waitForTimeout(2500);                       // the dashboard re-renders from fresh data meanwhile
+    check('the chosen month survives a refresh of the data', (await page.innerText('#availMonth')) === 'May 2027');
+    await shot('5-availability');
     await click('#availBack');
     check('Back to deals returns', await page.isVisible('#desk'));
 

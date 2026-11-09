@@ -782,6 +782,7 @@ def test_a_june_stay_is_quoted_held_and_booked_on_its_own_dates(eng):
     assert len(e.s["inventory"]) < 10
     snap = e.snapshot()
     assert len(snap["inventory"]) == 355 and snap["inventory"]["2027-06-10"]["twin"]["available"] == 14
+    assert snap["bookable"] == {"first_night": "2027-01-11", "last_night": "2027-12-31", "min_days_before_arrival": 31}
 
 
 @pytest.mark.parametrize("dates,why", [
