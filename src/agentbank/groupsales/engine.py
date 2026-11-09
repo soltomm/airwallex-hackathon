@@ -30,7 +30,7 @@ from pathlib import Path
 from . import bookable, calc, rules
 from .calc import gbp
 from .extract import extract, missing_info, stay_nights
-from .policy import buyer_check, hotel_check
+from .policy import buyer_check, buyer_rules, hotel_check, rule
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
 from .fx_provider import SandboxFX, SimulatedFX
@@ -885,8 +885,12 @@ class Engine:
                            f"{pricing['attrition_allowance']} room-nights. Margin {pricing['margin_all_rooms']['margin_pct']}% "
                            f"(all rooms) / {pricing['margin_full_release']['margin_pct']}% (full release)."
                            + (f" Seller's case: {justification}" if justification else ""))
-                appr = self._request_approval(d, "hotel_manager", "offer", summary, check["approvals"],
-                                              version=n, obj_hash=v["hash"])
+                appr = self._request_approval(
+                    d, "hotel_manager", "offer", summary, check["approvals"], version=n, obj_hash=v["hash"],
+                    rules=check["rules"],
+                    if_approved=f"The seller can send v{n} to the buyer on these terms ({gbp(pricing['total'])}, "
+                                f"{terms['deposit_pct']}% deposit).",
+                    if_rejected=f"v{n} is not sent. The seller revises the offer to terms it can agree alone.")
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": appr["id"], "pricing": pricing,
                         "note": "Paused: hotel manager approval required before this version can be sent."}
@@ -951,10 +955,13 @@ class Engine:
 
     # ================================================================ approvals
     def _request_approval(self, d, approver: str, subject: str, summary: str, reasons: list[str], version=None,
-                          obj_hash=None, amount=None, extra=None) -> dict:
+                          obj_hash=None, amount=None, extra=None, rules=None, if_approved="", if_rejected="") -> dict:
+        """`rules` names each limit crossed (policy.rule); `if_approved` / `if_rejected` say what each
+        decision does, so the approver sees why the request exists and what their click changes."""
         aid = self._id("ap")
         a = {"id": aid, "deal_id": d["id"], "ref": d["ref"], "approver": approver, "subject": subject,
-             "summary": summary, "reasons": reasons, "version": version, "hash": obj_hash, "amount": amount,
+             "summary": summary, "reasons": reasons, "rules": rules or [], "if_approved": if_approved,
+             "if_rejected": if_rejected, "version": version, "hash": obj_hash, "amount": amount,
              "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
         self.s["approvals"][aid] = a
         if approver == "hotel_manager":
@@ -1084,7 +1091,9 @@ class Engine:
                     d, "organizer", "acceptance",
                     f"Buyer agent asks to accept {d['company']} v{v['n']} ({gbp(v['pricing']['total'])}, deposit "
                     f"{v['terms']['deposit_pct']}% = {gbp(v['pricing']['deposit'])}): " + "; ".join(reasons),
-                    reasons, version=v["n"], obj_hash=v["hash"])
+                    reasons, version=v["n"], obj_hash=v["hash"], rules=buyer_rules(v["terms"], v["pricing"], mandate),
+                    if_approved=f"Your acceptance of v{v['n']} goes to the hotel, and the deposit becomes payable.",
+                    if_rejected=f"v{v['n']} is not accepted. The hotel is told the organizer did not authorize it.")
             d["pending_acceptance"] = {"version": v["n"], "hash": v["hash"], "approval_id": pending["id"]}
             d["status"] = "acceptance_pending_organizer"
             return {"accepted": False, "status": "awaiting organizer authorization", "approval_id": pending["id"],
@@ -1496,7 +1505,13 @@ class Engine:
                                            f"({'; '.join(ev['charge_reasons'])}). Without the waiver the buyer owes the "
                                            f"full charge; the existing agreement remains in effect until a change is "
                                            f"accepted." + (f" Seller's justification: {justification}" if justification else ""),
-                                           ev["review_reasons"], version=n, obj_hash=v["hash"], amount=ev["waived"])
+                                           ev["review_reasons"], version=n, obj_hash=v["hash"], amount=ev["waived"],
+                                           rules=[rule("Attrition charge", "charged in full",
+                                                       f"waive {gbp(ev['waived'])} of {gbp(ev['attrition_charge'])}")],
+                                           if_approved=f"Change v{n} goes to the buyer with the waiver: revised total "
+                                                       f"{gbp(pricing['total'])}.",
+                                           if_rejected="The waiver is dropped. The seller offers the same change with "
+                                                       f"the full {gbp(ev['attrition_charge'])} charge.")
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": a["id"], "evaluation": ev}
             res = self._send_version(d, v, actor)
@@ -1618,7 +1633,12 @@ class Engine:
                             f"{gbp(cumulative)} exceed the seller's {gbp(limit)} limit. Contractually owed under the "
                             "accepted reduction." + (f" {justification}" if justification else ""),
                             [f"refund above the seller's {gbp(limit)} authority"], obj_hash=ref_hash, amount=owed,
-                            extra={"refund": ref_obj})
+                            extra={"refund": ref_obj},
+                            rules=[rule("Refunds the seller can make alone", f"up to {gbp(limit)} in total",
+                                        f"{gbp(cumulative)} in total" + (f" ({gbp(owed)} now)" if cumulative != owed else ""))],
+                            if_approved=f"The seller refunds exactly {gbp(owed)} to the buyer's original card.",
+                            if_rejected=f"Nothing is refunded. The {gbp(owed)} stays owed to the buyer under the accepted "
+                                        "change, and the deal is handed to a person.")
                         self._save()
                     d["status"] = "refund_awaiting_approval"
                     return {"status": "pending_approval", "approval_id": pending["id"],

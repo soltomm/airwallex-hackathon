@@ -185,6 +185,10 @@ details.ag[open] > summary::after { transform: rotate(90deg); }
 @media (max-width: 760px) { .rule { grid-template-columns: minmax(0, 1fr); } }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 90vw; }
 dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg); width: min(620px, 92vw); }
+table.why { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size: 13px; }
+table.why th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+table.why td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+dl.outcomes { margin-top: 8px; }
 </style>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/assets/openflow.css">
@@ -284,6 +288,17 @@ const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : 
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
 const ROLE = {hotel_manager: 'Hotel manager', organizer: "Buyer's organizer"};
 const cap = t => { t = String(t || '').trim(); return t ? t[0].toUpperCase() + t.slice(1) : t; };
+// Why an approval exists: each limit crossed (rule, what's allowed alone, what's asked) and what each
+// decision does. Older stored approvals without rules fall back to their reasons.
+function whyCard(a, alone = 'Seller alone') {
+  const rules = a.rules || [];
+  let h = rules.length
+    ? `<div class="small muted" style="margin-top:6px">Why this needs you: ${rules.length > 1 ? 'these requests go' : 'this request goes'} beyond what the ${alone.split(' ')[0].toLowerCase()} can agree alone.</div>
+       <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>This request</th></tr>${rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`
+    : `<p>${esc(sentences(a.reasons))}</p>`;
+  if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}</dl>`;
+  return h;
+}
 const sentences = list => (list || []).map(x => cap(x).replace(/[.;]+$/, '')).filter(Boolean).map(x => x + '.').join(' ');
 const typing = () => { const a = document.activeElement; return a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.closest('#deal'); };
 
@@ -377,7 +392,7 @@ function nextCard(d) {
     const a = n.ap;
     const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
     const [yes, no] = a.subject === 'reduction' && a.amount ? ['Approve waiver', 'Keep the charge'] : ['Approve', 'Reject'];
-    h += `<h3>${what}</h3><p>${esc(sentences(a.reasons))}</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
+    h += `<h3>${what}</h3>${whyCard(a)}<details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
       <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">${yes}</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">${no}</button></div>`;
   } else if (n.paused) {
     h += `<h3>Stopped: ${esc(n.paused.what)} failed at the payment provider</h3><p class="small" style="overflow-wrap:anywhere">${esc(tidy(n.paused.error).slice(0, 300))}</p>

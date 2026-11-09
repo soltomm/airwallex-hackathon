@@ -169,7 +169,9 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   to 10% are the seller's own call. A rate below the floor (down to £195/£170), attrition up to 20% or
   a deposit of 20-29% needs the manager. A below-floor rate or attrition above 10% forces a 40%
   deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
-  release allowance used. Only the named approver can decide.
+  release allowance used. Only the named approver can decide. Every approval names each rule it
+  crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
+  rejecting each do, and the card shows exactly that.
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
 - **Buyer mandate.** Accepting above the budget or the deposit limits creates an organizer approval

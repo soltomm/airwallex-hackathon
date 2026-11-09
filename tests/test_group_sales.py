@@ -218,6 +218,38 @@ def test_a_declined_waiver_leaves_the_change_to_be_offered_with_the_charge(eng):
 
 
 # ------------------------------------------------------------------------------ the demo story
+def test_every_approval_names_the_rule_it_crosses_and_what_each_decision_does(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    offer = next(a for a in e.s["approvals"].values() if a["subject"] == "offer")
+    assert offer["rules"] == [{"rule": "Free release (attrition)", "alone": "up to 10%", "asked": "20%"}]
+    assert "send v2" in offer["if_approved"] and "terms it can agree alone" in offer["if_rejected"]
+    org = next(a for a in e.s["approvals"].values() if a["subject"] == "acceptance")
+    assert {r["rule"] for r in org["rules"]} and all(r["alone"].startswith("up to") for r in org["rules"])
+    seller_view = json.dumps(e.deal_view(n["id"], for_="seller"), default=str)
+    assert not any(r["alone"] in seller_view for r in org["rules"])      # the mandate stays with the buyer
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    refund = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    assert refund["rules"] == [{"rule": "Refunds the seller can make alone", "alone": "up to £500 in total",
+                                "asked": "£528 in total"}]
+    assert "exactly £528" in refund["if_approved"] and "stays owed" in refund["if_rejected"]
+    # The reduction itself (6 of 7 free room-nights) needed no approval at all.
+    assert not any(a["subject"] == "reduction" for a in e.s["approvals"].values())
+
+
+def test_a_waiver_approval_says_what_keeping_the_charge_means(eng):
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=22000)
+    a = e.s["approvals"][r["approval_id"]]
+    assert a["rules"] == [{"rule": "Attrition charge", "alone": "charged in full", "asked": "waive £220 of £440"}]
+    assert "full £440 charge" in a["if_rejected"] and "£7,840" in a["if_approved"]
+
+
 def test_full_story(eng):
     e = eng
     s, n = run_to_confirmed(e)
