@@ -171,8 +171,11 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
   release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
   displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
-  demand times the forecast demand for that night (by month, scaled by weekday; `rms.displacement`).
-  Rooms released before the cutoff are counted 50% resold. On the busy demo dates (80% / 80% / 64%)
+  demand times that night's demand: the share of the group allocation other business has already
+  taken, read from the same calendar the availability page shows (`hotel.background_demand`), so
+  sold-out nights count 100% and quiet ones little. The demo stay's allocation is set by hand, so
+  `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
+  sold out). Rooms released before the cutoff are counted 50% resold. On the demo dates (80% / 80% / 64%)
   the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
   quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide.
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
