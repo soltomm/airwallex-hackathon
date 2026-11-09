@@ -30,7 +30,7 @@ from agentbank.config import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from agentbank.groupsales.buyer import BuyerAgent, act, suggest  # noqa: E402
+from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
@@ -106,10 +106,12 @@ class Runner:
                 self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
+                claude_buyer = HAS_CLAUDE and self.settings["seller_mode"] == "claude"
                 for d in list(engine.s["deals"].values()):
-                    if suggest(engine, d["id"]) is None:
+                    # Claude can also answer hotel questions the brief's drafts don't cover.
+                    if not (wants_reply(engine, d["id"]) if claude_buyer else suggest(engine, d["id"])):
                         continue
-                    if HAS_CLAUDE and self.settings["seller_mode"] == "claude":
+                    if claude_buyer:
                         BuyerAgent(engine).run(d["id"])
                     else:
                         try:
