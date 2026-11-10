@@ -218,7 +218,11 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   existing agreement stays in effect until the buyer accepts a change.
 - **Other dates.** The seller can only offer dates inside the group calendar (11 January to 31 December
   2027), arriving at least 31 days after the scenario clock, with the rooms free at that moment
-  (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
+  (`offer_dates` refuses anything else), and it can't quote dates that aren't available. When the
+  requested dates are open but the full block isn't free on every night, the seller doesn't cut the
+  block on its own: it offers dates where the whole block fits (with the meeting room free on the
+  meeting day), and the smaller block on the buyer's dates as a last option. If the buyer takes the
+  smaller block, the offer says how many guests it sleeps.
 - **Hand-offs.** Only an inquiry handed to staff with no booking can be handed back or closed. A staff
   instruction stays in front of the seller until it next writes to the buyer.
 - **Reset.** A reset creates a new run id and restores the hotel data. Airwallex is not reset.

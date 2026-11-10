@@ -144,7 +144,11 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
         "attrition_pct": int(terms["attrition_pct"]),
         "attrition_allowance": allowance,
         "allowance_remaining": remaining_allowance,
-        "per_room_night_incl_breakfast": rate + (bf_unit * bf_count // used_rn if used_rn else 0),
+        # Breakfast per room-night counts at most a full room (max occupancy): guests beyond the block's beds
+        # don't make the room itself dearer.
+        "per_room_night_incl_breakfast": rate + (min(bf_unit * bf_count // used_rn,
+                                                     bf_unit * int(hotel["room_types"][rt].get("max_occupancy") or 2))
+                                                 if used_rn else 0),
         "displacement": disp,
         "margin_all_rooms": contribution(used_rn),
         "margin_full_release": contribution(used_rn - remaining_allowance),

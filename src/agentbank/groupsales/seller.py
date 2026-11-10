@@ -34,6 +34,19 @@ def _next(iso: str) -> str:
     return (date.fromisoformat(iso) + timedelta(days=1)).isoformat()
 
 
+def _meeting_fits(req: dict, opt: dict) -> bool:
+    """Whether the meeting room is free on the meeting day moved to this option (same day of the stay), as
+    _dates_reply moves it when the buyer picks the option. True when there is no meeting or no date for it."""
+    mt = req.get("meeting") or {}
+    if not (mt.get("date") and req.get("arrival")) or "meeting_room_free_on" not in opt:
+        return True
+    try:
+        off = (date.fromisoformat(mt["date"]) - date.fromisoformat(req["arrival"])).days
+    except ValueError:
+        return True
+    return (date.fromisoformat(opt["arrival"]) + timedelta(days=off)).isoformat() in opt["meeting_room_free_on"]
+
+
 def _span(a: str, b: str) -> str:
     """'10 to 13 March 2027', or '28 February to 2 March 2027'."""
     try:
@@ -310,7 +323,10 @@ class RulesSeller:
         return f"{ref}: nothing to do ({st})"
 
     # ---- other dates ----------------------------------------------------------------------
-    def _offer_dates(self, deal_id: str, reask: bool = False) -> str:
+    def _offer_dates(self, deal_id: str, reask: bool = False, short: dict | None = None) -> str:
+        """Email the buyer dates the hotel can sell. `short` is set when the requested dates are in the calendar
+        but the full block isn't free ({"free": rooms free on every night, "nights": the nights that fall short}):
+        the email says so and also offers that smaller block on the buyer's own dates, after the full-block dates."""
         e = self.e
         d = e.deal(deal_id)
         req = d["requirements"]
@@ -324,7 +340,7 @@ class RulesSeller:
             return f"{ref}: dates unavailable, asked for room details"
         sug = e.suggest_dates(deal_id)
         rt, want = req["room_type"], int(req["rooms"])
-        fits = [o for o in sug["options"] if o["fits_rooms"]][:2]
+        fits = [o for o in sug["options"] if o["fits_rooms"] and _meeting_fits(req, o)][:2]
         if fits:
             opts = [{"arrival": o["arrival"], "departure": o["departure"], "room_type": rt, "rooms_per_night": want} for o in fits]
             offer = " or ".join(_span(o["arrival"], o["departure"]) for o in opts)
@@ -340,10 +356,22 @@ class RulesSeller:
             opts = [{"arrival": best["arrival"], "departure": best["departure"], "room_type": rt, "rooms_per_night": n}]
             body = (f"The most we can offer is {n} {rt} rooms a night, from "
                     f"{_span(best['arrival'], best['departure'])}.")
+        if short:
+            span, free = _span(req["arrival"], req["departure"]), short["free"]
+            on = " and ".join(_day(n) for n in short["nights"])
+            if free > 0 and not any(o["arrival"] == req["arrival"] and o["departure"] == req["departure"] for o in opts):
+                opts.append({"arrival": req["arrival"], "departure": req["departure"], "room_type": rt,
+                             "rooms_per_night": free})
+                body += f" If a smaller block suits you, we can hold {free} {rt} room{'s' if free != 1 else ''} a night for {span}."
         others = [q for q in d["missing"] if q != "arrival and departure dates"]
         ask = (" So that we can send an itemized offer, could you also tell us: " + "; ".join(others) + "?") if others else ""
-        head = ("Thank you for your reply. Could you confirm which dates you would like?" if reask else
-                f"Thank you for your inquiry. We are unable to offer {_span(req['arrival'], req['departure'])} for your group.")
+        if reask:
+            head = "Thank you for your reply. Could you confirm which dates you would like?"
+        elif short:
+            head = (f"Thank you for your inquiry. We are unable to hold {want} {rt} rooms a night for {span}: only "
+                    f"{short['free']} {'is' if short['free'] == 1 else 'are'} free on {on}.")
+        else:
+            head = f"Thank you for your inquiry. We are unable to offer {_span(req['arrival'], req['departure'])} for your group."
         e.offer_dates(deal_id, opts, f"{head} {body}{ask} Once you confirm the dates, we will send a full itemized offer."
                       "\n\nGroup Sales, Harbour House")
         return f"{ref}: offered other dates"
@@ -393,19 +421,28 @@ class RulesSeller:
         rate = bands["target"]
         dep, att = e.policy["deposit"]["standard_pct"], e.policy["attrition"]["standard_pct"]
         p = e.price_terms(deal_id, rate, dep, att)
+        if not p["fits_inventory"]:
+            # The block asked for can't be held on these dates. Never cut it silently (a short block may not house
+            # the group): offer dates where it fits, and the smaller block on these dates as a choice.
+            want, free = p["terms"]["rooms"], {n: e._available(n, req["room_type"]) for n in p["terms"]["rooms"]}
+            if all(free[n] >= want[n] for n in want):
+                return self._cannot_requote(deal_id, "the rooms are free but the meeting room or breakfast capacity "
+                                                     "can't be held on these dates", WAITING_FOR_PERSON)
+            return self._offer_dates(deal_id, short={"free": max(0, min(free.values())),
+                                                     "nights": sorted(n for n in want if free[n] < want[n])})
+        # Price only once the rooms are known to fit, so a budget concession is sized on the block actually quoted.
         if req.get("budget_total") and p["pricing"]["total"] > req["budget_total"]:
             floor = e.price_terms(deal_id, bands["autonomous_floor"], dep, att)
             if not _margin_short(floor):        # on busy dates the floor can cost too much displacement
                 rate, p = bands["autonomous_floor"], floor
         unmet = []
         rooms = None
-        if not p["fits_inventory"]:
-            avail = min(e._available(n, req["room_type"]) for n in p["terms"]["rooms"])
-            if avail <= 0:                    # sold out on those dates: offer dates that aren't
-                return self._offer_dates(deal_id)
-            rooms = avail
-            unmet.append(f"only {avail} {req['room_type']} rooms per night are available (requested {req['rooms']})")
-            p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
+        t = p["terms"]
+        cap = int(e.hotel["room_types"][t["room_type"]].get("max_occupancy") or 2)
+        guests = max(t["breakfast"].values(), default=0) or int(req.get("guests") or 0)
+        n_rooms = min(t["rooms"].values())
+        if guests > n_rooms * cap:
+            unmet.append(f"{n_rooms} {t['room_type']} rooms sleep up to {n_rooms * cap} of your {guests} guests")
         short = _margin_short(p)
         if short:
             e.escalate(deal_id, "even the target rate is below the margin floor on these dates (" + "; ".join(short)
