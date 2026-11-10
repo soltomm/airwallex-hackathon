@@ -1,4 +1,4 @@
-"""Authority rules. The hotel's commercial rules bind the seller; the buyer's mandate binds the buyer.
+"""Authority rules. The hotel's commercial rules bind the seller; the engine enforces no buyer-side limits.
 
 Each check returns hard violations (nobody can approve them) and exceptions that need a named
 approver. Each exception also comes as a rule ({"rule", "alone", "asked"}): which limit is crossed,
@@ -94,27 +94,3 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
         if pricing[case]["margin_pct"] < floor:
             hard.append(f"contribution margin {pricing[case]['margin_pct']}% with {label} is below {floor}%")
     return {"hard": hard, "approvals": needs, "rules": rules, "ok": not hard}
-
-
-def buyer_rules(terms: dict, pricing: dict, mandate: dict) -> list[dict]:
-    """buyer_check as rules, for the organizer's card (the buyer's own mandate; never shown to the seller)."""
-    out = []
-    if pricing["total"] > mandate["budget_total"]:
-        out.append(rule("Total budget", f"up to {gbp(mandate['budget_total'])}", gbp(pricing["total"])))
-    if pricing["deposit"] > mandate["deposit_limit"]:
-        out.append(rule("Deposit amount", f"up to {gbp(mandate['deposit_limit'])}", gbp(pricing["deposit"])))
-    if pricing["deposit_pct"] > mandate["deposit_limit_pct"]:
-        out.append(rule("Deposit share", f"up to {mandate['deposit_limit_pct']}%", f"{pricing['deposit_pct']}%"))
-    return out
-
-
-def buyer_check(terms: dict, pricing: dict, mandate: dict) -> list[str]:
-    """Reasons the buyer agent needs organizer authorization to accept these terms."""
-    out = []
-    if pricing["total"] > mandate["budget_total"]:
-        out.append(f"total {gbp(pricing['total'])} above the {gbp(mandate['budget_total'])} budget")
-    if pricing["deposit"] > mandate["deposit_limit"]:
-        out.append(f"deposit {gbp(pricing['deposit'])} above the {gbp(mandate['deposit_limit'])} limit")
-    if pricing["deposit_pct"] > mandate["deposit_limit_pct"]:
-        out.append(f"deposit {pricing['deposit_pct']}% above the {mandate['deposit_limit_pct']}% limit")
-    return out

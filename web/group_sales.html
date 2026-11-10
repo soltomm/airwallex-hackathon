@@ -249,7 +249,7 @@ async function api(path, body) {
 const STATUS = {
   new: ['New', ''], intake: ['New', ''], needs_info: ['Asked buyer', 'buyer'], pending_approval: ['Needs approval', 'warn'],
   approved_to_send: ['Approved', 'acc'], revise: ['Revising', 'warn'], offer_sent: ['Offer out', 'buyer'],
-  acceptance_pending_organizer: ['Buyer approval', 'warn'], accepted: ['Accepted', 'ok'], awaiting_payment: ['Deposit due', 'buyer'],
+  accepted: ['Accepted', 'ok'], awaiting_payment: ['Deposit due', 'buyer'],
   confirmed: ['Confirmed', 'ok'], amendment_sent: ['Change offered', 'buyer'], amendment_review: ['Needs approval', 'warn'],
   amendment_approved: ['Approved', 'acc'], refund_due: ['Refund due', 'warn'], refund_awaiting_approval: ['Needs approval', 'warn'],
   refund_pending: ['Refund pending', 'acc'], refund_failed: ['Refund failed', 'bad'], expired: ['Lapsed', 'bad'], handoff: ['With staff', 'bad'], dates_proposed: ['Dates offered', 'buyer'],
@@ -257,7 +257,7 @@ const STATUS = {
 const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class="chip ${c}">${esc(l)}</span>`; };
 const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : null;
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
-const ROLE = {hotel_manager: 'Hotel manager', organizer: "Buyer's organizer"};
+const ROLE = {hotel_manager: 'Hotel manager'};
 const cap = t => { t = String(t || '').trim(); return t ? t[0].toUpperCase() + t.slice(1) : t; };
 // Why an approval exists: each limit crossed (rule, what's allowed alone, what's asked) and what each
 // decision does. Older stored approvals without rules fall back to their reasons.
@@ -315,10 +315,7 @@ const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
 function nextOf(d) {
   const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy, v = curVersion(d), co = esc(d.company);
   if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
-  if (ap && ap.approver === 'hotel_manager') return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
-  if (ap) return {cls: 'buyer', short: 'Buyer sign-off', who: 'Waiting for the buyer', mail: true,
-    title: `${co}'s organizer is signing off v${ap.version}`,
-    text: "The buyer accepted, but outside what its contact can agree alone. The seller opens checkout once the organizer authorizes it."};
+  if (ap) return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
     return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
       staff: st === 'handoff' && !d.booking, handoff: d.handoff};
@@ -541,7 +538,7 @@ const EVENT = {
   ledger_dedupe: 'Duplicate ledger entry ignored', rules_changed: 'Seller rules changed', seller_paused: 'Seller paused', seller_retry: 'Seller asked to retry',
   payout_paid: 'Hotel paid by funds split', payout_failed: 'Hotel payout refused', payout_pending: 'Hotel payout pending', payout_retry: 'Hotel payout retried',
   payout_reversed: "Hotel's share of refund taken back", payout_reversal_failed: 'Clawback refused', webhook: 'Provider notification', clock: 'Scenario clock moved', reset: 'Scenario reset', sim: 'Demo setting changed'};
-const WHO = {seller: ['Seller agent', 'acc'], hotel_manager: ['Hotel manager', 'warn'], organizer: ["Buyer's organizer", 'buyer'], presenter: ['Presenter', ''], system: ['System', ''], 'hotel staff': ['Hotel staff', 'warn']};
+const WHO = {seller: ['Seller agent', 'acc'], hotel_manager: ['Hotel manager', 'warn'], presenter: ['Presenter', ''], system: ['System', ''], 'hotel staff': ['Hotel staff', 'warn']};
 const who = a => a.startsWith('buyer') ? ['Buyer', 'buyer'] : WHO[a] || [cap(a.replaceAll('_', ' ')), ''];
 const tidy = t => t.replace(/<[^>]*>/g, ' ').replace(/\*\*/g, '').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00/g, m => when(m)).replace(/\s*\n+\s*/g, ' ');
 function activityHtml(d) {

@@ -159,13 +159,6 @@ const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 
 const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send'};
 function actions() {
   let h = '';
-  for (const a of V.organizer) {
-    h += `<div class="box warn"><div class="who">Your organizer · sign-off needed</div><h3>Authorize accepting v${a.version}?</h3>
-      ${(a.rules || []).length ? `<div class="small muted">Why: this goes beyond what you can agree alone.</div><table class="why"><tr><th>Rule</th><th>You alone</th><th>This offer</th></tr>${a.rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`
-        : `<p>${esc((a.reasons || []).map(r => r[0].toUpperCase() + r.slice(1)).join('. '))}${a.reasons && a.reasons.length ? '.' : ''} This is outside what you can agree alone.</p>`}
-      ${a.if_approved ? `<p class="small"><b>If you approve:</b> ${esc(a.if_approved)}<br><b>If you reject:</b> ${esc(a.if_rejected)}</p>` : ''}
-      <div class="row"><button class="btn-ok" data-org="${a.id}" data-d="approve">Approve as organizer</button><button class="btn-bad" data-org="${a.id}" data-d="reject">Reject</button></div></div>`;
-  }
   if (V.pay_url) {
     const v = V.accepted_version && ver(V.accepted_version);
     h += `<div class="box warn"><div class="who">Payment</div><h3>Pay the ${gbp(v && v.pricing.deposit)} deposit</h3><p>On Airwallex's hosted page. Sandbox test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
@@ -189,7 +182,7 @@ function actions() {
   } else {
     h += `<p class="small muted">${V.waiting_on === 'hotel' ? `Waiting for ${esc(V.hotel)}. You can still write to them.` : booked ? 'Nothing needed from you right now.' : 'Nothing drafted from your brief right now.'}</p><div class="row">`;
   }
-  if (open && !V.organizer.length && !(s && s.action === 'accept')) h += `<button class="${s ? '' : 'btn-p'}" data-act="accept">Accept v${v.n}</button>`;
+  if (open && !(s && s.action === 'accept')) h += `<button class="${s ? '' : 'btn-p'}" data-act="accept">Accept v${v.n}</button>`;
   if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
   if (V.status === 'needs_info' && !s) h += `<button data-form="answers">Answer…</button>`;
   const opts = V.status === 'dates_proposed' ? ((V.thread.slice().reverse().find(m => m.date_options) || {}).date_options || []) : [];
@@ -215,11 +208,6 @@ function refresh() { lastJSON = ''; draftDirty = false; load(); }
 function wire() {
   if ($('draft')) $('draft').oninput = () => { draftDirty = true; };
   document.querySelectorAll('[data-form]').forEach(b => b.onclick = () => { form = b.dataset.form || null; $('act').innerHTML = actions(); wire(); if (!form) refresh(); });
-  document.querySelectorAll('[data-org]').forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    try { await api(`/api/buyer/${CFG.id}/organizer`, {token: CFG.t, approval_id: b.dataset.org, decision: b.dataset.d}); toast(b.dataset.d === 'approve' ? 'Authorized' : 'Rejected'); }
-    catch (e) {} finally { refresh(); }
-  });
   const act = (action, text, payload) => api(`/api/buyer/${CFG.id}`, {token: CFG.t, action, text, payload});
   document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -232,8 +220,7 @@ function wire() {
         await act('reply', `${span(o.arrival, o.departure)} works for us. Please send the offer for those dates.`, {dates: {arrival: o.arrival, departure: o.departure}});
       }
       else if (a === 'accept') {
-        const r = await act('accept', `We accept version ${v.n}.`, {version: v.n});
-        if (r.accepted === false) note = 'Over your own limits: your organizer needs to sign off';
+        await act('accept', `We accept version ${v.n}.`, {version: v.n});
       } else if (a === 'sendForm') {
         const text = $('fText') ? $('fText').value.trim() : '';
         if (form === 'counter') {

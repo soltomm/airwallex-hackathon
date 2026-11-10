@@ -69,10 +69,10 @@ def test_straight_booking_is_accepted_and_paid_without_approvals(eng, seed):
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
-def test_dates_short_haggle_offers_dates_then_holds_the_floor_and_needs_the_organizer(eng, seed):
+def test_dates_short_haggle_offers_dates_then_holds_the_floor(eng, seed):
     d, _ = new(eng, "dates_short_haggle", seed)
     path = drive(eng, d["id"])
-    assert path == ["buyer reply", "buyer counter", "buyer accept", "approve organizer acceptance", "paid"]
+    assert path == ["buyer reply", "buyer counter", "buyer accept", "paid"]
     assert any(m.get("date_options") for m in d["thread"])               # the seller offered other dates
     counter = next(m for m in d["thread"] if m.get("action") == "counter")
     floor = eng.rms["rates"][d["versions"][-1]["terms"]["room_type"]]["autonomous_floor"]
@@ -85,9 +85,8 @@ def test_dates_short_haggle_offers_dates_then_holds_the_floor_and_needs_the_orga
 def test_full_lifecycle_ends_in_a_partial_refund_with_the_payout_reversed(eng, seed):
     d, _ = new(eng, "full_lifecycle", seed)
     path = drive(eng, d["id"])
-    assert path[:5] == ["buyer counter", "approve hotel_manager offer", "buyer accept",
-                        "approve organizer acceptance", "paid"]
-    assert path[5:8] == ["jump", "buyer change_request", "buyer accept"]
+    assert path[:4] == ["buyer counter", "approve hotel_manager offer", "buyer accept", "paid"]
+    assert path[4:7] == ["jump", "buyer change_request", "buyer accept"]
     fin = eng.finance(d)
     assert d["status"] == "confirmed" and d["finance"]["refund_owed"] == 0
     assert fin["refunded"] > 0 and fin["net_received"] == fin["received"] - fin["refunded"]
@@ -120,7 +119,8 @@ def test_the_rfp_reads_back_into_the_brief_it_came_with(eng):
         req = extract(g["subject"], g["body"])
         b = g["brief"]
         assert req["rooms"] and req["room_type"] and req["arrival"] and req["departure"], preset
-        assert req["budget_total"] == b["budget_total"], preset
+        assert req["budget_total"] == g["budget"], preset
+        assert not {"budget_total", "deposit_limit", "deposit_limit_pct"} & set(b), preset   # no buyer-side limits
         if "payer" not in g["traits"]["missing"]:
             assert req["payer"] == b["known_answers"]["payer"], preset
 
@@ -155,10 +155,10 @@ def test_the_seller_never_sees_the_generated_brief(eng):
     b = eng.buyer_brief(d)
     seller_view = json.dumps(eng.deal_view(d["id"], for_="seller"), default=str)
     snap = json.dumps(eng.snapshot(), default=str)
-    # The stated budget is in the RFP itself; the limits, goals and prepared answers are private.
-    for secret in ("deposit_limit", "objectives", "known_answers", "target_rate", "change_event"):
+    # The stated budget is in the RFP itself; the goals, notes and prepared answers are private.
+    for secret in ("objectives", "known_answers", "target_rate", "change_event"):
         assert secret not in seller_view and secret not in snap
-    assert str(b["deposit_limit"]) not in seller_view
+    assert b["flexibility"] not in seller_view
 
 
 def test_generated_deals_are_marked_for_the_presenter_only(eng):

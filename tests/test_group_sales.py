@@ -64,9 +64,8 @@ def run_to_confirmed(e):
     appr = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
-    r = buyer_turn(e, "Northstar")           # accept v2 -> organizer needed
-    assert r["accepted"] is False
-    e.decide_approval(r["approval_id"], "approve", "organizer")
+    r = buyer_turn(e, "Northstar")           # accept v2
+    assert r["accepted"] is True
     s.run()
     pay(e, n)
     return s, n
@@ -228,10 +227,7 @@ def test_every_approval_names_the_rule_it_crosses_and_what_each_decision_does(en
     offer = next(a for a in e.s["approvals"].values() if a["subject"] == "offer")
     assert offer["rules"] == [{"rule": "Free release (attrition)", "alone": "up to 10%", "asked": "20%"}]
     assert "send v2" in offer["if_approved"] and "terms it can agree alone" in offer["if_rejected"]
-    org = next(a for a in e.s["approvals"].values() if a["subject"] == "acceptance")
-    assert {r["rule"] for r in org["rules"]} and all(r["alone"].startswith("up to") for r in org["rules"])
-    seller_view = json.dumps(e.deal_view(n["id"], for_="seller"), default=str)
-    assert not any(r["alone"] in seller_view for r in org["rules"])      # the mandate stays with the buyer
+    assert not any(a["subject"] == "acceptance" for a in e.s["approvals"].values())   # no buyer-side approvals
     e.advance_clock(to="2027-01-20T09:00:00+00:00")
     buyer_turn(e, "Northstar")
     s.run()
@@ -343,7 +339,7 @@ def test_stale_approval_and_hard_limits(eng):
     n = deal_by(e, "Northstar")
     old = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     with pytest.raises(Refused):
-        e.decide_approval(old["id"], "approve", "organizer")          # wrong approver
+        e.decide_approval(old["id"], "approve", "seller")             # wrong approver
     e.propose_offer(n["id"], 22000, 40, 15, "revised")                # materially changed offer
     assert e.s["approvals"][old["id"]]["status"] == "stale"
     with pytest.raises(Refused):
@@ -512,7 +508,7 @@ def test_refund_limit_and_unresolved_refund(eng):
     s.run()
     appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
     with pytest.raises(Refused):
-        e.decide_approval(appr["id"], "approve", "organizer")
+        e.decide_approval(appr["id"], "approve", "seller")
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     r = e.refund_excess(n["id"])
     assert r["status"] == "RECEIVED"
@@ -632,7 +628,6 @@ def test_hold_expiry_during_checkout(eng):
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
     r = buyer_turn(e, "Northstar")
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     assert n["status"] == "awaiting_payment"
     e.advance_clock(hours=30)                                       # unpaid: intent cancelled, hold released
@@ -655,7 +650,6 @@ def test_payment_then_commit_failure(eng):
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
     r = buyer_turn(e, "Northstar")
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     e.s["sim"]["fail_next_commit"] = True
     pay(e, n)
@@ -703,7 +697,6 @@ def test_persistence_across_restart(eng, tmp_path):
 
 # ------------------------------------------------------------------------------ privacy between the two sides
 from agentbank.groupsales.calc import gbp  # noqa: E402
-from agentbank.groupsales.policy import buyer_check  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller  # noqa: E402
 
 
@@ -724,7 +717,7 @@ def _seller_surface(e, d):
                        [m["text"] for m in d["thread"]]], default=str)
 
 
-def _to_organizer(e):
+def _to_accepted(e):
     s = RulesSeller(e)
     s.run()
     buyer_turn(e, "Northstar")
@@ -736,37 +729,36 @@ def _to_organizer(e):
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
     r = buyer_turn(e, "Northstar")
-    assert r["accepted"] is False
-    return s, n, r
+    assert r["accepted"] is True
+    return s, n
 
 
 def test_seller_never_sees_buyer_mandate(eng):
     e = eng
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
     mandate = S["buyers"]["northstar.example"]
-    v = n["versions"][-1]
-    reasons = buyer_check(v["terms"], v["pricing"], mandate)
-    assert reasons                                                  # the organizer approval is really needed
-    organizer = e.s["approvals"][r["approval_id"]]
-    forbidden = reasons + [organizer["summary"], gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit",
-                           "limit", "authority", mandate["organizer"], mandate["flexibility"]]
-    assert gbp(mandate["deposit_limit"]) not in n["thread"][0]["text"]   # not something the RFP disclosed
+    forbidden = ["authority", mandate["organizer"], mandate["flexibility"]]
+    s.run()
+    assert n["status"] == "awaiting_payment"
     surface = _seller_surface(e, n)
     for f in forbidden:
         assert f not in surface, f
-    for k in ("deposit_limit", "deposit_limit_pct", "budget_mandate", "objectives", "known_answers"):
+    for k in ("objectives", "known_answers", "opening_deposit_pct"):
         assert k not in set(_keys(json.loads(surface)))
-    view = e.deal_view(n["id"], for_="seller")
-    org = next(a for a in view["approvals"] if a["approver"] == "organizer")
-    assert org["status"] == "pending" and "reasons" not in org and "pending buyer-side authorization" in org["summary"]
-    assert view["status"] == "acceptance_pending_organizer"
-    assert "organizer" in view["waiting_on"]                          # the seller may know it is pending
-    # Still private after the organizer decides, and the seller can carry on to checkout.
-    e.decide_approval(r["approval_id"], "approve", "organizer", note="fine, within the offsite budget")
+
+
+def test_buyer_acceptance_needs_no_buyer_side_approval(eng):
+    """The engine enforces only the hotel's rules: a buyer accepting a sent offer is an accepted offer, with
+    no approval from the buyer's side and no wait before checkout. Briefs carry no buyer-side limits."""
+    e = eng
+    assert not any({"budget_total", "deposit_limit", "deposit_limit_pct"} & set(b) for b in S["buyers"].values())
+    s, n = _to_accepted(e)
+    v = n["versions"][-1]
+    assert v["pricing"]["deposit"] == 384000                            # the £3,840 deposit, accepted as sent
+    assert n["status"] == "accepted" and n["accepted_version"] == v["n"]
+    assert all(a["approver"] == "hotel_manager" for a in e.s["approvals"].values())
+    assert not (e.waiting_on(n) or "").startswith("buyer")
     s.run()
-    surface = _seller_surface(e, n)
-    for f in forbidden + ["within the offsite budget"]:
-        assert f not in surface, f
     assert n["status"] == "awaiting_payment"
 
 
@@ -801,7 +793,6 @@ def test_buyer_never_sees_hotel_internals(eng):
     check(view)
     assert view["versions"][-1]["n"] == 2 and view["versions"][-1]["pricing"]["deposit"] == 384000
     r = buyer_turn(e, "Northstar")
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     pay(e, n)
     e.advance_clock(to="2027-01-20T09:00:00+00:00")
@@ -820,8 +811,7 @@ def test_buyer_never_sees_hotel_internals(eng):
 
 # ------------------------------------------------------------------------------ holds and expiry
 def _to_checkout(e):
-    s, n, r = _to_organizer(e)
-    e.decide_approval(r["approval_id"], "approve", "organizer")
+    s, n = _to_accepted(e)
     s.run()
     assert n["status"] == "awaiting_payment"
     return s, n
@@ -855,9 +845,8 @@ def test_hold_expiry_with_payment_outcome_open_keeps_inventory(eng, outcome):
 
 def test_deposit_intent_timeout_recovers_by_lookup(eng):
     e = eng
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
     e.provider.knobs["timeout_next_create"] = True
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()                                                          # seller opens checkout; the create times out
     op = e._deposit_op(n)
     assert op["status"] == "created" and op["payment_intent_id"]
@@ -1403,7 +1392,7 @@ def test_access_token_gate(server, monkeypatch):
     code, _, body = _req(mod, "/api/buyer/GS-1001/view?t=wrong")
     assert code == 400 and "buyer" in body
     assert _req(mod, f"/api/buyer/GS-1001/view?t={d['buyer_token']}")[0] == 200
-    for path in ("/api/buyer/GS-1001", "/api/buyer/GS-1001/organizer"):
+    for path in ("/api/buyer/GS-1001",):
         code, _, body = _req(mod, path, {"token": "wrong", "action": "message", "text": "hi"},
                              {"Content-Type": "application/json"})
         assert code == 400 and "buyer" in body, path
@@ -1604,20 +1593,6 @@ def test_buyer_agent_takes_a_turn_for_questions_its_drafts_cannot_answer(eng):
     assert suggest(e, n["id"]) is None and wants_reply(e, n["id"])
 
 
-def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng):
-    """Found by the randomized scenarios: approving after the offer lapsed left a half-made decision in memory."""
-    e = eng
-    s, n, r = _to_organizer(e)
-    appr = e.s["approvals"][r["approval_id"]]
-    e.advance_clock(hours=25)                                         # the offer and its hold expire
-    assert n["versions"][-1]["status"] == "expired"
-    with pytest.raises(Refused, match="stale"):
-        e.decide_approval(appr["id"], "approve", "organizer")
-    assert appr["status"] == "stale" and not n.get("accepted_version")
-    reloaded = Engine(e.var, e.provider)                               # what is on disk matches memory
-    assert reloaded.s["approvals"][appr["id"]]["status"] == "stale"
-
-
 # ------------------------------------------------------------------------------ seller rules
 def test_rules_view_lists_editable_and_fixed_rules(eng):
     v = eng.rules_view()
@@ -1679,7 +1654,7 @@ def test_lower_refund_limit_sends_the_refund_to_the_manager_sooner(eng):
 def test_provider_refusal_pauses_the_seller_until_staff_retry(eng):
     from agentbank.groupsales.provider import AirwallexError
     e = eng
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
     calls = []
     real = e.provider.create_intent
 
@@ -1687,7 +1662,6 @@ def test_provider_refusal_pauses_the_seller_until_staff_retry(eng):
         calls.append(1)
         raise AirwallexError(403, "non_json_response", "403 Forbidden")
     e.provider.create_intent = refuse
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     s.run()
     RulesSeller(e).run()
@@ -1713,28 +1687,22 @@ def test_reset_wakes_the_seller(eng):
 
 
 # ------------------------------------------------------------------------------ buyer mailbox (server)
-def test_buyer_mailbox_and_organizer_sign_off(server):
+def test_buyer_mailbox(server):
     mod = server
     e = mod.engine
     e.reset()
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
+    s.run()
     tok = n["buyer_token"]
     st, _, body = _req(mod, f"/inbox/{n['ref']}?t={tok}")
     assert st == 200 and n["id"] in body
     assert _req(mod, f"/inbox/{n['ref']}?t=wrong")[0] == 403
     st, _, body = _req(mod, f"/api/buyer/{n['id']}/view?t={tok}")
     v = json.loads(body)
-    assert st == 200 and v["organizer"] and v["organizer"][0]["id"] == r["approval_id"]
+    assert st == 200 and v["pay_url"] and "organizer" not in v
     for secret in ("margin", "autonomous_floor", "delivery_costs", "hotel_check"):
         assert secret not in body                        # the buyer's view carries no hotel internals
     assert _req(mod, f"/api/buyer/{n['id']}/view?t=wrong")[0] == 400
-    st, _, _ = _req(mod, f"/api/buyer/{n['id']}/organizer", {"token": "wrong", "approval_id": r["approval_id"],
-                                                             "decision": "approve"})
-    assert st == 400
-    st, _, body = _req(mod, f"/api/buyer/{n['id']}/organizer", {"token": tok, "approval_id": r["approval_id"],
-                                                                "decision": "approve"})
-    assert st == 200, body
-    assert e.s["approvals"][r["approval_id"]]["status"] == "approved"
 
 
 def test_generated_inquiry_endpoint(server):

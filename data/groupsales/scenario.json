@@ -105,7 +105,7 @@
   ],
   "buyers": {
     "northstar.example": {
-      "organizer": "Maya (People Operations), with the Northstar finance lead as authorizer",
+      "organizer": "Maya (People Operations)",
       "known_answers": {
         "meeting_layout": "classroom",
         "payer": "Northstar Analytics Demo Ltd",
@@ -113,11 +113,8 @@
       },
       "requirements": "Breakfast for 24 people on all three mornings. Twin beds for the shared rooms.",
       "accommodation_target_per_room_night_incl_breakfast": 25000,
-      "budget_total": 1000000,
-      "deposit_limit": 300000,
-      "deposit_limit_pct": 30,
       "objectives": {"attrition_pct": 20, "opening_deposit_pct": 25},
-      "flexibility": "May recommend a larger deposit to secure 20% attrition; anything beyond the deposit limits needs organizer approval.",
+      "flexibility": "May recommend a larger deposit to secure 20% attrition.",
       "accepts_fixed_terms": true,
       "change_event": {
         "after": "2027-01-20T09:00:00+00:00",
@@ -131,9 +128,6 @@
       "known_answers": {"payer": "Summit Robotics Demo Ltd", "budget_includes_taxes": true},
       "requirements": "Eight single-occupancy king rooms, breakfast each morning.",
       "accommodation_target_per_room_night_incl_breakfast": 20000,
-      "budget_total": 500000,
-      "deposit_limit": 150000,
-      "deposit_limit_pct": 30,
       "objectives": {},
       "flexibility": "Waits for organizer confirmation after receiving the quote.",
       "accepts_fixed_terms": true,

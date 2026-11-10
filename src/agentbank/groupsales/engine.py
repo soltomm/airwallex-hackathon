@@ -30,7 +30,7 @@ from pathlib import Path
 from . import bookable, calc, rules
 from .calc import gbp
 from .extract import extract, missing_info, stay_nights
-from .policy import buyer_check, buyer_rules, hotel_check, rule
+from .policy import hotel_check, rule
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
 from . import vendors
@@ -419,7 +419,6 @@ class Engine:
                 "buyer_profile": domain if domain in self.scenario["buyers"] or domain in self.s.get("buyer_briefs", {})
                 else None,
                 "fx_reference": 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + did).hex[:24],
-                "pending_acceptance": None,
             }
             self.s["deals"][did] = deal
             self.s["emails"][eid] = {"id": eid, "key": key, "content_key": content_key, "deal_id": did,
@@ -462,8 +461,8 @@ class Engine:
                 self._save()
             if for_ not in ("seller", "buyer"):
                 raise Refused("deal views exist for the seller or the buyer only")
-            # Each side sees only its own private constraints. The seller never gets the buyer's mandate
-            # or the organizer's reasons; the buyer never gets floors, costs, margins, hotel checks,
+            # Each side sees only its own private constraints. The seller never gets the buyer's brief
+            # (objectives, prepared answers, notes); the buyer never gets floors, costs, margins, hotel checks,
             # records, holds, flags or the hotel manager's approval summaries. Thread messages are what
             # each side chose to send. The presenter dashboard (snapshot) shows both sides.
             view = {k: copy.deepcopy(d[k]) for k in ("id", "ref", "company", "sender", "subject", "status",
@@ -479,7 +478,7 @@ class Engine:
                 view["records_consulted"] = [{"system": r["system"], "checked_at": r["checked_at"],
                                               "summary": r["summary"]} for r in d["records"]]
                 view["hold"] = self._hold_public(d)
-                view["approvals"] = [self._approval_for_seller(a) for a in self.s["approvals"].values()
+                view["approvals"] = [copy.deepcopy(a) for a in self.s["approvals"].values()
                                      if a["deal_id"] == d["id"]]
                 view["key_dates"] = self._key_dates(d)
                 view["payouts"] = self.payout_view(d)
@@ -489,21 +488,10 @@ class Engine:
                                           "min_days_before_arrival": self.policy["min_days_before_arrival"]}
             else:
                 w = self.waiting_on(d) or ""
-                view["waiting_on"] = w if w.startswith(("buyer", "buyer's organizer")) else ("hotel" if w else None)
+                view["waiting_on"] = w if w.startswith("buyer") else ("hotel" if w else None)
                 # Drafts and versions awaiting the hotel manager are internal until the hotel sends them.
                 view["versions"] = [self._version_public(v, for_) for v in d["versions"] if v.get("sent_at")]
             return view
-
-    @staticmethod
-    def _approval_for_seller(a: dict) -> dict:
-        """The hotel's own approvals in full; buyer-side (organizer) approvals only as a pending/decided marker."""
-        if a["approver"] != "organizer":
-            return copy.deepcopy(a)
-        return {"id": a["id"], "deal_id": a["deal_id"], "ref": a["ref"], "approver": "organizer",
-                "subject": a["subject"], "version": a["version"], "status": a["status"],
-                "requested_at": a["requested_at"], "decided_at": a["decided_at"],
-                "summary": f"Acceptance of v{a['version']} is pending buyer-side authorization"
-                if a["status"] == "pending" else f"Buyer-side authorization {a['status']} for v{a['version']}"}
 
     def _version_public(self, v: dict, for_: str) -> dict:
         out = {k: v[k] for k in ("n", "kind", "status", "hash", "terms", "created_at", "sent_at", "message",
@@ -1095,12 +1083,7 @@ class Engine:
              "if_rejected": if_rejected, "version": version, "hash": obj_hash, "amount": amount,
              "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
         self.s["approvals"][aid] = a
-        if approver == "hotel_manager":
-            self.log(d["id"], "system", "approval_requested", f"Hotel manager approval requested: {summary}")
-        else:
-            # The organizer's reasons are the buyer's private mandate: they stay on the approval itself.
-            self.log(d["id"], "system", "approval_requested",
-                     f"Acceptance of v{version} is pending buyer-side authorization.")
+        self.log(d["id"], "system", "approval_requested", f"Hotel manager approval requested: {summary}")
         return a
 
     def _approval_valid(self, d, subject, version, obj_hash, approver="hotel_manager") -> bool:
@@ -1125,10 +1108,7 @@ class Engine:
             # A request whose object changed since it was raised is stale, whatever the decision.
             if a["version"] is not None:
                 v = self._version(d, a["version"])
-                # An acceptance can only be authorized while that offer is still the one on the table;
-                # checked here, before anything changes, so a refusal leaves no half-made decision.
-                lapsed_offer = a["subject"] == "acceptance" and (v["status"] != "sent" or v is not d["versions"][-1])
-                if v["hash"] != a["hash"] or v["status"] in ("superseded",) or lapsed_offer:
+                if v["hash"] != a["hash"] or v["status"] in ("superseded",):
                     a["status"] = "stale"
                     self.log(d["id"], "system", "approval_stale", f"Approval {a['id']} is stale: v{a['version']} changed.")
                     self._save()
@@ -1136,8 +1116,7 @@ class Engine:
             a["status"] = "approved" if decision == "approve" else "rejected"
             a["decided_at"] = self.now()
             a["note"] = note
-            who = "Hotel manager" if actor == "hotel_manager" else "Organizer"
-            self.log(d["id"], actor, "approval_" + a["status"], f"{who} {a['status']} {a['subject']}"
+            self.log(d["id"], actor, "approval_" + a["status"], f"Hotel manager {a['status']} {a['subject']}"
                      + (f" v{a['version']}" if a["version"] else "") + (f" {gbp(a['amount'])}" if a["amount"] else "")
                      + (f": {note}" if note else ""))
             if a["subject"] == "offer":
@@ -1155,14 +1134,6 @@ class Engine:
                     d["status"] = "confirmed"
                     d["flags"].append(f"waiver on change v{a['version']} declined by manager: the attrition charge "
                                       "stands; the change can be offered without it")
-            elif a["subject"] == "acceptance":
-                if decision == "approve":
-                    self._record_acceptance(d, self._version(d, a["version"]), "buyer (organizer-authorized)")
-                else:
-                    d["pending_acceptance"] = None
-                    d["status"] = "offer_sent"
-                    d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "buyer", "channel": "portal",
-                                        "text": f"Our organizer did not authorize v{a['version']}."})
             elif a["subject"] == "refund":
                 if decision == "reject":
                     d["flags"].append(f"refund {gbp(a['amount'])} not authorized: amount remains owed to the buyer; "
@@ -1216,23 +1187,6 @@ class Engine:
             hold = self.s["holds"].get(d.get("hold_id") or "")
             if not hold or hold["status"] != "active" or _dt(hold["expires_at"]) <= _dt(self.now()):
                 raise Refused("this offer has expired; the hotel must re-check availability and renew it")
-        mandate = self.buyer_brief(d)
-        reasons = buyer_check(v["terms"], v["pricing"], mandate) if mandate and v["kind"] == "offer" else []
-        if reasons and not self._approval_valid(d, "acceptance", v["n"], v["hash"], approver="organizer"):
-            pending = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]
-                            and a["subject"] == "acceptance" and a["version"] == v["n"] and a["status"] == "pending"), None)
-            if not pending:
-                pending = self._request_approval(
-                    d, "organizer", "acceptance",
-                    f"Buyer agent asks to accept {d['company']} v{v['n']} ({gbp(v['pricing']['total'])}, deposit "
-                    f"{v['terms']['deposit_pct']}% = {gbp(v['pricing']['deposit'])}): " + "; ".join(reasons),
-                    reasons, version=v["n"], obj_hash=v["hash"], rules=buyer_rules(v["terms"], v["pricing"], mandate),
-                    if_approved=f"Your acceptance of v{v['n']} goes to the hotel, and the deposit becomes payable.",
-                    if_rejected=f"v{v['n']} is not accepted. The hotel is told the organizer did not authorize it.")
-            d["pending_acceptance"] = {"version": v["n"], "hash": v["hash"], "approval_id": pending["id"]}
-            d["status"] = "acceptance_pending_organizer"
-            return {"accepted": False, "status": "awaiting organizer authorization", "approval_id": pending["id"],
-                    "reasons": reasons}
         self._record_acceptance(d, v, "buyer")
         return {"accepted": True, "version": v["n"]}
 
@@ -1242,7 +1196,6 @@ class Engine:
             raise Refused(f"v{v['n']} is no longer the current offer")
         v["status"] = "accepted"
         v["accepted_at"] = self.now()
-        d["pending_acceptance"] = None
         if v["kind"] == "offer":
             d["accepted_version"] = v["n"]
             d["status"] = "accepted"
@@ -2337,7 +2290,7 @@ class Engine:
         pend = [a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["status"] == "pending"]
         if pend:
             a = pend[-1]
-            return ("hotel manager" if a["approver"] == "hotel_manager" else "buyer's organizer") + f": {a['subject']} approval"
+            return f"hotel manager: {a['subject']} approval"
         if d.get("seller_paused"):
             return "hotel staff: retry after a payment-provider error"
         st = d["status"]

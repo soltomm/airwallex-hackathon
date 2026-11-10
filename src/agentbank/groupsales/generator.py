@@ -1,12 +1,12 @@
 """RFP generator: realistic group inquiries, each with a private brief for the buyer agent.
 
-The generator only writes the inbound: the RFP email and the buyer's brief (answers, goals, limits, a later
+The generator only writes the inbound: the RFP email and the buyer's brief (answers, goals, a later
 change). Everything after that is the real system: the seller agent reads the email, the buyer agent
 answers from the brief, and the engine enforces every rule. It never changes deal state or takes a
 shortcut on the seller's side, and the seller never sees the brief.
 
 Inquiries are described by traits (dates that fit, nights short of rooms, or dates too soon to sell; price
-pressure; deposit limit; payer country; missing details; a later reduction). Presets are named trait combinations. The same seed and
+pressure; payer country; missing details; a later reduction). Presets are named trait combinations. The same seed and
 traits give the same RFP and brief, against the same calendar.
 
     gen = generate(engine, preset="dates_short_haggle", seed=42)
@@ -26,11 +26,11 @@ PRESETS: dict[str, dict] = {
     # Rooms free, the quote fits the budget: accept and pay.
     "straight_booking": {"availability": "fits", "price": "comfortable"},
     # Asks for dates too soon to sell to a group; the seller offers other dates and the buyer takes one; the
-    # buyer haggles below the seller's floor, and the budget is tight enough that its organizer must sign off.
+    # buyer haggles below the seller's floor, the floor holds, and the buyer takes it.
     "dates_short_haggle": {"availability": "too_soon", "price": "below_floor"},
-    # The full money story: attrition traded for a bigger deposit (manager approval), a deposit above the
-    # buyer's own limit (organizer sign-off), payment, then fewer rooms and a partial refund.
-    "full_lifecycle": {"room_type": "twin", "attrition": 20, "deposit": "low", "meeting": True, "change_rooms": 2},
+    # The full money story: attrition traded for a bigger deposit (manager approval), payment, then fewer
+    # rooms and a partial refund.
+    "full_lifecycle": {"room_type": "twin", "attrition": 20, "meeting": True, "change_rooms": 2},
     # A payer abroad: the deposit's currency side, then a smaller block and a refund.
     "payer_abroad": {"payer_country": "DE", "change_rooms": 1},
     # The RFP leaves out who pays and whether the budget includes taxes: the seller has to ask.
@@ -44,9 +44,9 @@ PRESET_INFO: dict[str, dict] = {
                                   "hotel's share paid out."},
     "dates_short_haggle": {"title": "Dates unavailable, then a haggle",
                            "shows": "Asks for dates too soon to sell; the seller offers others. The buyer counters below "
-                                    "the seller's floor, the floor holds, and the buyer's organizer signs off."},
+                                    "the seller's floor, the floor holds, and the buyer accepts."},
     "full_lifecycle": {"title": "Full lifecycle with a refund",
-                       "shows": "Attrition traded for a bigger deposit (manager approval), organizer sign-off, deposit "
+                       "shows": "Attrition traded for a bigger deposit (manager approval), deposit "
                                 "paid, then fewer rooms: partial refund and the hotel's payout share reversed."},
     "payer_abroad": {"title": "Payer abroad",
                      "shows": "A company in Germany paying from EUR, then a smaller block and a refund."},
@@ -61,11 +61,10 @@ TRAITS: dict[str, tuple] = {
     # what it has). too_soon: less notice than the hotel needs for a group (the seller offers other dates).
     "availability": ("fits", "short_rooms", "too_soon"),
     "price": ("comfortable", "tight", "below_floor"),
-    "deposit": ("standard", "low"),
     "missing": ("payer", "taxes", "layout"),
 }
 DEFAULTS = {"room_type": None, "rooms": None, "nights": None, "availability": "fits", "price": "comfortable",
-            "deposit": "standard", "attrition": None, "meeting": False, "breakfast": True, "missing": [],
+            "attrition": None, "meeting": False, "breakfast": True, "missing": [],
             "payer_country": None, "payer_currency": None, "change_rooms": 0, "change_after_hours": 168}
 
 # Company suffixes the extractor recognises as a legal payer.
@@ -88,7 +87,7 @@ def resolve(traits: dict | None = None, preset: str | None = None) -> dict:
     unknown = set(t) - set(DEFAULTS)
     if unknown:
         raise Refused(f"unknown traits: {', '.join(sorted(unknown))}")
-    for k in ("availability", "price", "deposit"):
+    for k in ("availability", "price"):
         if t[k] not in TRAITS[k]:
             raise Refused(f"{k} must be one of {', '.join(TRAITS[k])}")
     if t["room_type"] is not None and t["room_type"] not in TRAITS["room_type"]:
@@ -186,12 +185,11 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
         budget = _round_up(estimate(bands["target"]) * 115 // 100, 50000)
     elif t["price"] == "tight":
         budget = _round_up(estimate(bands["autonomous_floor"]), 10000)
-    else:   # below the floor: covers the buyer's target but not the hotel's floor, so its organizer must sign off
+    else:   # below the floor: covers the buyer's target but not the hotel's floor
         want, floor = estimate(target_rate), estimate(bands["autonomous_floor"])
         budget = max(_round((want + floor) // 2, 10000), _round_up(want, 1000))
         if budget >= floor:
             budget = floor - 100
-    dep_pct = 25 if t["deposit"] == "low" else 40
     per_night = (target_rate or bands["target"]) + (bf_unit * occ if t["breakfast"] else 0)
 
     # Who is asking. The domain is unique per seed, so a replay never collides with the duplicate check.
@@ -209,18 +207,17 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
     subject = f"RFP | {event.title()} | {guests} guests | {_span(arrival, departure)}"
 
     brief = {
-        "organizer": f"{first} ({company}), with their finance lead as authorizer",
+        "organizer": f"{first} ({company})",
         "known_answers": {"payer": payer, "budget_includes_taxes": True,
                           **({"meeting_layout": meeting["layout"]} if meeting else {})},
         "requirements": f"{rooms} {rt} rooms a night for {guests} guests"
                         + (", breakfast each morning" if t["breakfast"] else "")
                         + (f", meeting room on {meeting['date']}" if meeting else "") + ".",
         "accommodation_target_per_room_night_incl_breakfast": per_night,
-        "budget_total": budget, "deposit_limit": budget * dep_pct // 100, "deposit_limit_pct": dep_pct,
         "objectives": {**({"attrition_pct": t["attrition"]} if t["attrition"] else {}),
-                       **({"opening_deposit_pct": 25} if t["attrition"] or t["deposit"] == "low" else {}),
+                       **({"opening_deposit_pct": 25} if t["attrition"] else {}),
                        **({"target_rate": target_rate} if target_rate else {})},
-        "flexibility": "May trade a larger deposit for flexibility; anything beyond the limits needs organizer approval.",
+        "flexibility": "May trade a larger deposit for flexibility.",
         "accepts_fixed_terms": True,
         "mandate_allows_reduction_within_allowance": True,
         "generated": {"seed": seed, "traits": t},
@@ -234,7 +231,7 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
                     f"our block by {_word(n)} {rt} room{'s' if n != 1 else ''} for all {_word(nights_n)} nights and "
                     "return any excess deposit under our agreement."}
     return {"seed": seed, "preset": preset, "traits": t, "from": sender, "subject": subject, "body": body, "domain": domain,
-            "brief": brief,
+            "budget": budget, "brief": brief,
             "payer": {"country": country, "currency": t["payer_currency"]} if t["payer_country"] else None}
 
 

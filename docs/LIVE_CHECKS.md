@@ -33,7 +33,7 @@ PAYMENTS=airwallex SELLER_MODE=rules GS_VAR=var/check-awx PYTHONPATH=src .venv/b
 ```
 
 At http://localhost:8010, follow the demo script in `GROUP_SALES.md`. The seller starts on its own after
-the reset; the buyer's moves, the organizer's sign-off and the payment are in Northstar's mailbox (the
+the reset; the buyer's moves and the payment are in Northstar's mailbox (the
 link on its card). Pay with `4035 5010 0000 0008`, any future expiry and any CVC.
 
 If Airwallex refuses the deposit intent, Northstar's card turns red with the error and a **Retry**
@@ -62,10 +62,7 @@ script may fail on wording or timing. Judge by the figures and these points.
 Pass when:
 - the figures match the spec (£4,920 Summit; £9,600 v1; £220 and 40% = £3,840 for v2; £8,280 v3,
   £528 refund);
-- after the organizer approves, the seller opens checkout. It only ever sees "pending buyer-side
-  authorization";
-- no seller note or email guesses Northstar's budget (£10,000 is in its RFP, so it may appear) or its
-  deposit limits (£3,000, 30%);
+- after the buyer accepts v2, the seller opens checkout on its own;
 - the AI Agent tab reads clearly for Claude's runs, with no red refused lines you can't explain.
 
 ## 3. Randomized scenarios with the Claude seller (costs API calls)
@@ -82,7 +79,7 @@ means a model call failed, so that case did not test Claude.
 
 Start check 2 again with `BUYER_MODE=agent` added at the front. The buyer side now answers on its own.
 
-Pass when its accept messages say only that organizer sign-off is pending, never its limits.
+Pass when it answers the hotel from its brief and reaches a paid booking.
 
 ## 5. Real phone (a person)
 
