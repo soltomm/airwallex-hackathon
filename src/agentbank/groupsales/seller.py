@@ -146,6 +146,41 @@ class RulesSeller:
         req["read_by"] = "model"
         return req
 
+    def _apply_answers(self, d: dict, answers: dict, upd: dict) -> None:
+        """The buyer's structured answers (the mailbox's answer form, or the buyer agent) into a requirements update.
+        They are what the buyer chose field by field, so they win over a reading of the same message's text.
+        Invalid values are skipped; the engine still checks everything that is recorded."""
+        req = d["requirements"] or {}
+        if answers.get("room_type") in ("king", "twin", "any"):
+            upd["room_type"] = answers["room_type"]
+        rooms = understand._pos_int(answers.get("rooms"))
+        if rooms:
+            upd["rooms"] = rooms
+        a, b = understand._iso_date(answers.get("arrival")), understand._iso_date(answers.get("departure"))
+        if a and b and a < b:
+            upd["arrival"], upd["departure"] = a, b
+        if req.get("meeting"):
+            mt = dict(upd.get("meeting") or {})
+            layout = str(answers.get("meeting_layout") or "").strip().lower()
+            if layout in understand.LAYOUTS:
+                mt["layout"] = layout
+            md = understand._iso_date(answers.get("meeting_date"))
+            if md:
+                mt["date"] = md
+            if mt:
+                upd["meeting"] = mt
+            size = answers.get("meeting_size")
+            too_big = self.e.meeting_too_big(req)
+            if size == "drop_meeting":
+                upd.pop("meeting", None)
+                upd["meeting_declined"] = True
+            elif size == "use_room_capacity" and too_big:
+                upd["meeting"] = {**upd.get("meeting", {}), "attendees": too_big["capacity"]}
+        if isinstance(answers.get("payer"), str) and answers["payer"].strip():
+            upd["payer"] = answers["payer"].strip()[:200]
+        if isinstance(answers.get("budget_includes_taxes"), bool):
+            upd["budget_includes_taxes"] = answers["budget_includes_taxes"]
+
     def _reply_context(self, d: dict) -> dict:
         req = d["requirements"] or {}
         asked = next((x.get("questions") or [] for x in reversed(d["thread"]) if x["from"] == "seller"), [])
@@ -302,12 +337,7 @@ class RulesSeller:
             if not answers and not upd.pop("_read_by_model", False):
                 answers = self._answers_from_text(m["text"])
             upd.pop("_read_by_model", None)
-            if answers.get("meeting_layout") and d["requirements"].get("meeting"):
-                upd["meeting"] = {**(upd.get("meeting") or {}), "layout": answers["meeting_layout"]}
-            if answers.get("payer"):
-                upd["payer"] = answers["payer"]
-            if answers.get("budget_includes_taxes") is not None:
-                upd["budget_includes_taxes"] = bool(answers["budget_includes_taxes"])
+            self._apply_answers(d, answers, upd)
             res = e.record_requirements(deal_id, upd)
             e.deal_view(deal_id, mark_read=True)
             if res["date_issue"]:
