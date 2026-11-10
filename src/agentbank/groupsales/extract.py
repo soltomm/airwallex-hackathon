@@ -21,6 +21,11 @@ UNSUPPORTED = {
     "separate invoices": "split billing", "coach": "coach transport", "cocktail": "drinks reception",
 }
 NUM = r"(\d+|" + "|".join(WORDS) + r")"
+# "12", "12th", "12th of": day-first dates as people write them.
+DAY = r"(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?"
+# "any room type is fine", "room type doesn't matter", "whatever layout": the buyer leaves it to the hotel.
+_ANY = r"(?:any|whatever|either|no preference(?: on| for)?(?: the)?)"
+_FINE = r"(?:is |are )?(?:fine|ok|okay|good|works)|doesn'?t matter|does not matter|not important"
 
 
 def _n(s: str) -> int:
@@ -41,6 +46,13 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
                  "reply_by": None, "contact": None, "occupancy": None, "unsupported": [], "notes": []}
 
     m = re.search(NUM + r"\s+(?:single[- ]occupancy\s+|double[- ]occupancy\s+)?(twin|king|double|queen|single)\s+rooms?", low)
+    if not m:
+        # "40 rooms" with no type named (not "2 meeting rooms": the word in between stops the match).
+        m2 = re.search(r"\b" + NUM + r"\s*(?:hotel\s+|guest\s+|bed)?rooms?\b", low)
+        if m2:
+            req["rooms"] = _n(m2.group(1))
+    if re.search(_ANY + r"\s+(?:room|bedroom)(?:\s+type)?s?\b|room\s+types?\s+(?:" + _FINE + ")", low):
+        req["room_type"] = "any"
     if m:
         req["rooms"] = _n(m.group(1))
         rt = m.group(2)
@@ -52,18 +64,20 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
         req["occupancy"] = 1
     elif req["room_type"] == "twin":
         req["occupancy"] = 2
-    m = re.search(r"for\s+" + NUM + r"\s+(?:guests|employees|people|colleagues|attendees)", low)
-    if m:
+    for m in re.finditer(r"for\s*" + NUM + r"\s+(?:guests|employees|people|colleagues|attendees|staff)", low):
+        if re.search(r"meeting (?:room|space)\s*$", low[max(0, m.start() - 20): m.start()]):
+            continue                                # the meeting's headcount, not the group's
         req["guests"] = _n(m.group(1))
+        break
 
     year = default_year
     y = re.search(r"\b(20\d\d)\b", text)
     if y:
         year = int(y.group(1))
-    m = re.search(r"arriv\w*\s+(?:on\s+)?(\d{1,2})\s+([a-z]+)", low)
+    m = re.search(r"arriv\w*\s+(?:on\s+)?(?:the\s+)?" + DAY + r"\s+([a-z]+)", low)
     if m and m.group(2) in MONTHS:
         req["arrival"] = _date(m.group(1), m.group(2), year)
-    m = re.search(r"depart\w*\s+(?:on\s+)?(\d{1,2})\s+([a-z]+)", low)
+    m = re.search(r"(?:depart\w*|check(?:ing)?[- ]out)\s+(?:on\s+)?(?:the\s+)?" + DAY + r"\s+([a-z]+)", low)
     if m and m.group(2) in MONTHS:
         req["departure"] = _date(m.group(1), m.group(2), year)
     if not (req["arrival"] and req["departure"]):
@@ -85,7 +99,9 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
         m = re.search(r"meeting (?:room|space) for\s+" + NUM, low)
         if m:
             mt["attendees"] = _n(m.group(1))
-        m = re.search(r"meeting (?:room|space)[^.]*?\bon\s+(\d{1,2})\s+([a-z]+)", low)
+        m = (re.search(r"meeting (?:room|space)[^.]*?\bon\s+(?:the\s+)?" + DAY + r"\s+([a-z]+)", low)
+             or re.search(r"meeting(?: room| space)?(?: date| day)\s*(?:is|will be|:)?\s*(?:on\s+)?(?:the\s+)?"
+                          + DAY + r"\s+([a-z]+)", low))
         if m and m.group(2) in MONTHS:
             mt["date"] = _date(m.group(1), m.group(2), year)
         m = re.search(r"(\d{1,2}[:.]\d{2})\s*[–-]\s*(\d{1,2}[:.]\d{2})", text)
@@ -94,6 +110,9 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
         for lay in ("classroom", "theatre", "theater", "boardroom", "u-shape", "cabaret", "banquet"):
             if lay in low:
                 mt["layout"] = "theatre" if lay == "theater" else lay
+        if not mt["layout"] and re.search(_ANY + r"\s+(?:meeting room\s+|room\s+)?(?:layout|set[- ]?up|seating)"
+                                          r"|(?:layout|set[- ]?up|seating)\s+(?:" + _FINE + ")", low):
+            mt["layout"] = "any"
         mt["equipment"] = [e for e in ("projector", "microphone", "wi-fi", "screen", "flipchart") if e in low]
         req["meeting"] = mt
 
@@ -125,7 +144,7 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
     if m:
         req["payer"] = m.group(1).strip()
 
-    m = re.search(r"(?:thanks|regards|best),?\s+([A-Z][a-z]+)", body, re.I)
+    m = re.search(r"(?i:thanks|thank you|regards|best|cheers),?\s+([A-Z][a-z]+)\b", body)
     if m:
         req["contact"] = m.group(1)
     elif sender:
@@ -140,8 +159,13 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
 def missing_info(req: dict) -> list[str]:
     """Questions the seller must ask before it can quote firmly."""
     out = []
-    if not req.get("room_type") or not req.get("rooms"):
+    # Ask only for what is missing: a buyer who gave "40 rooms" shouldn't be asked for the number again.
+    if not req.get("room_type") and not req.get("rooms"):
         out.append("room type and number of rooms")
+    elif not req.get("room_type"):
+        out.append("room type (king or twin)")
+    elif not req.get("rooms"):
+        out.append("number of rooms")
     if not (req.get("arrival") and req.get("departure")):
         out.append("arrival and departure dates")
     if req.get("meeting"):
