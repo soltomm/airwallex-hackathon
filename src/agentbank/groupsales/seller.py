@@ -285,8 +285,8 @@ class RulesSeller:
                 e.escalate(deal_id, f"manager withheld refund authorization; {gbp(d['finance']['refund_owed'])} still "
                            "owed to the buyer under the accepted reduction")
                 return f"{ref}: refund escalated"
-            r = e.refund_excess(deal_id, justification="Reduction accepted within the agreed attrition allowance, before "
-                                "the first installment; the revised 40% deposit is lower than receipts.")
+            r = e.refund_excess(deal_id, justification="Reduction accepted before the first installment; the revised "
+                                "deposit on the new total is lower than receipts.")
             return f"{ref}: refund {r['status']}"
         if st == "refund_pending":
             r = e.check_refund(deal_id)
@@ -584,8 +584,13 @@ How to work:
   pauses until the manager decides. After approval, send_offer.
 - When the buyer accepts, open_checkout (the buyer pays on Airwallex's hosted page; you never see card
   data). Payments are verified by the back office.
-- After booking, a change request: prepare_reduction for the rooms released. The engine checks the
-  allowance and deadlines and works out any refund. After the buyer accepts it, call refund_excess;
+- After booking, a change request: prepare_reduction for the rooms released. The engine prices it from
+  the contract: room-nights within the attrition allowance and before the release deadline come off
+  the total; any others are released but stay payable as an attrition charge. That needs no approval:
+  send it as priced and explain the charge plainly. Waiving part or all of a charge (waive_gbp) gives
+  away hotel money, so it pauses for the hotel manager; only ask for one with a concrete reason in
+  justification_for_manager. If the manager declines a waiver, prepare the change again without it.
+  After the buyer accepts a change, call refund_excess;
   above {REFUND_LIMIT} cumulative it asks the hotel manager to authorize the exact amount. A refund already
   created must be checked with check_refund before anything else; never try to create a second one.
   Once the manager approves the refund, call refund_excess again: that executes it. Only call
@@ -672,9 +677,11 @@ TOOLS = [
     _tool("send_offer", "Send an approved version.", {**_DEAL, "version": _I}),
     _tool("open_checkout", "Record the deposit due for the accepted version and open its hosted payment page.", _DEAL),
     _tool("check_payment", "Verify the deposit with the payment provider.", _DEAL),
-    _tool("prepare_reduction", "Amendment releasing rooms from a confirmed booking (same number each night).", {
-        **_DEAL, "rooms_per_night": _I, "message_to_buyer": _S}),
-    _tool("send_amendment", "Send a reduction the manager approved after review.", {**_DEAL, "version": _I}),
+    _tool("prepare_reduction", "Amendment releasing rooms from a confirmed booking (same number each night). "
+          "Priced by the contract, including any attrition charge; a waiver of that charge needs the hotel manager.", {
+        **_DEAL, "rooms_per_night": _I, "message_to_buyer": _S, "waive_gbp": {"type": "number"},
+        "justification_for_manager": _S}, required=["deal_id", "rooms_per_night", "message_to_buyer"]),
+    _tool("send_amendment", "Send a change whose attrition waiver the manager approved.", {**_DEAL, "version": _I}),
     _tool("refund_excess", "Refund what the buyer is owed after an accepted reduction (asks the hotel manager above the seller's refund limit).", {
         **_DEAL, "justification": _S}),
     _tool("check_refund", "Retrieve the status of refunds already created for this deal.", _DEAL),
@@ -757,7 +764,9 @@ class ClaudeSeller:
         if name == "check_payment":
             return e.check_payment(did)
         if name == "prepare_reduction":
-            return e.prepare_reduction(did, rooms_per_night=a["rooms_per_night"], message=a.get("message_to_buyer", ""))
+            return e.prepare_reduction(did, rooms_per_night=a["rooms_per_night"], message=a.get("message_to_buyer", ""),
+                                       waive=int(round((a.get("waive_gbp") or 0) * 100)),
+                                       justification=a.get("justification_for_manager", ""))
         if name == "send_amendment":
             return e.send_amendment(did, a["version"])
         if name == "refund_excess":
