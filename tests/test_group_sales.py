@@ -1045,6 +1045,27 @@ def test_rules_seller_keeps_standard_release_when_margin_cannot_carry_more(tmp_p
     assert not any("Engine refused" in a["text"] for a in e.s["activity"])
 
 
+def test_a_withdrawn_concession_never_leaves_the_buyer_worse_off(tmp_path):
+    """Busy dates: the seller can't give the 20% attrition asked for. It must not keep the 40% deposit that
+    only pays for that concession: the buyer gets the terms they already had, and isn't told it's an exchange."""
+    e = _busier(tmp_path, full_demand={"twin": 9000, "king": 6000}, resale_pct=0)
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    v1 = n["versions"][0]
+    assert (v1["terms"]["attrition_pct"], v1["terms"]["deposit_pct"]) == (10, 30)
+    buyer_turn(e, "Northstar")                                       # counter: 20% attrition, 25% deposit
+    s.run()
+    v = n["versions"][-1]
+    assert (v["terms"]["attrition_pct"], v["terms"]["deposit_pct"], v["terms"]["rate"]) == (10, 30, 22000)
+    assert v["pricing"]["deposit"] == v1["pricing"]["deposit"]
+    assert "in exchange" not in v["message"].lower()
+    assert "demand on your dates is high" in v["message"].lower()
+    assert not [a for a in e.s["approvals"].values() if a["deal_id"] == n["id"]]   # nothing for the manager
+
+
 def test_rules_seller_hands_off_when_even_the_target_rate_misses_the_margin(tmp_path):
     e = _busier(tmp_path, full_demand={"twin": 15000, "king": 15000})
     s = RulesSeller(e)
