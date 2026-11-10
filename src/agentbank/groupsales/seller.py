@@ -18,7 +18,7 @@ from . import rules
 from .calc import gbp
 from .bookable import window_text
 from .engine import Engine, Refused
-from .extract import extract
+from .extract import extract, stay_nights
 from .trace import Traced
 
 SELLER_MODEL = os.environ.get("GS_SELLER_MODEL", "claude-opus-5-5")
@@ -28,6 +28,11 @@ MAX_TOOL_CALLS = 24
 def _day(iso: str) -> str:
     x = date.fromisoformat(iso)
     return f"{x.day} {x:%B %Y}"
+
+
+def _and(items: list[str]) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _next(iso: str) -> str:
@@ -209,10 +214,12 @@ class RulesSeller:
             e.check_systems(deal_id)
             if d["missing"]:
                 qs = d["missing"]
-                have_dates = "arrival and departure dates" not in qs
+                fits = self._block_fits(d["requirements"])
                 e.ask_buyer(deal_id, qs, "Thank you for your request. Before we can confirm an itemized offer, could you "
-                            "tell us: " + "; ".join(qs) + "?" + (" We have checked availability for your dates and can "
-                            "hold your rooms once we quote." if have_dates else ""))
+                            "tell us: " + "; ".join(qs) + "?" + (
+                                " We have checked availability for your dates and can hold your rooms once we quote."
+                                if fits else " We have checked your dates: we can't hold the full block on them, so "
+                                "with these details we will suggest what we can offer." if fits is False else ""))
                 return f"{ref}: asked {len(qs)} questions"
             return self._quote(deal_id)
         if st == "needs_info" and d["unread"]:
@@ -339,6 +346,18 @@ class RulesSeller:
         return f"{ref}: nothing to do ({st})"
 
     # ---- other dates ----------------------------------------------------------------------
+    def _block_fits(self, req: dict) -> bool | None:
+        """Whether the rooms asked for are free on every night of the stay: in the room type asked for, or in any
+        type the hotel sells when the buyer hasn't said. None when the rooms or dates aren't known yet."""
+        if not (req.get("rooms") and req.get("arrival") and req.get("departure")):
+            return None
+        try:
+            nights = stay_nights(req["arrival"], req["departure"])
+            types = [req["room_type"]] if req.get("room_type") in self.e.hotel["room_types"] else list(self.e.hotel["room_types"])
+            return any(all(self.e._available(n, rt) >= int(req["rooms"]) for n in nights) for rt in types)
+        except (KeyError, TypeError, ValueError):
+            return None                                 # nights outside the calendar: the date check handles those
+
     def _offer_dates(self, deal_id: str, reask: bool = False, short: dict | None = None) -> str:
         """Email the buyer dates the hotel can sell. `short` is set when the requested dates are in the calendar
         but the full block isn't free ({"free": rooms free on every night, "nights": the nights that fall short}):
@@ -347,9 +366,11 @@ class RulesSeller:
         d = e.deal(deal_id)
         req = d["requirements"]
         ref = d["ref"]
+        thanks = ("Thank you for your reply." if any(m["from"] == "seller" for m in d["thread"])
+                  else "Thank you for your inquiry.")
         if not (req.get("room_type") in e.hotel["room_types"] and req.get("rooms")):
             qs = d["missing"] or ["room type and number of rooms"]
-            e.ask_buyer(deal_id, qs, f"Thank you for your inquiry. We are unable to offer {_span(req['arrival'], req['departure'])} "
+            e.ask_buyer(deal_id, qs, f"{thanks} We are unable to offer {_span(req['arrival'], req['departure'])} "
                         f"for groups. Our group dates currently run from {_day(e.hotel['nights'][0])} to "
                         f"{_day(_next(e.hotel['nights'][-1]))}. So that we can suggest the best dates, could you tell us: "
                         + "; ".join(qs) + "?\n\nGroup Sales, Harbour House")
@@ -374,7 +395,12 @@ class RulesSeller:
                     f"{_span(best['arrival'], best['departure'])}.")
         if short:
             span, free = _span(req["arrival"], req["departure"]), short["free"]
-            on = " and ".join(_day(n) for n in short["nights"])
+            by_night = short.get("by_night") or {}
+            if len({by_night.get(n, free) for n in short["nights"]}) <= 1:
+                on = f"{free} {'is' if free == 1 else 'are'} free on " + _and([_day(n) for n in short["nights"]])
+            else:
+                on = _and([f"{by_night[n]} {'is' if by_night[n] == 1 else 'are'} free on {_day(n)}"
+                           if i == 0 else f"{by_night[n]} on {_day(n)}" for i, n in enumerate(short["nights"])])
             if free > 0 and not any(o["arrival"] == req["arrival"] and o["departure"] == req["departure"] for o in opts):
                 opts.append({"arrival": req["arrival"], "departure": req["departure"], "room_type": rt,
                              "rooms_per_night": free})
@@ -384,10 +410,9 @@ class RulesSeller:
         if reask:
             head = "Thank you for your reply. Could you confirm which dates you would like?"
         elif short:
-            head = (f"Thank you for your inquiry. We are unable to hold {want} {rt} rooms a night for {span}: only "
-                    f"{short['free']} {'is' if short['free'] == 1 else 'are'} free on {on}.")
+            head = f"{thanks} We are unable to hold {want} {rt} rooms a night for {span}: only {on}."
         else:
-            head = f"Thank you for your inquiry. We are unable to offer {_span(req['arrival'], req['departure'])} for your group."
+            head = f"{thanks} We are unable to offer {_span(req['arrival'], req['departure'])} for your group."
         e.offer_dates(deal_id, opts, f"{head} {body}{ask} Once you confirm the dates, we will send a full itemized offer."
                       "\n\nGroup Sales, Harbour House")
         return f"{ref}: offered other dates"
@@ -445,7 +470,8 @@ class RulesSeller:
                 return self._cannot_requote(deal_id, "the rooms are free but the meeting room or breakfast capacity "
                                                      "can't be held on these dates", WAITING_FOR_PERSON)
             return self._offer_dates(deal_id, short={"free": max(0, min(free.values())),
-                                                     "nights": sorted(n for n in want if free[n] < want[n])})
+                                                     "nights": sorted(n for n in want if free[n] < want[n]),
+                                                     "by_night": {n: max(0, free[n]) for n in want}})
         # Price only once the rooms are known to fit, so a budget concession is sized on the block actually quoted.
         if req.get("budget_total") and p["pricing"]["total"] > req["budget_total"]:
             floor = e.price_terms(deal_id, bands["autonomous_floor"], dep, att)
