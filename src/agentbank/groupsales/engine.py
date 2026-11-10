@@ -30,7 +30,7 @@ from pathlib import Path
 from . import bookable, calc, rules
 from .calc import gbp
 from .extract import extract, missing_info, stay_nights
-from .policy import buyer_check, hotel_check
+from .policy import buyer_check, buyer_rules, hotel_check, rule
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
 from . import vendors
@@ -1010,8 +1010,12 @@ class Engine:
                            f"{pricing['attrition_allowance']} room-nights. Margin {pricing['margin_all_rooms']['margin_pct']}% "
                            f"(all rooms) / {pricing['margin_full_release']['margin_pct']}% (full release)."
                            + (f" Seller's case: {justification}" if justification else ""))
-                appr = self._request_approval(d, "hotel_manager", "offer", summary, check["approvals"],
-                                              version=n, obj_hash=v["hash"])
+                appr = self._request_approval(
+                    d, "hotel_manager", "offer", summary, check["approvals"], version=n, obj_hash=v["hash"],
+                    rules=check["rules"],
+                    if_approved=f"The seller can send v{n} to the buyer on these terms ({gbp(pricing['total'])}, "
+                                f"{terms['deposit_pct']}% deposit).",
+                    if_rejected=f"v{n} is not sent. The seller revises the offer to terms it can agree alone.")
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": appr["id"], "pricing": pricing,
                         "note": "Paused: hotel manager approval required before this version can be sent."}
@@ -1077,10 +1081,18 @@ class Engine:
 
     # ================================================================ approvals
     def _request_approval(self, d, approver: str, subject: str, summary: str, reasons: list[str], version=None,
-                          obj_hash=None, amount=None, extra=None) -> dict:
+                          obj_hash=None, amount=None, extra=None, rules=None, if_approved="", if_rejected="") -> dict:
+        """`rules` names each limit crossed (policy.rule); `if_approved` / `if_rejected` say what each
+        decision does, so the approver sees why the request exists and what their click changes.
+
+        The hotel manager is asked only when a seller rule is crossed: a request without the rule it
+        crosses is a bug, so it is refused here rather than shown as an unexplained card."""
+        if approver == "hotel_manager" and not rules:
+            raise Refused(f"no seller rule is crossed by this {subject}: the seller can act on it alone")
         aid = self._id("ap")
         a = {"id": aid, "deal_id": d["id"], "ref": d["ref"], "approver": approver, "subject": subject,
-             "summary": summary, "reasons": reasons, "version": version, "hash": obj_hash, "amount": amount,
+             "summary": summary, "reasons": reasons, "rules": rules or [], "if_approved": if_approved,
+             "if_rejected": if_rejected, "version": version, "hash": obj_hash, "amount": amount,
              "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
         self.s["approvals"][aid] = a
         if approver == "hotel_manager":
@@ -1156,7 +1168,11 @@ class Engine:
                     d["flags"].append(f"refund {gbp(a['amount'])} not authorized: amount remains owed to the buyer; "
                                       "discrepancy escalated for manager review")
                     d["handoff"] = {"at": self.now(), "reason": "refund authorization withheld while the buyer is owed "
-                                    f"{gbp(d['finance']['refund_owed'])}"}
+                                    f"{gbp(d['finance']['refund_owed'])}",
+                                    "why": "The buyer is owed this money under the change they accepted, and the "
+                                           "seller can't override your decision or leave it unpaid.",
+                                    "todo": f"Settle the {gbp(d['finance']['refund_owed'])} with the buyer, for "
+                                            "example by refunding it outside the seller or agreeing a credit."}
             d["unread"] = True
             self._save()
         self._wake("approval")
@@ -1210,7 +1226,9 @@ class Engine:
                     d, "organizer", "acceptance",
                     f"Buyer agent asks to accept {d['company']} v{v['n']} ({gbp(v['pricing']['total'])}, deposit "
                     f"{v['terms']['deposit_pct']}% = {gbp(v['pricing']['deposit'])}): " + "; ".join(reasons),
-                    reasons, version=v["n"], obj_hash=v["hash"])
+                    reasons, version=v["n"], obj_hash=v["hash"], rules=buyer_rules(v["terms"], v["pricing"], mandate),
+                    if_approved=f"Your acceptance of v{v['n']} goes to the hotel, and the deposit becomes payable.",
+                    if_rejected=f"v{v['n']} is not accepted. The hotel is told the organizer did not authorize it.")
             d["pending_acceptance"] = {"version": v["n"], "hash": v["hash"], "approval_id": pending["id"]}
             d["status"] = "acceptance_pending_organizer"
             return {"accepted": False, "status": "awaiting organizer authorization", "approval_id": pending["id"],
@@ -1387,7 +1405,11 @@ class Engine:
                         "PENDING", "PENDING_REVIEW", "REQUIRES_CAPTURE", "REQUIRES_CUSTOMER_ACTION"):
                     hold["status"] = "expired_payment_pending"
                     d["flags"].append("hold expired while payment outcome unknown: inventory kept, manager review")
-                    d["handoff"] = {"at": self.now(), "reason": "payment outcome unknown at hold expiry"}
+                    d["handoff"] = {"at": self.now(), "reason": "payment outcome unknown at hold expiry",
+                                    "why": "The seller never books or releases rooms while a payment's outcome is "
+                                           "unknown, so the rooms stay held.",
+                                    "todo": "Check the payment in Airwallex. Use Check payment once it has settled, "
+                                            "or release the rooms if it failed."}
                     self.log(d["id"], "system", "hold_expiry", "Hold expired during checkout with payment outcome "
                              "unknown: inventory kept provisionally held, flagged for manager review.")
                     continue
@@ -1560,7 +1582,10 @@ class Engine:
                             "room_type": v["terms"]["room_type"], "rooms": dict(v["terms"]["rooms"]),
                             "payment_intent_id": pi["id"], "deposit_op": op["id"], "applied_amendments": []}
             d["status"] = "payment_received_booking_exception"
-            d["handoff"] = {"at": self.now(), "reason": "payment received but inventory could not be committed"}
+            d["handoff"] = {"at": self.now(), "reason": "payment received but inventory could not be committed",
+                            "why": "The rooms were taken after the hold lapsed, and the seller never overbooks or "
+                                   "collects twice.",
+                            "todo": "Offer the buyer other rooms or dates, or refund the deposit. The receipt is kept."}
             self.log(d["id"], "system", "booking_exception", "Payment received - booking exception: inventory could "
                      "not be committed. Receipt kept; routed to the hotel manager. No second collection.")
         d["unread"] = True
@@ -1626,7 +1651,13 @@ class Engine:
                                            f"({'; '.join(ev['charge_reasons'])}). Without the waiver the buyer owes the "
                                            f"full charge; the existing agreement remains in effect until a change is "
                                            f"accepted." + (f" Seller's justification: {justification}" if justification else ""),
-                                           ev["review_reasons"], version=n, obj_hash=v["hash"], amount=ev["waived"])
+                                           ev["review_reasons"], version=n, obj_hash=v["hash"], amount=ev["waived"],
+                                           rules=[rule("Attrition charge", "charged in full",
+                                                       f"waive {gbp(ev['waived'])} of {gbp(ev['attrition_charge'])}")],
+                                           if_approved=f"Change v{n} goes to the buyer with the waiver: revised total "
+                                                       f"{gbp(pricing['total'])}.",
+                                           if_rejected="The waiver is dropped. The seller offers the same change with "
+                                                       f"the full {gbp(ev['attrition_charge'])} charge.")
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": a["id"], "evaluation": ev}
             res = self._send_version(d, v, actor)
@@ -1758,7 +1789,12 @@ class Engine:
                             f"{gbp(cumulative)} exceed the seller's {gbp(limit)} limit. Contractually owed under the "
                             "accepted reduction." + (f" {justification}" if justification else ""),
                             [f"refund above the seller's {gbp(limit)} authority"], obj_hash=ref_hash, amount=owed,
-                            extra={"refund": ref_obj})
+                            extra={"refund": ref_obj, "cumulative": cumulative, "limit": limit},
+                            rules=[rule("Refunds the seller can make alone", f"up to {gbp(limit)} in total",
+                                        f"{gbp(cumulative)} in total" + (f" ({gbp(owed)} now)" if cumulative != owed else ""))],
+                            if_approved=f"The seller refunds exactly {gbp(owed)} to the buyer's original card.",
+                            if_rejected=f"Nothing is refunded. The {gbp(owed)} stays owed to the buyer under the accepted "
+                                        "change, and the deal is handed to a person.")
                         self._save()
                     d["status"] = "refund_awaiting_approval"
                     return {"status": "pending_approval", "approval_id": pending["id"],
@@ -1862,7 +1898,10 @@ class Engine:
         elif new == "FAILED":
             op["status"] = "failed"
             d["status"] = "refund_failed"
-            d["handoff"] = {"at": self.now(), "reason": f"refund {op['provider_id']} failed; {gbp(op['amount'])} still owed"}
+            d["handoff"] = {"at": self.now(), "reason": f"refund {op['provider_id']} failed; {gbp(op['amount'])} still owed",
+                            "why": "Airwallex refused the refund, and the seller never retries a failed refund on "
+                                   "its own.",
+                            "todo": f"Find out why it failed, then retry. {gbp(op['amount'])} is still owed to the buyer."}
             d["flags"].append(f"refund {op['provider_id']} failed: {gbp(op['amount'])} still owed, follow up")
             self.log(d["id"], "system", "refund_failed", f"Refund {op['provider_id']} FAILED; amount stays owed.")
         elif new == "RECEIVED":
@@ -2186,10 +2225,13 @@ class Engine:
         return {"event": eid, "result": result}
 
     # ================================================================ escalation / handoff
-    def escalate(self, deal_id: str, reason: str, message: str = "", actor: str = "seller") -> dict:
+    def escalate(self, deal_id: str, reason: str, message: str = "", actor: str = "seller", why: str = "",
+                 todo: str = "") -> dict:
+        """Hand a deal to a person. This is not an approval: the seller can't take the deal further
+        within the hotel's rules. `why` names what stops it, `todo` what a person should do."""
         with self.lock:
             d = self.deal(deal_id)
-            d["handoff"] = {"at": self.now(), "reason": reason}
+            d["handoff"] = {"at": self.now(), "reason": reason, "why": why, "todo": todo}
             if d["status"] not in ("confirmed", "refund_due", "refund_pending"):
                 d["status"] = "handoff"
             if not message and not d.get("booking") and not any(m["from"] == "seller" for m in d["thread"]):

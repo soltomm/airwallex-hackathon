@@ -182,7 +182,11 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
   sold out). Rooms released before the cutoff are counted 50% resold. On the demo dates (80% / 80% / 64%)
   the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
-  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide.
+  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide. Every approval names each rule it
+  crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
+  rejecting each do, and the card shows exactly that. The engine refuses a manager request that names no
+  crossed rule, so the manager is only asked when a seller rule is broken. A hand-off to a person is not
+  an approval: it says what stops the seller (`why`) and what a person should do (`todo`).
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
 - **Buyer mandate.** Accepting above the budget or the deposit limits creates an organizer approval

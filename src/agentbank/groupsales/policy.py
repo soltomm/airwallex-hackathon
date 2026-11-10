@@ -1,7 +1,8 @@
 """Authority rules. The hotel's commercial rules bind the seller; the buyer's mandate binds the buyer.
 
 Each check returns hard violations (nobody can approve them) and exceptions that need a named
-approver. The engine enforces these in code: nothing an agent writes, and nothing inside an RFP,
+approver. Each exception also comes as a rule ({"rule", "alone", "asked"}): which limit is crossed,
+what the party could agree alone, and what this request asks for, so an approver sees exactly why. The engine enforces these in code: nothing an agent writes, and nothing inside an RFP,
 can change them.
 """
 from __future__ import annotations
@@ -14,15 +15,22 @@ from .calc import d, gbp
 LAYOUTS_ON_FILE = {"classroom"}
 
 
+def rule(name: str, alone: str, asked: str) -> dict:
+    """One crossed limit: the rule, what the party can agree alone, what this request asks for."""
+    return {"rule": name, "alone": alone, "asked": asked}
+
+
 def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     hotel, rms, policy = scenario["hotel"], scenario["rms"], scenario["policy"]
     hard: list[str] = []
     needs: list[str] = []
+    rules: list[dict] = []
     if terms.get('vendor_lines'):
         needs.append('Third-party master package requires hotel manager approval')
+        rules.append(rule("Third-party services", "hotel services only", "a master package with outside vendors"))
     rt = terms.get("room_type")
     if rt not in rms["rates"]:
-        return {"hard": [f"unknown room type {rt!r}"], "approvals": [], "ok": False}
+        return {"hard": [f"unknown room type {rt!r}"], "approvals": [], "rules": [], "ok": False}
     bands = rms["rates"][rt]
     rate, dep, att = int(terms["rate"]), int(terms["deposit_pct"]), int(terms["attrition_pct"])
     dep_pol, att_pol = policy["deposit"], policy["attrition"]
@@ -43,11 +51,13 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     exception_terms = False
     if rate < bands["autonomous_floor"]:
         needs.append(f"{rt} rate {gbp(rate)} below the seller's floor {gbp(bands['autonomous_floor'])}")
+        rules.append(rule(f"{rt.capitalize()} rate", f"{gbp(bands['autonomous_floor'])} or more", gbp(rate)))
         exception_terms = True
     if att > att_pol["max_pct_with_approval"]:
         hard.append(f"attrition {att}% exceeds the {att_pol['max_pct_with_approval']}% maximum")
     elif att > att_pol["standard_pct"]:
         needs.append(f"attrition {att}% above the standard {att_pol['standard_pct']}%")
+        rules.append(rule("Free release (attrition)", f"up to {att_pol['standard_pct']}%", f"{att}%"))
         exception_terms = True
     if dep > dep_pol["max_pct"]:
         hard.append(f"deposit {dep}% above the {dep_pol['max_pct']}% maximum")
@@ -59,6 +69,7 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     elif dep_pol["min_pct_with_approval"] <= dep < dep_pol["standard_pct"]:
         needs.append(f"deposit {dep}% below the standard {dep_pol['standard_pct']}% "
                      "(only for high-value repeat customers or large total spend)")
+        rules.append(rule("Deposit", f"{dep_pol['standard_pct']}% to {dep_pol['max_pct']}%", f"{dep}%"))
 
     bf_cap = hotel["breakfast"]["group_capacity_per_day"]
     for morning, n in (terms.get("breakfast") or {}).items():
@@ -82,7 +93,19 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     for case, label in (("margin_all_rooms", "all rooms used"), ("margin_full_release", "full allowance released")):
         if pricing[case]["margin_pct"] < floor:
             hard.append(f"contribution margin {pricing[case]['margin_pct']}% with {label} is below {floor}%")
-    return {"hard": hard, "approvals": needs, "ok": not hard}
+    return {"hard": hard, "approvals": needs, "rules": rules, "ok": not hard}
+
+
+def buyer_rules(terms: dict, pricing: dict, mandate: dict) -> list[dict]:
+    """buyer_check as rules, for the organizer's card (the buyer's own mandate; never shown to the seller)."""
+    out = []
+    if pricing["total"] > mandate["budget_total"]:
+        out.append(rule("Total budget", f"up to {gbp(mandate['budget_total'])}", gbp(pricing["total"])))
+    if pricing["deposit"] > mandate["deposit_limit"]:
+        out.append(rule("Deposit amount", f"up to {gbp(mandate['deposit_limit'])}", gbp(pricing["deposit"])))
+    if pricing["deposit_pct"] > mandate["deposit_limit_pct"]:
+        out.append(rule("Deposit share", f"up to {mandate['deposit_limit_pct']}%", f"{pricing['deposit_pct']}%"))
+    return out
 
 
 def buyer_check(terms: dict, pricing: dict, mandate: dict) -> list[str]:

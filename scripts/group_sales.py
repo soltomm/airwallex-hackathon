@@ -153,7 +153,8 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["hotel"] = engine.hotel["name"]
     v["clock"] = engine.now()
     v["organizer"] = [{"id": a["id"], "version": a["version"], "reasons": a.get("reasons") or [],
-                       "summary": a.get("summary", "")}
+                       "summary": a.get("summary", ""), "rules": a.get("rules") or [],
+                       "if_approved": a.get("if_approved", ""), "if_rejected": a.get("if_rejected", "")}
                       for a in engine.s["approvals"].values()
                       if a["deal_id"] == d["id"] and a["approver"] == "organizer" and a["status"] == "pending"]
     v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None

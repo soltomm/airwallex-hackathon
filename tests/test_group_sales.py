@@ -222,6 +222,73 @@ def test_a_declined_waiver_leaves_the_change_to_be_offered_with_the_charge(eng):
 
 
 # ------------------------------------------------------------------------------ the demo story
+def test_every_approval_names_the_rule_it_crosses_and_what_each_decision_does(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    offer = next(a for a in e.s["approvals"].values() if a["subject"] == "offer")
+    assert offer["rules"] == [{"rule": "Free release (attrition)", "alone": "up to 10%", "asked": "20%"}]
+    assert "send v2" in offer["if_approved"] and "terms it can agree alone" in offer["if_rejected"]
+    org = next(a for a in e.s["approvals"].values() if a["subject"] == "acceptance")
+    assert {r["rule"] for r in org["rules"]} and all(r["alone"].startswith("up to") for r in org["rules"])
+    seller_view = json.dumps(e.deal_view(n["id"], for_="seller"), default=str)
+    assert not any(r["alone"] in seller_view for r in org["rules"])      # the mandate stays with the buyer
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    refund = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    assert refund["rules"] == [{"rule": "Refunds the seller can make alone", "alone": "up to £500 in total",
+                                "asked": "£528 in total"}]
+    assert "exactly £528" in refund["if_approved"] and "stays owed" in refund["if_rejected"]
+    # The reduction itself (6 of 7 free room-nights) needed no approval at all.
+    assert not any(a["subject"] == "reduction" for a in e.s["approvals"].values())
+
+
+def test_a_waiver_approval_says_what_keeping_the_charge_means(eng):
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=22000)
+    a = e.s["approvals"][r["approval_id"]]
+    assert a["rules"] == [{"rule": "Attrition charge", "alone": "charged in full", "asked": "waive £220 of £440"}]
+    assert "full £440 charge" in a["if_rejected"] and "£7,840" in a["if_approved"]
+
+
+def test_the_manager_is_never_asked_unless_a_seller_rule_is_crossed(eng):
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    n = deal_by(e, "Northstar")
+    buyer_turn(e, "Northstar")                                      # answers
+    s.run()
+    # Standard terms (rate at the floor, 30% deposit, 10% attrition) go straight to the buyer.
+    r = e.propose_offer(n["id"], 22000, 30, 10, "Our offer.")
+    assert r["status"] == "sent" and not any(a["approver"] == "hotel_manager" for a in e.s["approvals"].values())
+    # A manager request that names no crossed rule is refused rather than shown as an unexplained card.
+    with pytest.raises(Refused, match="no seller rule is crossed"):
+        e._request_approval(n, "hotel_manager", "offer", "please look", ["just checking"], version=r["version"])
+    # A crossed rule is named on the card, with what the seller could agree alone.
+    r = e.propose_offer(n["id"], 20500, 40, 10, "Our offer.")
+    a = e.s["approvals"][r["approval_id"]]
+    assert a["rules"] == [{"rule": "Twin rate", "alone": "£210 or more", "asked": "£205"}]
+
+
+def test_every_handoff_says_why_a_person_and_what_to_do(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    e.provider.knobs["fail_next_refund"] = True
+    appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    s.run()
+    h = n["handoff"]
+    assert n["status"] == "refund_failed" and "never retries" in h["why"] and "£528" in h["todo"]
+
+
 def test_full_story(eng):
     e = eng
     s, n = run_to_confirmed(e)
@@ -1446,6 +1513,7 @@ def test_change_request_beyond_the_booking_is_handed_to_a_person(eng):
     e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please drop 99 rooms a night.", {"rooms_per_night": 99})
     s.run()                                                          # no crash
     assert n["handoff"] and "cannot be applied" in n["handoff"]["reason"]
+    assert n["handoff"]["why"] and n["handoff"]["todo"]                 # says why a person, and what to do
     assert n["status"] == "confirmed" and n["booking"]["rooms"] == {night: 12 for night in MARCH}
     assert n["thread"][-1]["from"] == "seller" and "current booking stays as agreed" in n["thread"][-1]["text"]
     assert not n["unread"]                                            # the next run does not trip on it again
