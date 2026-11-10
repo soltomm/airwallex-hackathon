@@ -12,12 +12,14 @@ back to the pattern extractor, so offline runs and the test suite behave as they
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 READER_MODEL = os.environ.get("GS_READER_MODEL", "claude-opus-5-5")
+log = logging.getLogger("groupsales.reader")
 LAYOUTS = ["classroom", "theatre", "boardroom", "u-shape", "cabaret", "banquet", "any"]
 # Labels the engine already uses for services the group desk does not sell (see extract.UNSUPPORTED).
 SERVICES = ["group dinner", "lunch", "airport transfers", "transfers", "spa", "parking", "suites", "upgrades",
@@ -100,10 +102,12 @@ _client = None
 
 
 def _default_client():
+    """The app's shared client (agent.loop.make_client): it sends ANTHROPIC_WORKSPACE_ID as the
+    anthropic-workspace-id header, which user-level keys (sk-ant-usr-...) need on every request."""
     global _client
     if _client is None:
-        import anthropic
-        _client = anthropic.Anthropic(timeout=60.0, max_retries=2)
+        from ..agent.loop import make_client
+        _client = make_client().with_options(timeout=60.0, max_retries=2)
     return _client
 
 
@@ -133,7 +137,9 @@ def read(text: str, *, today: str, subject: str = "", context: dict | None = Non
     except Exception as err:            # noqa: BLE001 - any failure falls back to the pattern extractor
         name = type(err).__name__
         status = getattr(err, "status_code", None)
-        return None, f"reading the message with the model failed ({name}{f' {status}' if status else ''})"
+        why = f"reading the message with the model failed ({name}{f' {status}' if status else ''})"
+        log.warning("%s; falling back to the pattern extractor", why)     # visible in the server logs (Render)
+        return None, why
     if getattr(resp, "stop_reason", None) == "refusal":
         return None, "the model declined to read this message"
     if getattr(resp, "stop_reason", None) == "max_tokens":

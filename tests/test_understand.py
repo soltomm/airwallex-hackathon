@@ -153,3 +153,14 @@ def test_read_falls_back_on_refusal_and_errors():
     for msgs in (Refuses(), Fails()):
         got, err = understand.read("hi", today="2027-01-11", client=SimpleNamespace(beta=SimpleNamespace(messages=msgs)))
         assert got is None and err
+
+
+def test_reader_client_sends_the_workspace_for_user_level_keys(monkeypatch):
+    """User-level keys (sk-ant-usr-...) are rejected without the workspace header; the reader must send it, as the
+    Claude seller's client does. Without it every model read failed and the patterns answered instead."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "placeholder")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_test")
+    monkeypatch.setattr(understand, "_client", None)
+    client = understand._default_client()
+    assert client.default_headers.get("anthropic-workspace-id") == "wrkspc_test"
+    monkeypatch.setattr(understand, "_client", None)

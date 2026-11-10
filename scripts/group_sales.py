@@ -36,6 +36,7 @@ from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
 from agentbank.groupsales import vendors  # noqa: E402
+from agentbank.groupsales import understand  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.webhooks import signature_ok  # noqa: E402
@@ -451,7 +452,9 @@ def main():
     threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
     print(f"Harbour House group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
-          f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']})")
+          f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']}, "
+          f"rules seller reads emails with: {'the model' if understand.available() else 'patterns (no Anthropic key)'})",
+          flush=True)
     srv.serve_forever()
 
 
