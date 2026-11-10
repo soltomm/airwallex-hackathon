@@ -1393,16 +1393,20 @@ def test_buyer_clarifies_its_own_change_request_once_and_the_seller_applies_it(e
 
 
 def test_buyer_takes_the_first_dates_offered(eng):
+    from agentbank.groupsales.buyer import _span
     e = eng
     RulesSeller(e).run()
     n = deal_by(e, "Northstar")
     act(e, n["id"], suggest(e, n["id"]))                              # intake answers -> requirements recorded
     n["versions"].clear()
-    e.offer_dates(n["id"], [{"arrival": "2027-04-12", "departure": "2027-04-15"},
-                            {"arrival": "2027-04-19", "departure": "2027-04-22"}], "These dates are free.")
+    # Offer dates the calendar actually has free (the seeded availability changes which ones those are).
+    free = [o for o in e.suggest_dates(n["id"])["options"] if o["fits_rooms"]][:2]
+    assert len(free) == 2
+    e.offer_dates(n["id"], [{"arrival": o["arrival"], "departure": o["departure"]} for o in free], "These dates are free.")
+    first = {"arrival": free[0]["arrival"], "departure": free[0]["departure"]}
     sug = suggest(e, n["id"])
-    assert sug["action"] == "reply" and sug["payload"]["dates"] == {"arrival": "2027-04-12", "departure": "2027-04-15"}
-    assert sug["text"].startswith("12-15 April 2027 works for us")
+    assert sug["action"] == "reply" and sug["payload"]["dates"] == first
+    assert sug["text"].startswith(f"{_span(first['arrival'], first['departure'])} works for us")
 
 
 def test_buyer_agent_takes_a_turn_for_questions_its_drafts_cannot_answer(eng):
