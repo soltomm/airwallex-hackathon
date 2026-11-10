@@ -204,10 +204,15 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   authorization covers one exact amount, payment and amendment. Ledger entries have unique keys, and
   refund statuses only move forward (RECEIVED → ACCEPTED → SETTLED), so repeated or out-of-order
   events change nothing.
-- **Reductions.** Within the allowance (counted cumulatively), before the release deadline and
-  before 8 Feb, the deposit is recalculated and the excess refunded. From 8 Feb on, the amendment is
-  recorded and the manager reconciles payments. Going over the allowance or past the deadline goes to
-  manager review, and the existing agreement stays in effect until a change is accepted.
+- **Reductions.** The contract prices every release, so none is escalated for judgement. Room-nights
+  within the allowance (counted cumulatively) and before the release deadline come off the total;
+  any beyond the allowance, or released after the deadline, go back to inventory but stay payable at
+  the contracted rate as an attrition charge, itemised on the change. Before 8 Feb the deposit is
+  recalculated on the new total and the excess refunded; from 8 Feb on, the amendment is recorded and
+  the manager reconciles payments if the total changed. The only concession is a waiver of the
+  attrition charge: it gives away hotel money, so it needs the hotel manager's approval of that exact
+  version and amount, and a declined waiver leaves the change to be offered with the full charge. The
+  existing agreement stays in effect until the buyer accepts a change.
 - **Other dates.** The seller can only offer dates inside the group calendar (11 January to 31 December
   2027), arriving at least 31 days after the scenario clock, with the rooms free at that moment
   (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
