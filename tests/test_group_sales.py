@@ -2247,4 +2247,3 @@ def test_a_block_that_fits_is_still_promised(eng):
     e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
     RulesSeller(e).run()
     assert "can hold your rooms once we quote" in deal_by(e, "groupie.example")["thread"][-1]["text"]
-
