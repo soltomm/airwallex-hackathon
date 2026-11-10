@@ -37,13 +37,8 @@ header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); 
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }
 .pulse { animation: pulse 1.1s infinite; } @keyframes pulse { 50% { opacity: .35; } }
 
-#demo { display: none; background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 18px; }
-#demo.open { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 24px; }
-#demo h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
-#demo label { display: flex; gap: 6px; align-items: center; margin: 4px 0; cursor: pointer; }
-
 .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; padding: 14px 18px 40px; align-items: start; max-width: 1240px; margin: 0 auto; }
-@media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 12px 12px 40px; } .page { padding: 14px 12px 40px; } header, #demo { padding-left: 12px; padding-right: 12px; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 12px 12px 40px; } .page { padding: 14px 12px 40px; } header { padding-left: 12px; padding-right: 12px; }
   dl.kv { grid-template-columns: minmax(0, 1fr); gap: 0 0; } dl.kv dt { margin-top: 6px; } .title h2 { font-size: 18px; } }
 html, body { max-width: 100%; overflow-x: hidden; }
 .layout > * { min-width: 0; }
@@ -205,6 +200,9 @@ dl.outcomes { margin-top: 8px; }
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
     <button id="wbAccount">Hotel payout account ↗</button>
+    <button id="reset">↻ Reset scenario</button>
+    <div class="wb-confirm" id="resetAsk" role="group" aria-label="Confirm reset" hidden>Start the demo over? Deals, holds and the ledger reset; Airwallex records are kept.
+      <div class="row"><button id="resetYes">Yes, reset</button><button id="resetNo">Cancel</button></div></div>
   </details>
 </aside>
 <div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
@@ -224,26 +222,7 @@ dl.outcomes { margin-top: 8px; }
   <span class="pill" id="agent"></span>
   <span class="spacer"></span>
   <span class="small muted" id="pay"></span>
-  <button id="demoBtn">Demo controls ▾</button>
 </header>
-<div id="demo">
-  <div><h3>Agents</h3>
-    <label>Seller <select id="sellerMode"><option value="claude">Claude</option><option value="rules">Rules (instant, free)</option></select></label>
-    <label>Buyer replies <select id="buyerMode"><option value="presenter">You, from the buyer's mailbox</option><option value="agent">Buyer agent</option></select></label>
-    <p class="small muted" style="margin:4px 0 0">The seller acts on its own and stops at decisions for the hotel manager.</p></div>
-  <div><h3>Buyer mailboxes</h3><div id="mailboxes" class="small"></div>
-    <p class="small muted" style="margin:4px 0 0">Each buyer's email thread with the hotel, outside this dashboard. Reply, accept, sign off as their organizer or pay from there.</p></div>
-  <div><h3>Scenario time</h3><div class="row"><button data-h="1">+1 hour</button><button data-h="24">+1 day</button></div>
-    <div class="row" style="margin-top:6px"><button id="jump">Jump to 20 Jan 09:00</button></div></div>
-  <div><h3>Payment edge cases</h3>
-    <label><input type="checkbox" id="delayN"> Hold back refund notifications</label>
-    <button id="releaseN">Deliver held notifications</button>
-    <label><input type="checkbox" id="failCommit"> Fail the next booking commit</label></div>
-  <div><h3>Inbox</h3><button id="paste">Paste a new RFP…</button>
-    <h3 style="margin-top:14px">Start over</h3><button class="btn-bad" id="reset">Reset scenario</button>
-    <div class="confirm" id="resetAsk" hidden>Reset the hotel scenario? Deals, holds and the ledger start over; Airwallex records are kept.
-      <div class="row"><button class="btn-bad" id="resetYes">Yes, reset</button><button class="btn-ghost" id="resetNo">Cancel</button></div></div></div>
-</div>
 <div class="layout" id="desk">
   <aside><div class="label">Inquiries</div><div id="queue"></div><button id="availBtn" class="side-btn">Availability<span class="small muted">Rooms, Thames Room and breakfast by night</span></button>
     <button id="rulesBtn" class="side-btn">Seller rules<span class="small muted" id="rulesSub">What the seller may agree, and how to change it</span></button></aside>
@@ -251,14 +230,6 @@ dl.outcomes { margin-top: 8px; }
 </div>
 <section class="page" id="avail" hidden></section>
 <section class="page" id="rules" hidden></section>
-<dialog id="dlg"><form method="dialog">
-  <h3 style="margin-top:0">Paste a new RFP</h3>
-  <p class="small muted">It goes through the same intake as the scenario emails. <span id="rfpScope">For dates the hotel can't sell, the seller offers dates it can; requests for services the hotel doesn't offer are handed to a person.</span></p>
-  <p><input type="text" id="rfpFrom" style="width:100%" placeholder="From, e.g. Sam &lt;sam@company.example&gt;"></p>
-  <p><input type="text" id="rfpSubj" style="width:100%" placeholder="Subject"></p>
-  <p><textarea id="rfpBody" rows="8" placeholder="Email body"></textarea></p>
-  <div class="row"><button value="cancel">Cancel</button><button class="btn-p" id="rfpSend" value="default">Add to inbox</button></div>
-</form></dialog>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
@@ -320,11 +291,6 @@ function renderHeader() {
   $('agent').innerHTML = busy ? `<span class="dot pulse"></span>${busy.startsWith('seller') ? 'Seller agent is working…' : 'Buyer agent is working…'}`
     : `<span class="dot" style="color:var(--ok)"></span>Seller agent (${S.runner.settings.seller_mode === 'claude' ? 'Claude' : 'rules'}) is watching the inbox`;
   $('pay').textContent = S.provider === 'airwallex' ? 'Payments: Airwallex sandbox' : 'Payments: simulated';
-  const st = S.runner.settings;
-  $('sellerMode').value = st.seller_mode; $('sellerMode').querySelector('[value=claude]').disabled = !S.runner.claude_available;
-  $('buyerMode').value = st.buyer_mode;
-  $('delayN').checked = S.sim.delay_refund_notifications; $('failCommit').checked = S.sim.fail_next_commit;
-  $('releaseN').textContent = `Deliver held notifications (${S.delayed_notifications})`; $('releaseN').disabled = !S.delayed_notifications;
 }
 function render() {
   const deals = [...S.deals].sort((a, b) => (a.reply_by || '9') < (b.reply_by || '9') ? -1 : 1);
@@ -339,8 +305,6 @@ function render() {
   document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; convOpen = false; render(); });
   renderDeal(S.deals.find(d => d.id === sel));
   $('avail').innerHTML = availHtml();
-  $('rfpScope').textContent = `For dates outside the bookable nights (${day(S.bookable.first_night)} to ${day(S.bookable.last_night, {year: 'numeric'})}) or at less than ${S.bookable.min_days_before_arrival} days' notice, the seller offers dates it can sell. Requests for services the hotel doesn't offer are handed to a person.`;
-  $('mailboxes').innerHTML = deals.map(d => `<div><a href="${esc(d.inbox_url)}" target="_blank">${esc(contactOf(d))} · ${esc(d.company)} ↗</a></div>`).join('') || 'No inquiries yet.';
   const changed = S.activity.filter(a => a.kind === 'rules_changed').length;
   $('rulesSub').textContent = changed ? 'Changed by hotel staff · see what the seller may agree' : 'What the seller may agree, and how to change it';
 }
@@ -811,14 +775,7 @@ $('rules').onclick = async e => {
   }
 };
 
-$('demoBtn').onclick = () => { const o = $('demo').classList.toggle('open'); $('demoBtn').textContent = o ? 'Demo controls ▴' : 'Demo controls ▾'; };
-$('sellerMode').onchange = e => api('/api/settings', {seller_mode: e.target.value}).then(load, load);
-$('buyerMode').onchange = e => api('/api/settings', {buyer_mode: e.target.value}).then(load);
-document.querySelectorAll('[data-h]').forEach(b => b.onclick = () => api('/api/clock', {hours: +b.dataset.h}).then(load));
-$('jump').onclick = () => api('/api/clock', {to: '2027-01-20T09:00:00+00:00'}).then(load);
-$('delayN').onchange = e => api('/api/sim', {delay_refund_notifications: e.target.checked}).then(load);
-$('failCommit').onchange = e => api('/api/sim', {fail_next_commit: e.target.checked}).then(load);
-$('releaseN').onclick = () => api('/api/notifications/release', {}).then(r => { toast(r.results.map(x => x.result).join('; ') || 'Delivered'); load(); });
+// Reset scenario (property tools): asks inline, then starts the hotel scenario over on the server.
 const askReset = on => { $('resetAsk').hidden = !on; $('reset').hidden = on; if (on) $('resetYes').focus(); };
 $('reset').onclick = () => askReset(true);
 $('resetNo').onclick = () => askReset(false);
@@ -827,8 +784,6 @@ $('resetYes').onclick = async () => {
   try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; convOpen = false; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
   catch (e) {} finally { $('resetYes').disabled = false; }
 };
-$('paste').onclick = () => $('dlg').showModal();
-$('rfpSend').onclick = async e => { e.preventDefault(); const r = await api('/api/inbox', {from: $('rfpFrom').value, subject: $('rfpSubj').value, body: $('rfpBody').value}); $('dlg').close(); sel = r.deal_id; lastJSON = ''; await load(); window.Harbour.open(sel); };
 $('liveDrawerBody').appendChild($('desk'));
 window.Harbour = {
   state: () => S,

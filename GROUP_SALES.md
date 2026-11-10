@@ -58,9 +58,9 @@ through the seller's `check_payment`/`check_refund`, and when a hold expires.
 The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
 hotel manager. There is no button to run it. The buyer answers by email, in its own **mailbox** page
-outside the dashboard (`/inbox/<ref>`): open it from the deal's card or from **Demo controls → Buyer
-mailboxes**. Replies, acceptances, the buyer's organizer sign-off and the payment link are all there.
+outside the dashboard (`/inbox/<ref>`): open it from the deal's card. Replies, acceptances, the buyer's organizer sign-off and the payment link are all there.
 
+Inquiries are rows in the overview table; clicking one opens its deal page in a side drawer.
 Each deal page has a coloured **next step** card:
 - amber: your decision, as hotel manager
 - purple: waiting for the buyer, with a link to the buyer's mailbox
@@ -71,11 +71,12 @@ The card also shows the seller's last action. The **AI Agent** tab shows each se
 actions it took, one line each; click an action for its inputs, result and what it caused (a refused
 action is marked in red). The **Activity** tab lists what each agent and person did, newest first. The
 **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
-Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo
-controls**. Under the inquiries list, **Availability** opens rooms, the Thames Room and breakfast by
-night, and **Seller rules** opens the rules the seller works within (see below).
+The sidebar's property tools (on a phone, expand **Property tools** first) hold **Room availability**
+(rooms, the Thames Room and breakfast by night), **Seller rules** (the rules the seller works within, see
+below), **Hotel payout account** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
+hand-written RFP and sets who answers for the buyer.
 
-1. **Demo controls → Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
+1. **↻ Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
    seller moved to Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
 2. Open **Maya's mailbox ↗** from Northstar's card and click **Send answers**. The seller quotes v1:
@@ -87,25 +88,26 @@ night, and **Seller rules** opens the rules the seller works within (see below).
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
    When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
    shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
-6. **Jump to 20 Jan**, from Northstar's card or Demo controls. Summit's quote lapses. In the mailbox,
+6. **Jump to 20 Jan (demo)**, on Northstar's card. Summit's quote lapses. In the mailbox,
    **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
-8. **Demo controls → Deliver held notifications.** The late notice is ignored as a duplicate. Final
-   state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
-   back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**.
+8. Final state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
+   back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
+   back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
+   button) changes nothing, and `scripts/e2e_demo.js` checks that.
 
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
 
-Other things to show: **Paste a new RFP…** with dates the hotel can't sell (for example 11–14 May).
+Other things to show: **＋ New inquiry → Write your own** with dates the hotel can't sell (for example 11–14 May).
 The seller doesn't hand it off: it replies that those dates aren't available and offers dates that
 are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 March 2027** (or type a
 reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
-back to seller**, with an optional instruction the seller follows, or **Close inquiry**. **Fail the next booking commit** before paying (payment received – booking
-exception). **Reject** on the refund (the reduction stands and £528 stays owed). **Buyer replies →
-Buyer agent** in Demo controls, to let the buyer side answer on its own.
+back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
+payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed). **＋ New inquiry → Buyer replies →
+Automatically (buyer agent)**, to let the buyer side answer on its own.
 
 ### Seller rules
 

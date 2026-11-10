@@ -27,7 +27,7 @@ be exceeded, and takes the deposit through Airwallex like any other deal. The dr
   with a private brief for the buyer agent; the seller never sees it. An optional seed replays the same
   inquiry against the same calendar, for example after a reset.
 - **Buyer replies**: automatically (the buyer agent answers for every buyer with a brief) or by you in the
-  buyer's mailbox. This is the server's buyer mode, the same setting as in Demo controls. Approvals and
+  buyer's mailbox. This is the server's buyer mode. Approvals and
   paying the deposit always stay with a person.
 - **Write your own**: a real, unscripted RFP (`POST /api/inbox`, the same intake as an email). It has no
   brief, so nobody answers for the buyer automatically.
