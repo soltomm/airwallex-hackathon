@@ -813,8 +813,13 @@ def test_displacement_follows_the_dates():
     t = {**northstar_terms(att=20, rate=19500), "rooms": {n: 12 for n in quiet}, "released": {n: 0 for n in quiet},
          "breakfast": {m: 24 for m in ("2027-01-16", "2027-01-17", "2027-01-18")},
          "meeting": {"room": "thames", "date": "2027-01-15", "layout": "classroom", "attendees": 24}}
-    assert [calc.demand_pct(n, RMS) for n in quiet] == [28, 24, 15]
-    assert [calc.demand_pct(n, RMS) for n in MARCH] == [80, 80, 64]
+    # Demand comes from the availability calendar: the share of the allocation other business has taken.
+    alloc = H_ALL["availability"]["twin"]
+    assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in quiet] == [
+        (alloc - H_ALL["capacity"][n]["twin"]) * 100 // alloc for n in quiet] == [30, 0, 10]
+    assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in MARCH] == [80, 80, 64]     # stated by the RMS
+    sold_out = next(n for n in H_ALL["nights"] if H_ALL["capacity"][n]["twin"] == 0)
+    assert calc.demand_pct(sold_out, "twin", H_ALL, RMS) == 100
     q = calc.price(t, H_ALL, RMS)
     busy = calc.price(northstar_terms(att=20, rate=19500), H, RMS)
     assert q["displacement"]["blocked"] < busy["displacement"]["blocked"]

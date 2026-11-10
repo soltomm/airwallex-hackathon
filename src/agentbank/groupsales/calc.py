@@ -81,7 +81,7 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     deposit = pct_of(total, int(terms["deposit_pct"]))
 
     costs = rms["delivery_costs"]
-    disp = displacement(terms, rms)
+    disp = displacement(terms, hotel, rms)
     def contribution(room_nights: int) -> dict:
         # Delivery costs follow the rooms used. Displacement is carried on every contracted room-night;
         # released rooms get the resale share back (actual releases night by night, the rest of the
@@ -120,17 +120,28 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     }
 
 
-def demand_pct(night: str, rms: dict) -> int:
-    """Forecast transient demand for a night (0-100): the chance a room blocked for a group would
-    otherwise have sold. Month figure scaled by the weekday pattern."""
+def demand_pct(night: str, room_type: str, hotel: dict, rms: dict) -> int:
+    """Demand for a night (0-100): the chance a room blocked for a group would otherwise have sold.
+
+    It is read from the same calendar the availability page shows: the share of the group allocation
+    other business has already taken (allocation minus what is still on sale), so a sold-out or nearly
+    full night carries high displacement and a quiet one little. Nights the RMS states explicitly
+    (demand_by_night_pct, the demo stay whose allocation is set by hand) use that figure instead.
+    """
     cfg = rms.get("displacement")
     if not cfg:
         return 0
-    day = d(night)
-    return min(100, cfg["demand_by_month_pct"][day.month - 1] * cfg["demand_by_weekday_pct"][day.weekday()] // 100)
+    stated = (cfg.get("demand_by_night_pct") or {}).get(night)
+    if stated is not None:
+        return int(stated)
+    alloc = int((hotel.get("availability") or {}).get(room_type, 0))
+    on_sale = (hotel.get("capacity") or {}).get(night, {}).get(room_type)
+    if not alloc or on_sale is None:
+        return 0
+    return max(0, min(100, (alloc - int(on_sale)) * 100 // alloc))
 
 
-def displacement(terms: dict, rms: dict) -> dict:
+def displacement(terms: dict, hotel: dict, rms: dict) -> dict:
     """Opportunity cost of the rooms a group blocks, night by night (integer pence).
 
     blocked: displacement on every contracted room-night; resold_released: what comes back on rooms
@@ -143,7 +154,7 @@ def displacement(terms: dict, rms: dict) -> dict:
     released = terms.get("released") or {}
     nights, blocked, back = [], 0, 0
     for night in sorted(terms.get("rooms", {})):
-        pct = demand_pct(night, rms)
+        pct = demand_pct(night, rt, hotel, rms)
         per_room = full * pct // 100
         rooms, rel = int(terms["rooms"][night]), int(released.get(night, 0))
         blocked += rooms * per_room
