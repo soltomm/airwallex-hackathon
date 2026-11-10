@@ -541,6 +541,8 @@ class Engine:
             if merged.get("room_type") == "any":
                 merged["room_type"] = "king" if "king" in self.hotel["room_types"] else next(iter(self.hotel["room_types"]))
                 merged["notes"] = [*(merged.get("notes") or []), f"Buyer accepts any room type; quoted {merged['room_type']}."]
+            if merged.pop("meeting_declined", None):
+                merged["meeting"] = None                     # the buyer chose to go without the meeting room
             if isinstance(merged.get("meeting"), dict) and merged["meeting"].get("layout") == "any":
                 mr = next(iter(self.hotel["meeting_rooms"].values()))
                 merged["meeting"] = {**merged["meeting"], "layout": next(iter(mr["capacity"]))}
@@ -553,7 +555,7 @@ class Engine:
             merged["date_issue"] = self._date_issue(merged)
             merged["out_of_scope"] = problems
             d["requirements"] = merged
-            d["missing"] = missing_info(merged)
+            self._refresh_missing(d)
             if d["status"] == "new" or (d["status"] == "dates_proposed" and not merged["date_issue"]
                                         and merged.get("arrival")):
                 d["status"] = "intake"
@@ -564,6 +566,32 @@ class Engine:
             self._save()
             return {"requirements": merged, "missing": d["missing"], "out_of_scope": problems,
                     "date_issue": merged["date_issue"]}
+
+    def _refresh_missing(self, d: dict) -> None:
+        d["missing"] = missing_info(d["requirements"])
+        w = vendors.workspace(d)
+        too_big = self.meeting_too_big(d["requirements"])
+        if too_big and not (w["enabled"] and w.get("external_meetings")):
+            d["missing"].append(too_big["question"])
+
+    def meeting_too_big(self, req: dict) -> dict | None:
+        """When the group's meeting has more attendees than any meeting room seats (in the layout asked for, or in
+        its largest layout), what the hotel can offer instead, and the question that puts it to the buyer."""
+        mt = req.get("meeting")
+        if not isinstance(mt, dict) or not mt.get("attendees"):
+            return None
+        layout = (mt.get("layout") or "").lower()
+        best = None
+        for room in self.hotel["meeting_rooms"].values():
+            caps = {layout: room["capacity"][layout]} if layout in room["capacity"] else room["capacity"]
+            for lay, cap in caps.items():
+                if not best or cap > best["capacity"]:
+                    best = {"room": room["label"], "layout": lay, "capacity": int(cap)}
+        if not best or int(mt["attendees"]) <= best["capacity"]:
+            return None
+        best["question"] = (f"whether to quote the {best['room']} for {best['capacity']} people or leave the meeting "
+                            f"room out (it seats {best['capacity']} in {best['layout']} layout, not {mt['attendees']})")
+        return best
 
     def _date_issue(self, req: dict) -> str | None:
         if not (req.get("arrival") and req.get("departure")):
@@ -883,6 +911,8 @@ class Engine:
             except (ValueError, TypeError, KeyError) as exc:
                 raise Refused(str(exc))
             d['third_party'] = candidate['third_party']
+            if d.get('requirements'):
+                self._refresh_missing(d)             # external meeting rooms settle a meeting too big for ours
             if command not in ('execution', 'payment_status'):
                 for v in d['versions']:
                     if v['status'] in ('draft', 'pending_approval', 'approved', 'sent'):

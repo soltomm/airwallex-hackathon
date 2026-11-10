@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from decimal import Decimal
 from datetime import date, timedelta
 
 from . import rules
@@ -28,6 +29,22 @@ MAX_TOOL_CALLS = 24
 def _day(iso: str) -> str:
     x = date.fromisoformat(iso)
     return f"{x.day} {x:%B %Y}"
+
+
+def _gbp_budget(req: dict) -> int | None:
+    """The buyer's budget in pence when it is in GBP (the currency the hotel prices in); None otherwise."""
+    if req.get("budget_total") and (req.get("budget_currency") or "GBP") == "GBP":
+        return int(req["budget_total"])
+    return None
+
+
+def budget_text(req: dict) -> str:
+    cur = req.get("budget_currency") or "GBP"
+    if cur == "GBP":
+        return gbp(req["budget_total"])
+    whole, cents = divmod(int(req["budget_total"]), 100)
+    sym = {"USD": "$", "EUR": "€"}.get(cur, "")
+    return f"{sym}{whole:,}" + (f".{cents:02d}" if cents else "") + f" ({cur})"
 
 
 def _and(items: list[str]) -> str:
@@ -473,7 +490,7 @@ class RulesSeller:
                                                      "nights": sorted(n for n in want if free[n] < want[n]),
                                                      "by_night": {n: max(0, free[n]) for n in want}})
         # Price only once the rooms are known to fit, so a budget concession is sized on the block actually quoted.
-        if req.get("budget_total") and p["pricing"]["total"] > req["budget_total"]:
+        if _gbp_budget(req) and p["pricing"]["total"] > _gbp_budget(req):
             floor = e.price_terms(deal_id, bands["autonomous_floor"], dep, att)
             if not _margin_short(floor):        # on busy dates the floor can cost too much displacement
                 rate, p = bands["autonomous_floor"], floor
@@ -495,8 +512,12 @@ class RulesSeller:
             return f"{d['ref']}: handed off (margin on these dates)"
         pr = p["pricing"]
         target = req.get("target_per_room_night")
-        if req.get("budget_total") and pr["total"] > req["budget_total"]:
+        if _gbp_budget(req) and pr["total"] > _gbp_budget(req):
             unmet.append(f"total {gbp(pr['total'])} is above your {gbp(req['budget_total'])} budget")
+        elif req.get("budget_total") and not _gbp_budget(req):
+            # No exchange rate is used to compare: a converted figure would be a guess presented as a fact.
+            unmet.append(f"your budget is {budget_text(req)}; this offer is priced in GBP, so please check it "
+                         "against your budget at your exchange rate")
         if target and pr["per_room_night_incl_breakfast"] > target:
             unmet.append(f"{gbp(pr['per_room_night_incl_breakfast'])} per room-night including breakfast is "
                          f"{gbp(pr['per_room_night_incl_breakfast'] - target)} above your {gbp(target)} target, but the "
@@ -611,7 +632,8 @@ class RulesSeller:
         if req.get("target_per_room_night"):
             parts.append(f"vs target {gbp(req['target_per_room_night'])}")
         if req.get("budget_total"):
-            parts.append(f"total {gbp(pr['total'])} vs budget {gbp(req['budget_total'])}")
+            parts.append(f"total {gbp(pr['total'])} vs budget {budget_text(req)}"
+                         + ("" if _gbp_budget(req) else " (not compared: different currency)"))
         return "; ".join(parts)
 
     def _offer_message(self, d, p, unmet, short=False) -> str:
@@ -645,6 +667,20 @@ class RulesSeller:
             mt = {k: got["meeting"][k] for k in ("date", "layout", "attendees", "hours") if got["meeting"].get(k)}
             if mt:
                 out["meeting"] = mt
+        # The answer to "quote the room for 32 people or leave it out?" (asked when the meeting is too big).
+        asked = next((x.get("questions") or [] for x in reversed(d["thread"]) if x["from"] == "seller"), [])
+        size_q = next((q for q in asked if q.startswith("whether to quote the ")), None)
+        cap = re.search(r" for (\d+) people", size_q or "")
+        if size_q and cap:
+            low = text.lower()
+            if re.search(r"\b(?:without|leave (?:it|the meeting room|the room) out|no meeting room|skip the "
+                         r"meeting room|don'?t need (?:a|the) meeting room|drop the meeting room)\b", low):
+                out.pop("meeting", None)
+                out["meeting_declined"] = True
+            elif (re.search(r"\b" + cap.group(1) + r"\b", low)
+                  or re.search(r"\b(?:yes|ok|okay|fine|go ahead|that works|quote it|smaller room)\b", low)
+                  and len(asked) == 1):
+                out["meeting"] = {**out.get("meeting", {}), "attendees": int(cap.group(1))}
         return out
 
     @staticmethod
@@ -777,7 +813,11 @@ TOOLS = [
              "meeting": {"type": "object", "additionalProperties": False, "description": "omit if no meeting room is wanted",
                          "properties": {"attendees": _I, "date": _S, "hours": {"type": "string", "description": "HH:MM-HH:MM"},
                                         "layout": _S}},
-             "budget_total_gbp": {"type": "number"}, "budget_includes_taxes": {"type": "boolean"},
+             "budget_total_gbp": {"type": "number", "description": "only for a budget stated in GBP"},
+             "budget_total": {"type": "number", "description": "a budget stated in another currency, in that "
+                              "currency's major units (20000 for $20,000); never convert it"},
+             "budget_currency": {"type": "string", "description": "ISO code of the budget as written, e.g. GBP, USD"},
+             "budget_includes_taxes": {"type": "boolean"},
              "target_per_room_night_gbp": {"type": "number"},
              "target_includes_breakfast": {"type": "boolean"}, "payer": {"type": "string", "description": "legal entity"},
              "reply_by": {"type": "string", "description": "ISO datetime of the buyer's deadline"},
@@ -857,9 +897,13 @@ class ClaudeSeller:
         if name == "record_requirements":
             r = dict(a["requirements"])
             if r.get("budget_total_gbp") is not None:
-                r["budget_total"] = int(round(r.pop("budget_total_gbp") * 100))
+                r["budget_total"] = int(round(Decimal(str(r.pop("budget_total_gbp"))) * 100))
+                r["budget_currency"] = "GBP"
             else:
                 r.pop("budget_total_gbp", None)
+                if r.get("budget_total") is not None:
+                    r["budget_total"] = int(round(Decimal(str(r["budget_total"])) * 100))
+                    r["budget_currency"] = str(r.get("budget_currency") or "").upper() or None
             if r.get("target_per_room_night_gbp") is not None:
                 r["target_per_room_night"] = int(round(r.pop("target_per_room_night_gbp") * 100))
             else:
