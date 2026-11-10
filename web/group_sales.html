@@ -788,7 +788,8 @@ window.Harbour = {
   next: d => nextOf(d),
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
-  inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r.deal_id; },
+  // Resolves to {deal_id, duplicate, ref}: an email already received (same sender and text) opens its existing deal.
+  inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r; },
   // Generated inquiries (generator.py): the RFP plus its buyer's private brief; the agents do the rest.
   presets: () => api('/api/simulate/presets'),
   generate: async body => { const r = await api('/api/simulate/rfp', body); lastJSON = ''; await load(); return r; },
