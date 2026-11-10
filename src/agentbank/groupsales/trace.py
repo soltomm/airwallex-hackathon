@@ -16,6 +16,7 @@ from .engine import Refused, _iso
 
 # engine method -> tool name the dashboard shows (the Claude seller's own tool names)
 TOOLS = {
+    'vendor_workspace': 'vendor_workspace', 'request_vendor_quote': 'request_vendor_quote',
     "queue": "list_queue", "deal_view": "read_deal", "record_requirements": "record_requirements",
     "check_systems": "check_systems", "ask_buyer": "ask_buyer", "suggest_dates": "suggest_dates", "offer_dates": "offer_dates", "price_terms": "price_terms",
     "propose_offer": "propose_offer", "send_offer": "send_offer", "open_checkout": "open_checkout",
@@ -23,7 +24,7 @@ TOOLS = {
     "refund_excess": "refund_excess", "check_refund": "check_refund", "escalate": "escalate", "decline": "decline",
     "note": "log_reasoning",
 }
-READS = {"list_queue", "read_deal"}
+READS = {"list_queue", "read_deal", "vendor_workspace"}
 MAX_RUNS = 60
 _PENCE = {"rate", "budget_total", "target_per_room_night"}
 

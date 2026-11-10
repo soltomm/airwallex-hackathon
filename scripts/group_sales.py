@@ -30,10 +30,12 @@ from agentbank.config import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from agentbank.groupsales.buyer import BuyerAgent, act, suggest  # noqa: E402
+from agentbank.groupsales import generator  # noqa: E402
+from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
+from agentbank.groupsales import vendors  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.webhooks import signature_ok  # noqa: E402
@@ -106,10 +108,12 @@ class Runner:
                 self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
+                claude_buyer = HAS_CLAUDE and self.settings["seller_mode"] == "claude"
                 for d in list(engine.s["deals"].values()):
-                    if suggest(engine, d["id"]) is None:
+                    # Claude can also answer hotel questions the brief's drafts don't cover.
+                    if not (wants_reply(engine, d["id"]) if claude_buyer else suggest(engine, d["id"])):
                         continue
-                    if HAS_CLAUDE and self.settings["seller_mode"] == "claude":
+                    if claude_buyer:
                         BuyerAgent(engine).run(d["id"])
                     else:
                         try:
@@ -214,14 +218,18 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
             assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
-                      "/assets/openflow-demo.js": ("openflow-demo.js", "text/javascript"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
-                      "/assets/fx.js": ("fx.js", "text/javascript")}
+                      "/assets/fx.js": ("fx.js", "text/javascript"),
+                      "/assets/vendors.js": ("vendors.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
             if p == "/api/state":
                 return self._send(200, state())
+            if p == '/api/vendor_directory':
+                return self._send(200, vendors.directory())
+            if p.startswith('/api/deals/') and p.endswith('/vendors'):
+                return self._send(200, engine.vendor_workspace(p.split('/')[3]))
             if p.startswith("/api/buyer/") and p.endswith("/suggest"):
                 return self._send(200, {"suggestion": suggest(engine, p.split("/")[3])})
             if p.startswith("/inbox/"):
@@ -237,6 +245,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.hotel_account_view(check=q.get("check") == "1"))
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
+            if p == "/api/simulate/presets":
+                return self._send(200, {"presets": generator.PRESETS, "info": generator.PRESET_INFO,
+                                        "traits": generator.TRAITS, "defaults": generator.DEFAULTS,
+                                        "buyer_mode": runner.settings["buyer_mode"]})
             if p == "/api/fx/countries":
                 return self._send(200, fx.directory())
             if p.startswith("/pay/"):
@@ -263,6 +275,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._webhook(raw)
             if p == "/api/reset":
                 return self._send(200, engine.reset())
+            if p.startswith('/api/deals/') and p.endswith('/vendors'):
+                did = p.split('/')[3]
+                if b.get('command') == 'propose':
+                    if not vendors.workspace(engine.deal(did))['enabled']:
+                        raise Refused('Enable third-party management first.')
+                    rt = (engine.deal(did).get('requirements') or {}).get('room_type') or 'king'
+                    return self._send(200, engine.propose_offer(did, engine.rms['rates'][rt]['target'],
+                        engine.policy['deposit']['standard_pct'], engine.policy['attrition']['standard_pct'],
+                        'Master proposal including confirmed third-party services. External service charges are guaranteed and excluded from automatic hotel-room attrition.', actor='hotel staff'))
+                return self._send(200, engine.vendor_action(did, b.get('command'), b.get('payload') or {}))
             if p == "/api/rules":
                 return self._send(200, engine.update_rules(b.get("changes") or {}, actor="hotel manager"))
             if p == "/api/rules/reset":
@@ -309,6 +331,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/notifications/release":
                 return self._send(200, engine.release_notifications())
+            if p == "/api/simulate/rfp":
+                # A generated inquiry: the RFP email plus its buyer's private brief. The seller and buyer agents
+                # take it from there; nothing else in the deal is simulated.
+                gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
+                                         seed=b.get("seed"))
+                return self._send(200, generator.send(engine, gen))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})

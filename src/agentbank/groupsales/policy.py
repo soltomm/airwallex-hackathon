@@ -25,6 +25,9 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     hard: list[str] = []
     needs: list[str] = []
     rules: list[dict] = []
+    if terms.get('vendor_lines'):
+        needs.append('Third-party master package requires hotel manager approval')
+        rules.append(rule("Third-party services", "hotel services only", "a master package with outside vendors"))
     rt = terms.get("room_type")
     if rt not in rms["rates"]:
         return {"hard": [f"unknown room type {rt!r}"], "approvals": [], "rules": [], "ok": False}

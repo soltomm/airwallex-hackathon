@@ -45,6 +45,13 @@ def _span(a: str, b: str) -> str:
     return f"{x.day} {x:%B} to {y.day} {y:%B %Y}"
 
 
+AVAILABILITY_CHANGED = ("Thank you for your reply. Availability on your dates has changed since our last offer, so we "
+                        "can't confirm revised terms right away. A member of our group sales team will contact you "
+                        "directly with what we can offer.\n\nGroup Sales, Harbour House")
+WAITING_FOR_PERSON = ("Thank you for your message. We can't answer it automatically, so a member of our group sales "
+                      "team will reply to you directly.\n\nGroup Sales, Harbour House")
+
+
 def _latest_buyer_msg(d: dict) -> dict | None:
     for m in reversed(d["thread"]):
         if m["from"] == "buyer":
@@ -99,12 +106,37 @@ class RulesSeller:
                 raw.note(pick["deal_id"], f"Engine refused: {err}")
                 raw.deal_view(pick["deal_id"], mark_read=True)
                 refused.add(pick["deal_id"])
+                if self._buyer_waiting(pick["deal_id"]):
+                    # Never leave the buyer's message unanswered: a person takes it, and the buyer is told so.
+                    self.e.escalate(pick["deal_id"], f"seller could not answer the buyer's latest message: {err}",
+                                    message=WAITING_FOR_PERSON)
+                    msg += " (escalated)"
                 done.append(msg)
                 continue
             done.append(msg)
             if self._fingerprint(pick["deal_id"]) == before:
                 break   # no progress: stop rather than loop
         return done
+
+    def _buyer_waiting(self, deal_id) -> bool:
+        """The buyer wrote last while we negotiate, so someone owes them a written reply. Later stages (checkout,
+        payments, refunds) have their own recovery: a paused seller waits for staff to retry."""
+        d = self.e.deal(deal_id)
+        return (bool(d["thread"]) and d["thread"][-1]["from"] == "buyer" and not d.get("seller_paused")
+                and d["status"] in ("intake", "needs_info", "dates_proposed", "offer_sent",
+                                    "acceptance_pending_organizer", "expired"))
+
+    def _holdable(self, d: dict, room_type: str, nights) -> int:
+        """Rooms of this type the deal could hold on every one of these nights now, counting its own active hold."""
+        e = self.e
+        own = e.s["holds"].get(d.get("hold_id") or "")
+        own = own if own and own["status"] == "active" and own["room_type"] == room_type else None
+        free = []
+        for n in nights:
+            if e.inventory_at(n) is None:
+                return 0
+            free.append(e._available(n, room_type) + (own["rooms"].get(n, 0) if own else 0))
+        return max(0, min(free, default=0))
 
     def _fingerprint(self, deal_id):
         d = self.e.deal(deal_id)
@@ -414,31 +446,75 @@ class RulesSeller:
         elif dep < e.policy["deposit"]["standard_pct"]:
             dep = e.policy["deposit"]["standard_pct"]
             why.append(f"our standard deposit is {dep}% for new accounts")
-        p = e.price_terms(deal_id, rate, dep, att)
+        fit = self._fit(deal_id, cur, rate, dep, att)
+        if not fit:
+            return self._cannot_requote(deal_id, "the offered package can no longer be held (rooms, meeting space "
+                                                 "or breakfast capacity)", AVAILABILITY_CHANGED)
+        rooms, unmet, p = fit
         if _margin_short(p) and (rate != t["rate"] or att > e.policy["attrition"]["standard_pct"]):
             # Busy dates: displacement leaves no room for this concession. Keep the current rate and offer
             # the standard release instead of asking for something the backend would refuse.
             rate, att = t["rate"], e.policy["attrition"]["standard_pct"]
             dep = max(e.policy["deposit"]["standard_pct"], min(dep, e.policy["deposit"]["max_pct"]))
             why = [f"demand on your dates is high, so the most we can release free is {att}%, at the {gbp(rate)} rate"]
-            p = e.price_terms(deal_id, rate, dep, att)
+            p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
         pr = p["pricing"]
         msg = (f"Thank you. We can offer {att}% attrition (up to {pr['attrition_allowance']} room-nights released without "
                f"penalty until {e.policy['attrition']['release_days_before_arrival']} days before arrival) in exchange for "
                f"a {dep}% deposit. " + " ".join(w[0].upper() + w[1:] + "." for w in why) + " "
-               + self._offer_message(d, p, [], short=True))
+               + self._offer_message(d, p, unmet, short=True))
         just = (f"Attendance uncertain; buyer asked for {ask.get('attrition_pct')}% attrition and a "
                 f"{ask.get('deposit_pct')}% deposit. Rate held at {gbp(rate)}; {dep}% deposit covers the extra flexibility; "
                 f"margin {pr['margin_full_release']['margin_pct']}% even if the full allowance is released.")
-        r = e.propose_offer(deal_id, rate, dep, att, msg, explanation="; ".join(why), justification=just)
+        try:
+            r = e.propose_offer(deal_id, rate, dep, att, msg, explanation="; ".join(why), justification=just,
+                                unmet=unmet, rooms_per_night=rooms)
+        except Refused as err:
+            return self._cannot_requote(deal_id, str(err), WAITING_FOR_PERSON)
         return f"{d['ref']}: counter v{r['version']} {r['status']}"
+
+    def _fit(self, deal_id: str, cur: dict, rate: int, dep: int, att: int):
+        """Price a re-quote of version `cur` on what can be held now: (rooms_per_night, unmet, price_terms) or None.
+
+        It keeps the rooms per night of the offer being answered (which may already be fewer than first asked).
+        If another deal has taken rooms since (our hold lapsed), it re-checks availability and offers what
+        is free on every night. The engine still checks the hold when the version is proposed."""
+        e = self.e
+        d = e.deal(deal_id)
+        t = cur["terms"]
+        rooms = min(t["rooms"].values())
+        unmet = [u for u in cur.get("unmet") or [] if u.startswith(("only ", "availability has changed"))]
+        p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
+        if p["fits_inventory"]:
+            return rooms, unmet, p
+        avail = self._holdable(d, t["room_type"], t["rooms"])
+        if not 0 < avail < rooms:
+            return None
+        p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=avail)
+        if not p["fits_inventory"]:
+            return None
+        return avail, [f"availability has changed since our last offer: only {avail} {t['room_type']} rooms per "
+                       f"night can now be held (requested {d['requirements'].get('rooms')})"], p
+
+    def _cannot_requote(self, deal_id: str, why: str, message: str) -> str:
+        """The buyer is waiting on a reply we can't price: hand it to a person and tell the buyer, never go quiet."""
+        d = self.e.deal(deal_id)
+        self.e.escalate(deal_id, f"cannot re-quote after the buyer's message: {why}", message=message)
+        return f"{d['ref']}: escalated (cannot re-quote)"
 
     def _requote_same(self, deal_id, v) -> str:
         t = v["terms"]
+        fit = self._fit(deal_id, v, t["rate"], t["deposit_pct"], t["attrition_pct"])
+        if not fit:
+            return self._cannot_requote(deal_id, "the lapsed package can no longer be held", AVAILABILITY_CHANGED)
+        rooms, unmet, p = fit
+        same = rooms == min(t["rooms"].values())
+        head = (f"Our previous offer lapsed after {self.e.policy['quote_validity_hours']} hours. We re-checked "
+                "availability and " + ("renew it on the same terms: " if same else
+                                       "renew it for the rooms we can hold now: "))
         r = self.e.propose_offer(deal_id, t["rate"], t["deposit_pct"], t["attrition_pct"],
-                                 f"Our previous offer lapsed after {self.e.policy['quote_validity_hours']} hours. We re-checked availability and renew it on "
-                                 "the same terms: " + self._offer_message(self.e.deal(deal_id), {"pricing": v["pricing"],
-                                                                                                 "terms": t}, [], short=True))
+                                 head + self._offer_message(self.e.deal(deal_id), p, unmet, short=True),
+                                 unmet=unmet, rooms_per_night=rooms)
         return f"renewed v{r['version']} {r['status']}"
 
     def _explain(self, req, pr) -> str:
@@ -562,7 +638,7 @@ def system_prompt(engine) -> str:
     return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario))
             .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
             .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
-                                 f"{engine.policy['min_days_before_arrival']} days ahead"))
+                                 f"{engine.policy['min_days_before_arrival']} days ahead") + "\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff to resolve them.")
 
 
 _I = {"type": "integer"}
@@ -578,6 +654,8 @@ def _tool(name, desc, props, required=None):
 
 _DEAL = {"deal_id": {"type": "string", "description": "deal id or ref, e.g. GS-1001"}}
 TOOLS = [
+    _tool('vendor_workspace', 'Read this inquiry’s internal third-party requests, quotes and readiness. Hotel-only costs; never disclose to the buyer.', _DEAL),
+    _tool('request_vendor_quote', 'Issue a simulated sub-RFP to a directory provider after hotel staff enable third-party management. Does not approve, confirm or pay a vendor.', {**_DEAL, 'vendor_id': _S, 'category': _S, 'title': _S, 'start': _S, 'end': _S, 'quantity': _I}, ['deal_id','vendor_id','category','title','start','end']),
     _tool("list_queue", "All inquiries with status, deadline, waiting-on and next step.", {}),
     _tool("read_deal", "Full deal: emails/thread, requirements, versions, approvals, records, finance. Marks new input read.", _DEAL),
     {"name": "record_requirements", "description": "Record structured requirements from the inquiry (merged into what "
@@ -586,6 +664,7 @@ TOOLS = [
          **_DEAL,
          "requirements": {"type": "object", "additionalProperties": False, "properties": {
              "room_type": {"type": "string", "enum": ["twin", "king"]}, "rooms": _I, "guests": _I,
+             "meeting_count": _I,
              "occupancy": {"type": "integer", "description": "guests per room"},
              "arrival": {"type": "string", "description": "YYYY-MM-DD"}, "departure": {"type": "string", "description": "YYYY-MM-DD"},
              "breakfast": {"type": "boolean"},
@@ -658,6 +737,13 @@ class ClaudeSeller:
     def _do(self, name: str, a: dict):
         e = self.e
         did = a.get("deal_id")
+        if name == 'vendor_workspace':
+            return e.vendor_workspace(did)
+        if name == 'request_vendor_quote':
+            required = {'deal_id', 'vendor_id', 'category', 'title', 'start', 'end'}
+            if not required.issubset(a) or set(a) - (required | {'quantity'}):
+                raise Refused('Supply deal_id, vendor_id, category, title, start and end for a vendor request.')
+            return e.request_vendor_quote(**a)
         if name == "list_queue":
             return e.queue()
         if name == "read_deal":
