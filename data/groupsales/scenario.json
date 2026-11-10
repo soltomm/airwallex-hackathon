@@ -46,10 +46,9 @@
     },
     "delivery_costs": {"twin": 7000, "king": 6000, "breakfast": 600, "meeting_day": 18000},
     "displacement": {
-      "_note": "Opportunity cost of blocking a room for a group: the contribution a transient guest would have paid, times the forecast chance that guest existed. Released rooms are partly resold.",
+      "_note": "Opportunity cost of blocking a room for a group: the contribution another guest would have paid, times that night's demand. Demand is the share of the group allocation other business has already taken (hotel.background_demand, the same calendar the availability page shows), except nights listed in demand_by_night_pct. Released rooms are partly resold.",
       "full_demand": {"twin": 8000, "king": 6000},
-      "demand_by_month_pct": [35, 50, 80, 85, 85, 90, 70, 65, 90, 90, 80, 40],
-      "demand_by_weekday_pct": [100, 100, 100, 100, 80, 70, 45],
+      "demand_by_night_pct": {"2027-03-10": 80, "2027-03-11": 80, "2027-03-12": 64},
       "resale_pct": 50
     },
     "min_contribution_margin_pct": 40

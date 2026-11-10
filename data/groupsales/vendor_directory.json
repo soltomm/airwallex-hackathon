@@ -1,0 +1,17 @@
+{
+  "simulated": true,
+  "note": "Fictional demonstration contacts. All delivery and provider confirmations are simulated; no messages are sent.",
+  "team": [
+    {"id":"revops","name":"Amelia Reed","role":"Revenue operations","email":"amelia.reed@harbour-house.example"},
+    {"id":"sales","name":"Oliver Shah","role":"Group sales","email":"oliver.shah@harbour-house.example"},
+    {"id":"operations","name":"Grace Morgan","role":"Hotel operations","email":"grace.morgan@harbour-house.example"},
+    {"id":"finance","name":"Theo Bennett","role":"Finance","email":"theo.bennett@harbour-house.example"}
+  ],
+  "providers": [
+    {"id":"riverside","name":"Riverside Conference Hotel","categories":["rooms","meeting"],"contact":"Alex Rivera","email":"groups@riverside.example","phone":"+44 20 7946 0101","capacity":{"rooms":120,"meeting":4},"location":"Next-door partner property"},
+    {"id":"cityspaces","name":"City Spaces","categories":["meeting"],"contact":"Morgan Ellis","email":"events@cityspaces.example","phone":"+44 20 7946 0102","capacity":{"meeting":8},"location":"Five-minute walk"},
+    {"id":"table","name":"Gather & Table","categories":["catering"],"contact":"Jamie Park","email":"quotes@gather-table.example","phone":"+44 20 7946 0103","capacity":{"catering":300},"location":"London"},
+    {"id":"sound","name":"Clear Sound AV","categories":["av","technician"],"contact":"Sam Lewis","email":"production@clear-sound.example","phone":"+44 20 7946 0104","capacity":{"av":20,"technician":8},"location":"London"},
+    {"id":"welcome","name":"Welcome Works","categories":["amenities"],"contact":"Casey Brooks","email":"events@welcome-works.example","phone":"+44 20 7946 0105","capacity":{"amenities":300},"location":"London"}
+  ]
+}

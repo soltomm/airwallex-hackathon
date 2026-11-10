@@ -10,6 +10,7 @@ deposit, an amendment and a partial refund. Read [README.md](README.md) and
 - `src/agentbank/groupsales/`: the product. `engine.py` enforces every rule (authority, versions,
   inventory, money, privacy); `calc.py` prices; `policy.py` holds authority and mandates;
   `seller.py` / `rules.py` are the sellers; `provider.py` talks to Airwallex (or its simulated twin).
+  `generator.py` writes generated inquiries (an RFP plus a private buyer brief) for automated runs.
 - `scripts/group_sales.py`: the server (dashboard, buyer mailbox, payment page, webhooks, API).
 - `web/group_sales.html` (hotel dashboard), `web/group_buyer.html` (buyer mailbox), `web/group_pay.html`.
 - `data/groupsales/scenario.json`: the hotel data, the two RFPs and the buyers' private mandates.

@@ -49,6 +49,7 @@ main { max-width: 780px; margin: 0 auto; padding: 18px 18px 60px; }
 .mail .hd .t { min-width: 0; flex: 1; } .mail .peek { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail .bd { padding: 0 14px 14px 54px; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .mail .bd { padding-left: 14px; } }
+.mail .qs { margin: 10px 0 0; padding-left: 22px; white-space: normal; } .mail .qs li { margin: 4px 0; }
 .mail:not(.open) .bd { display: none; } .mail.open .peek { display: none; }
 .att { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--sunk); white-space: normal; }
 .att .h { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; gap: 8px; }
@@ -114,9 +115,18 @@ const ver = n => V.versions.find(x => x.n === n);
 function attachment(v) {
   const p = v.pricing, t = v.terms;
   return `<div class="att"><div class="h"><span>${v.kind === 'amendment' ? 'Change' : 'Offer'} v${v.n}</span><span class="chip">${esc(v.status.replaceAll('_', ' '))}</span></div>
-    <table>${p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.qty} × ${gbp(l.unit)}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('')}
+    <table>${p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.unit == null ? `Bundled service · ${l.qty} units` : `${l.qty} × ${gbp(l.unit)}`}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('')}
     <tr class="tot"><td>Total</td><td class="r">${gbp(p.total)}</td></tr></table>
     <div class="facts"><span>Deposit <b>${t.deposit_pct}% · ${gbp(p.deposit)}</b></span><span>Free release <b>${t.attrition_pct}%</b></span>${v.expires_at && v.status === 'sent' ? `<span>Valid until <b>${when(v.expires_at)}</b></span>` : ''}</div></div>`;
+}
+// The seller's questions and date options travel as lists beside the email text; show them in the email.
+function asked(m) {
+  const qs = (m.questions || []).filter(q => q && String(q).trim()), ds = m.date_options || [];
+  const said = (m.text || '').toLowerCase();
+  let h = '';
+  if (qs.length && !qs.every(q => said.includes(String(q).trim().toLowerCase()))) h += `<ol class="qs">${qs.map(q => `<li>${esc(q)}</li>`).join('')}</ol>`;
+  if (ds.length) h += `<ol class="qs">${ds.map(o => `<li>${esc(span(o.arrival, o.departure))}</li>`).join('')}</ol>`;
+  return h;
 }
 function render() {
   const me = V.contact, hotelAddr = 'groups@harbourhouse.example';
@@ -131,7 +141,7 @@ function render() {
     const name = hotel ? V.hotel : me, addr = hotel ? hotelAddr : (V.sender || '').replace(/.*</, '').replace('>', '');
     return `<div class="mail ${hotel ? 'hotel' : 'me'}${open ? ' open' : ''}" data-id="${esc(m.id)}"><div class="hd"><span class="av">${esc(name[0] || '?')}</span>
       <div class="t"><span class="who">${esc(hotel ? name : name + ' (you)')}</span> <span class="addr">${esc(addr)}</span><div class="peek">${esc(m.text || '')}</div></div><span class="at">${when(m.at)}</span></div>
-      <div class="bd">${esc(m.text || '(no text)')}${v ? attachment(v) : ''}</div></div>`;
+      <div class="bd">${esc(m.text || '(no text)')}${asked(m)}${v ? attachment(v) : ''}</div></div>`;
   };
   const older = msgs.slice(0, Math.max(0, msgs.length - 4)), recent = msgs.slice(older.length);
   $('thread').innerHTML = (older.length ? `<details class="older"><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map((m, i) => mail(m, i)).join('')}</details>` : '')
