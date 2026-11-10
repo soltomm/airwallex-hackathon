@@ -137,6 +137,9 @@ class RulesSeller:
             e.deal_view(deal_id, mark_read=True)
             if res["out_of_scope"]:
                 e.escalate(deal_id, "service not offered: " + "; ".join(res["out_of_scope"]),
+                           why="The group desk only sells rooms, breakfast and the meeting room; anything else is for "
+                               "the sales team.",
+                           todo="Reply to the buyer about the other services, or hand it back to the seller without them.",
                            message="Thank you for your inquiry. Your request includes " + " and ".join(res["out_of_scope"])
                                    + ", which our group desk does not offer, so a member of our sales team will reply to "
                                      "you directly.\n\nGroup Sales, Harbour House")
@@ -147,7 +150,10 @@ class RulesSeller:
             # instruction, so it goes back to staff rather than stalling. The Claude seller follows the instruction.
             e.deal_view(deal_id, mark_read=True)
             e.escalate(deal_id, "still includes a service not offered (" + "; ".join(d["requirements"]["out_of_scope"])
-                       + "); the rules seller can't act on staff instructions")
+                       + "); the rules seller can't act on staff instructions",
+                       why="The rules seller can't follow free-text instructions, so it won't quote around a service "
+                           "it doesn't offer.",
+                       todo="Remove the service from the request, or answer the buyer directly.")
             return f"{ref}: back to staff"
         if st == "intake" and (d["requirements"] or {}).get("date_issue"):
             e.deal_view(deal_id, mark_read=True)
@@ -230,12 +236,17 @@ class RulesSeller:
                 n = p.get("rooms_per_night") or self._rooms_from_text(m["text"])
                 if not n:
                     e.note(deal_id, "Change request unclear; asking a person to follow up.")
-                    e.escalate(deal_id, "change request could not be interpreted")
+                    e.escalate(deal_id, "change request could not be interpreted",
+                               why="The seller doesn't guess how many rooms a buyer wants to release.",
+                               todo="Ask the buyer how many rooms a night to release; the seller picks up their reply.")
                     return f"{ref}: escalated change"
                 try:
                     r = e.prepare_reduction(deal_id, rooms_per_night=n, release=p.get("release"))
                 except Refused as err:
                     e.escalate(deal_id, f"change request cannot be applied as asked: {err}",
+                               why="The change doesn't fit the booking (for example more rooms than booked), so there "
+                                   "is nothing the contract can price.",
+                               todo="Talk to the buyer about what they need. The current booking stands.",
                                message="Thank you. We can't apply this change to your booking as requested, so a "
                                        "member of our team will contact you. Your current booking stays as agreed.")
                     return f"{ref}: escalated change ({err})"
@@ -251,7 +262,10 @@ class RulesSeller:
             if appr and appr[-1]["status"] == "rejected":
                 appr[-1]["handled"] = True
                 e.escalate(deal_id, f"manager withheld refund authorization; {gbp(d['finance']['refund_owed'])} still "
-                           "owed to the buyer under the accepted reduction")
+                           "owed to the buyer under the accepted reduction",
+                           why="The buyer is owed this money under the change they accepted, and the seller can't "
+                               "override your decision or leave it unpaid.",
+                           todo=f"Settle the {gbp(d['finance']['refund_owed'])} with the buyer.")
                 return f"{ref}: refund escalated"
             r = e.refund_excess(deal_id, justification="Reduction accepted before the first installment; the revised "
                                 "deposit on the new total is lower than receipts.")
@@ -287,7 +301,9 @@ class RulesSeller:
             best = max(sug["options"], key=lambda o: o["rooms_free"].get(rt, 0), default=None)
             n = best["rooms_free"].get(rt, 0) if best else 0
             if not n:
-                e.escalate(deal_id, f"no {rt} rooms free on any group date for {want} rooms a night")
+                e.escalate(deal_id, f"no {rt} rooms free on any group date for {want} rooms a night",
+                           why="The seller can only offer rooms that are free; no group date has any.",
+                           todo="Decide whether to free rooms for this group or decline the inquiry.")
                 return f"{ref}: no group availability, escalated"
             opts = [{"arrival": best["arrival"], "departure": best["departure"], "room_type": rt, "rooms_per_night": n}]
             body = (f"The most we can offer is {n} {rt} rooms a night, from "
@@ -361,7 +377,10 @@ class RulesSeller:
         short = _margin_short(p)
         if short:
             e.escalate(deal_id, "even the target rate is below the margin floor on these dates (" + "; ".join(short)
-                       + "): a revenue manager should decide whether to quote above target or decline")
+                       + "): a revenue manager should decide whether to quote above target or decline",
+                       why="The margin floor is a hard limit nobody can approve, and quoting above the buyer's target "
+                           "is a commercial call, not the seller's.",
+                       todo="Quote above the target, change the dates, or decline.")
             return f"{d['ref']}: handed off (margin on these dates)"
         pr = p["pricing"]
         target = req.get("target_per_room_night")
@@ -504,8 +523,12 @@ How to work:
   change them, and these are the current values):
 {RULES}
 - Negotiate in trades, not concessions: e.g. more attrition in exchange for a higher deposit. Keep the
-  rate where you can. When a version needs manager approval, give a concise justification; the engine
-  pauses until the manager decides. After approval, send_offer.
+  rate where you can. You never ask the manager for approval yourself: the engine does, and only when
+  a term crosses one of the rules above (it names the rule on the manager's card). Anything within
+  your authority goes straight to the buyer. When a version does need approval, give a concise
+  justification; the engine pauses until the manager decides. After approval, send_offer.
+- escalate hands a deal to a person when you can't take it further within the rules. Say which rule
+  or fact stops you (why_a_person) and what decision you need (what_a_person_should_do).
 - When the buyer accepts, open_checkout (the buyer pays on Airwallex's hosted page; you never see card
   data). Payments are verified by the back office.
 - After booking, a change request: prepare_reduction for the rooms released. The engine prices it from
@@ -606,8 +629,12 @@ TOOLS = [
     _tool("refund_excess", "Refund what the buyer is owed after an accepted reduction (asks the hotel manager above the seller's refund limit).", {
         **_DEAL, "justification": _S}),
     _tool("check_refund", "Retrieve the status of refunds already created for this deal.", _DEAL),
-    _tool("escalate", "Hand the deal to a person with a reason (and optional message to the buyer).", {
-        **_DEAL, "reason": _S, "message_to_buyer": _S}),
+    _tool("escalate", "Hand the deal to a person when you can't take it further within the hotel's rules. Not a "
+          "way to ask for approval: the engine asks the manager itself when a term needs it.", {
+        **_DEAL, "reason": _S, "message_to_buyer": _S,
+        "why_a_person": {"type": "string", "description": "the rule or fact that stops you, in one sentence"},
+        "what_a_person_should_do": {"type": "string", "description": "the decision or action you need, in one sentence"}},
+          required=["deal_id", "reason", "message_to_buyer", "why_a_person", "what_a_person_should_do"]),
     _tool("log_reasoning", "Record a short note on the dashboard explaining a decision.", {
         "deal_id": {"type": ["string", "null"]}, "note": _S}),
 ]
@@ -688,7 +715,8 @@ class ClaudeSeller:
         if name == "check_refund":
             return e.check_refund(did)
         if name == "escalate":
-            return e.escalate(did, a["reason"], a.get("message_to_buyer", ""))
+            return e.escalate(did, a["reason"], a.get("message_to_buyer", ""), why=a.get("why_a_person", ""),
+                              todo=a.get("what_a_person_should_do", ""))
         if name == "log_reasoning":
             e.note(did, a["note"])
             return {"ok": True}

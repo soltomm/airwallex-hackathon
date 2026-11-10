@@ -299,6 +299,7 @@ function whyCard(a, alone = 'Seller alone') {
   if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}</dl>`;
   return h;
 }
+const handoffWhy = ho => (ho.why || ho.todo) ? `<dl class="kv small outcomes">${ho.why ? `<dt>Why a person</dt><dd>${esc(ho.why)}</dd>` : ''}${ho.todo ? `<dt>What to do</dt><dd>${esc(ho.todo)}</dd>` : ''}</dl>` : '';
 const sentences = list => (list || []).map(x => cap(x).replace(/[.;]+$/, '')).filter(Boolean).map(x => x + '.').join(' ');
 const typing = () => { const a = document.activeElement; return a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.closest('#deal'); };
 
@@ -355,8 +356,8 @@ function nextOf(d) {
     title: `${co}'s organizer is signing off v${ap.version}`,
     text: "The buyer accepted, but outside what its contact can agree alone. The seller opens checkout once the organizer authorizes it."};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
-    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
-      staff: st === 'handoff' && !d.booking};
+    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
+      staff: st === 'handoff' && !d.booking, handoff: d.handoff};
   if (st === 'dates_proposed') return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
     title: `The seller offered ${co} other dates`, text: 'The requested dates are not available. The seller quotes as soon as the buyer picks one of the dates offered.'};
   if (st === 'awaiting_payment') return {cls: 'buyer', short: 'Buyer to pay', who: 'Waiting for the buyer', mail: true, chkPay: true,
@@ -364,6 +365,10 @@ function nextOf(d) {
     text: "They pay on Airwallex's hosted page from the link the seller sent. The booking confirms once the payment is verified with Airwallex."};
   if (st === 'refund_pending') return {cls: 'wait', short: 'Refund confirming', who: 'Airwallex', refund: true};
   if (SELLER_TURN.includes(st) || d.unread) return {cls: 'wait', short: busy ? 'Seller working' : 'Seller up next', who: 'Seller agent', seller: true};
+  // A booked deal stays confirmed when the seller hands something to a person (e.g. a change it can't
+  // apply): show that hand-off until the buyer writes again.
+  if (st === 'confirmed' && d.handoff && !d.thread.some(m => m.from === 'buyer' && m.at > d.handoff.at))
+    return {cls: 'bad', short: 'With hotel staff', who: 'Booked · handed to a person · not an approval', confirmed: true, handoff: d.handoff};
   if (st === 'confirmed') return {cls: 'done', short: 'Booked', who: 'Booking confirmed', confirmed: true};
   if (['needs_info', 'offer_sent', 'amendment_sent', 'expired'].includes(st)) return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
     title: st === 'needs_info' ? `The seller asked ${co} some questions` : st === 'expired' ? 'The offer lapsed'
@@ -405,10 +410,13 @@ function nextCard(d) {
   } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
     h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
+    if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
     if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
     h += mailLink(d);
   } else {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
+    // A hand-off isn't a request to approve something: say what stops the seller and what's needed.
+    if (n.handoff) h += handoffWhy(n.handoff);
     if (n.chkPay) h += `<div class="row"><button data-act="chkPay">Check the payment with Airwallex</button></div>`;
     if (n.mail) h += mailLink(d);
     if (n.staff) h += `<label class="small" for="instr" style="display:block;margin-top:10px">Instruction for the seller (optional)</label>
@@ -417,7 +425,7 @@ function nextCard(d) {
       <p class="small muted" style="margin:6px 0 0">The seller replies to the buyer. Closing sends nothing.</p>`;
   }
   // A hand-off card already says what the seller's last action said: don't repeat it underneath.
-  const ls = lastStep(d), dup = n.staff !== undefined && d.handoff && ls && ls.tool === 'escalate';
+  const ls = lastStep(d), dup = (n.staff !== undefined || n.handoff) && d.handoff && ls && ls.tool === 'escalate';
   return h + (dup ? '' : lastLine(d)) + '</div>';
 }
 

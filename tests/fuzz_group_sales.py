@@ -177,7 +177,7 @@ class ChaosSeller:
         if name == "refund_excess":
             return {**a, "justification": "owed"}
         if name == "escalate":
-            return {**a, "reason": "chaos", "message_to_buyer": ""}
+            return {**a, "reason": "chaos", "message_to_buyer": "", "why_a_person": "", "what_a_person_should_do": ""}
         if name == "log_reasoning":
             return {"deal_id": None, "note": "thinking"}
         return a
@@ -495,6 +495,27 @@ def check(e: Engine, provider: SimulatedProvider):
     for h in s["holds"].values():
         if h["status"] == "active" and h["expires_at"] <= now:
             _fail(f"hold {h['id']} still active after it expired")
+
+    # The hotel manager is only ever asked when a seller rule is crossed, and the card names that rule.
+    for a in s["approvals"].values():
+        if a["approver"] != "hotel_manager":
+            continue
+        d = s["deals"][a["deal_id"]]
+        if not a.get("rules") or not a.get("if_approved") or not a.get("if_rejected"):
+            _fail(f"{d['ref']} approval {a['id']} ({a['subject']}) doesn't name the rule it crosses or its outcomes")
+        if a["subject"] == "offer":
+            v = next(x for x in d["versions"] if x["n"] == a["version"])
+            if a["rules"] != hotel_check(v["terms"], v["pricing"], scen)["rules"]:
+                _fail(f"{d['ref']} v{v['n']}: approval rules {a['rules']} are not the rules its terms cross")
+        elif a["subject"] == "refund":
+            if not a["cumulative"] > a["limit"]:
+                _fail(f"{d['ref']} refund approval {a['id']} requested within the seller's {gbp(a['limit'])} limit")
+        elif a["subject"] == "reduction":
+            v = next(x for x in d["versions"] if x["n"] == a["version"])
+            if not v["reduction"]["waived"] or a["amount"] != v["reduction"]["waived"]:
+                _fail(f"{d['ref']} v{v['n']}: change sent for approval without a waiver")
+        else:
+            _fail(f"{d['ref']} approval {a['id']}: unexpected hotel-manager subject {a['subject']}")
 
     for d in s["deals"].values():
         if d["status"] not in STATUSES:

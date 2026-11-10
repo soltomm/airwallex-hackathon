@@ -254,6 +254,41 @@ def test_a_waiver_approval_says_what_keeping_the_charge_means(eng):
     assert "full £440 charge" in a["if_rejected"] and "£7,840" in a["if_approved"]
 
 
+def test_the_manager_is_never_asked_unless_a_seller_rule_is_crossed(eng):
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    n = deal_by(e, "Northstar")
+    buyer_turn(e, "Northstar")                                      # answers
+    s.run()
+    # Standard terms (rate at the floor, 30% deposit, 10% attrition) go straight to the buyer.
+    r = e.propose_offer(n["id"], 22000, 30, 10, "Our offer.")
+    assert r["status"] == "sent" and not any(a["approver"] == "hotel_manager" for a in e.s["approvals"].values())
+    # A manager request that names no crossed rule is refused rather than shown as an unexplained card.
+    with pytest.raises(Refused, match="no seller rule is crossed"):
+        e._request_approval(n, "hotel_manager", "offer", "please look", ["just checking"], version=r["version"])
+    # A crossed rule is named on the card, with what the seller could agree alone.
+    r = e.propose_offer(n["id"], 20500, 40, 10, "Our offer.")
+    a = e.s["approvals"][r["approval_id"]]
+    assert a["rules"] == [{"rule": "Twin rate", "alone": "£210 or more", "asked": "£205"}]
+
+
+def test_every_handoff_says_why_a_person_and_what_to_do(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    e.provider.knobs["fail_next_refund"] = True
+    appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    s.run()
+    h = n["handoff"]
+    assert n["status"] == "refund_failed" and "never retries" in h["why"] and "£528" in h["todo"]
+
+
 def test_full_story(eng):
     e = eng
     s, n = run_to_confirmed(e)
@@ -1442,6 +1477,7 @@ def test_change_request_beyond_the_booking_is_handed_to_a_person(eng):
     e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please drop 99 rooms a night.", {"rooms_per_night": 99})
     s.run()                                                          # no crash
     assert n["handoff"] and "cannot be applied" in n["handoff"]["reason"]
+    assert n["handoff"]["why"] and n["handoff"]["todo"]                 # says why a person, and what to do
     assert n["status"] == "confirmed" and n["booking"]["rooms"] == {night: 12 for night in MARCH}
     assert n["thread"][-1]["from"] == "seller" and "current booking stays as agreed" in n["thread"][-1]["text"]
     assert not n["unread"]                                            # the next run does not trip on it again
