@@ -26,9 +26,7 @@ jobs:
           PAYMENTS: simulated
           SELLER_MODE: rules
         run: python -m pytest tests -q
-      - name: Simulator state transitions and frontend syntax
+      - name: Frontend syntax
         run: |
-          node --test tests/test_openflow_demo.cjs
           node --check web/openflow.js
-          node --check web/openflow-demo.js
           node --check web/fx.js

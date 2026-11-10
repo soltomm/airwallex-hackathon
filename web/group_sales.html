@@ -200,7 +200,6 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
     <button id="wbAccount">Hotel payout account ↗</button>
-    <button id="wbReset">↻ Reset simulator</button>
   </details>
 </aside>
 <div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
@@ -210,7 +209,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
 </main>
-<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">INBOUND SIMULATOR</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
+<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">NEW INQUIRY</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
 <dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
 <dialog id="fxDirectory" class="wb-drawer" aria-labelledby="fxDirectoryTitle"><div class="wb-drawer-head"><span>SELLER RULES · CURRENCY POLICY</span><button class="wb-close" aria-label="Close currency directory" data-wb-close>×</button></div><div class="wb-drawer-body" id="fxDirectoryBody"></div></dialog>
 <dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
@@ -811,6 +810,10 @@ window.Harbour = {
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
   inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r.deal_id; },
+  // Generated inquiries (generator.py): the RFP plus its buyer's private brief; the agents do the rest.
+  presets: () => api('/api/simulate/presets'),
+  generate: async body => { const r = await api('/api/simulate/rfp', body); lastJSON = ''; await load(); return r; },
+  setBuyerMode: async mode => { await api('/api/settings', {buyer_mode: mode}); lastJSON = ''; await load(); },
 };
 // ---- the hotel's Airwallex connected account (Payments for Platforms) -------------------------------
 const ONBOARD = {starting: 'Starting', account_created: 'Account created', submitted: 'Submitted for verification',
@@ -843,7 +846,6 @@ $('wbAccount').onclick = () => { $('acctDrawer').showModal(); renderAccount(true
 $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
-<script src="/assets/openflow-demo.js"></script>
 <script src="/assets/fx.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>

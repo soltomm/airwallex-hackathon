@@ -17,31 +17,36 @@ static assets use explicit authenticated routes, not a directory-serving route.
 
 ## New inquiries
 
-**＋ New inquiry** sends a real inquiry to Harbour House (`POST /api/inbox`, the same intake as an
-email), so the seller agent works it with the real rules: it checks rooms and rates, asks for anything
-missing, quotes, asks the hotel manager only when a seller rule would be exceeded, and takes the deposit
-through Airwallex like any other deal. The drawer offers two samples (a corporate offsite by email, a
-wedding block from a phone transcript), each with a choice of asking for rooms that are free or for more
-rooms than are free (the agent then offers what it has), and a form to write your own: from, subject and
-the inquiry text. Harbour House sells twin and king rooms, breakfast and the Thames Room for stays
-10–13 March 2027; anything else is handed to hotel staff.
+**＋ New inquiry** sends a real inquiry to Harbour House, so the seller agent works it with the real rules: it
+checks rooms and rates, asks for anything missing, quotes, asks the hotel manager only when a seller rule would
+be exceeded, and takes the deposit through Airwallex like any other deal. The drawer offers:
 
-Inquiries created by the earlier browser-only simulator (stored under `openflow-harbour-demo-v1` in
-localStorage) still display, labelled as simulated, and **Reset simulator** removes them. No new ones
-are created.
+- **Generated inquiries** (`POST /api/simulate/rfp`, see `src/agentbank/groupsales/generator.py`): one card
+  per preset, or traits chosen by hand (dates, price pressure, the buyer's deposit limit, attrition, room
+  type, payer country, a later reduction, a meeting room, details left out of the RFP). Each inquiry comes
+  with a private brief for the buyer agent; the seller never sees it. An optional seed replays the same
+  inquiry against the same calendar, for example after a reset.
+- **Buyer replies**: automatically (the buyer agent answers for every buyer with a brief) or by you in the
+  buyer's mailbox. This is the server's buyer mode, the same setting as in Demo controls. Approvals and
+  paying the deposit always stay with a person.
+- **Write your own**: a real, unscripted RFP (`POST /api/inbox`, the same intake as an email). It has no
+  brief, so nobody answers for the buyer automatically.
+
+Generated rows show their preset and seed under the company name. The earlier browser-only simulator
+(its fixtures, fake approvals and deposits) has been removed: everything on the workbench comes from the
+engine.
 
 ## Summary definitions
 
-- Open pipeline: latest proposal totals of active connected inquiries plus active
-  simulator drafts/proposals. Unquoted inquiries contribute zero value.
+- Open pipeline: latest proposal totals of active inquiries. Unquoted inquiries
+  contribute zero value.
 - Group room nights: active and confirmed blocks, excluding declined/expired live
   inquiries. Each occupied room-night counts once.
-- New inquiries: connected inquiries in intake/needs-info and simulator drafts or
-  alternative-date review. The adjacent review badge counts items needing hotel
+- New inquiries: inquiries in intake/needs-info, or handed to staff. The adjacent
+  review badge counts items needing hotel
   action; an inquiry waiting for buyer details can be new without needing action.
-- Deposits collected: connected net receipts plus simulated deposits. The Payments
-  view identifies each source and distinguishes browser fixtures from Harbour's
-  simulated provider and Airwallex sandbox.
+- Deposits collected: net receipts (after refunds). The Payments view shows whether
+  they came through Harbour's simulated provider or the Airwallex sandbox.
 
 ## Validation
 
@@ -51,9 +56,8 @@ From the repository root:
 python3 -m venv .venv
 .venv/bin/pip install -e '.[agent]' pytest
 PYTHONPATH=src .venv/bin/python -m pytest tests -q
-node --test tests/test_openflow_demo.cjs
 node --check web/openflow.js
-node --check web/openflow-demo.js
+node --check web/fx.js
 ```
 
 The GitHub **Group sales** workflow runs these offline checks on pull requests
@@ -78,12 +82,12 @@ never point it at a deployed dashboard. The default target is port 8011;
 `OPENFLOW_TEST_URL` overrides it. `CHROMIUM_PATH` can select a system browser;
 otherwise the test uses `/usr/bin/chromium` if present, then Playwright's browser.
 
-The browser test exercises connected detail/rules, both deterministic simulator
-paths, changed-terms reapproval, decline reasons, customer acceptance, deposits,
-handoff, filters, search through polling, payment-source labels, local persistence,
-manager links, drawer keyboard focus and mobile layout. It also verifies that
-simulator actions make no API writes. Screenshots are saved below; the before
-image is rendered from `origin/main` on the same isolated backend.
+The browser test exercises connected detail/rules, the New inquiry drawer (presets loaded from the
+server, a seeded preset, a replayed seed being refused, traits chosen by hand, the buyer-mode switch and
+writing your own), search through polling, filters, payment-source labels, drawer keyboard focus and mobile
+layout. It checks that the workbench only writes through `/api/simulate/rfp`, `/api/inbox` and
+`/api/settings`. Screenshots are saved below; the before image is rendered from `origin/main` on the same
+isolated backend.
 
 ## Screenshots and reference limits
 
@@ -99,9 +103,7 @@ omitted.
 | --- | --- |
 | ![Original Harbour dashboard](screenshots/openflow/before.png) | ![OpenFlow overview](screenshots/openflow/overview.png) |
 
-![Inbound simulator](screenshots/openflow/simulator.png)
-![Unavailable dates and alternative calendar](screenshots/openflow/unavailable.png)
-![Editable proposal](screenshots/openflow/proposal.png)
+![New inquiry drawer](screenshots/openflow/simulator.png)
 
 Mobile: [overview](screenshots/openflow/mobile.png) ·
-[simulator](screenshots/openflow/mobile-simulator.png).
+[new inquiry](screenshots/openflow/mobile-simulator.png).

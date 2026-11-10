@@ -14,7 +14,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  const page=await context.newPage(), errors=[], posts=[];
  const shot=(name,fullPage=true)=>page.screenshot({path:path.join(screenshots,name),fullPage,style:'.toast, .wb-feedback { visibility:hidden; }'});
  page.on('pageerror',e=>errors.push(e.message));
- page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
+ page.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname);});
  const before=execFileSync('git',['show','origin/main:web/group_sales.html'],{cwd:path.resolve(__dirname,'../..'),encoding:'utf8'});
  await page.route(base+'/',r=>r.fulfill({status:200,contentType:'text/html',body:before}));
  await page.goto(base);
@@ -33,71 +33,60 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.keyboard.press('Escape');
  await page.locator('#wbRules').click();await page.getByText('Seller rules',{exact:true}).last().waitFor();
  await page.getByRole('button',{name:'Overview',exact:true}).click();
- // Deterministic available path, starting with keyboard-only drawer opening.
+ // New inquiry opens by keyboard, lists every preset from the server and offers the buyer-mode switch.
  await page.locator('#wbSimulate').focus();await page.keyboard.press('Enter');
- assert.equal(await page.locator('#wbDrawerTitle').evaluate(el=>el===document.activeElement),true);
- await page.locator('#wbScenario').selectOption('available');
- await page.getByRole('button',{name:/Receive an email RFP/}).click();
- assert.match(await page.locator('#wbDrawerBody').innerText(),/every occupied night has sufficient inventory/);
- await shot('proposal.png',false);
- await page.locator('#wbManager').selectOption('General manager');
- await page.getByRole('button',{name:'Send link · simulated'}).click();
- const reviewLink=await page.locator('.wb-link').getAttribute('href');
- await page.getByRole('button',{name:'Open manager review'}).click();
- await page.getByRole('button',{name:'Decline / request revision'}).click();
- assert.match(await page.locator('#wbDrawer .wb-feedback').innerText(),/reason/);
- await page.getByRole('button',{name:'Approve exact terms'}).click();
- await page.getByRole('button',{name:'Simulate acceptance + 30% deposit'}).waitFor();
- // Unsaved edits cannot slip through approved terms.
- await page.locator('[name=rate]').fill('240');
- await page.getByRole('button',{name:'Simulate acceptance + 30% deposit'}).click();
- assert.equal(await page.getByRole('button',{name:'Simulate acceptance + 30% deposit'}).count(),0);
- await page.getByRole('button',{name:'Send link · simulated'}).click();
- await page.getByRole('button',{name:'Open manager review'}).click();
- await page.locator('#wbReason').fill('Please use the original room rate.');
- await page.getByRole('button',{name:'Decline / request revision'}).click();
- assert.match(await page.locator('#wbDrawerBody').innerText(),/Please use the original room rate/);
- await page.locator('[name=rate]').fill('220');
- await page.getByRole('button',{name:'Save revised terms'}).click();
- await page.getByRole('button',{name:'Send link · simulated'}).click();
- await page.locator('.wb-link').click();
- await page.getByRole('button',{name:'Approve exact terms'}).click();
- await page.getByRole('button',{name:'Simulate acceptance + 30% deposit'}).click();
- assert.match(await page.locator('#wbDrawerBody').innerText(),/Operations handoff/);
- assert.match(await page.locator('#wbDrawerBody').innerText(),/£2,718/);
- await page.keyboard.press('Escape');
- // Deterministic unavailable path, phone transcript, full-stay calendar, reply review.
- await page.locator('#wbSimulate').click();await page.locator('#wbScenario').selectOption('unavailable');
+ await page.waitForFunction(()=>document.activeElement?.id==='wbDrawerTitle',null,{timeout:2000});
+ await page.locator('[data-preset="full_lifecycle"]').waitFor();
+ for(const p of ['straight_booking','dates_short_haggle','full_lifecycle','payer_abroad','missing_details'])
+  assert.equal(await page.locator(`[data-preset="${p}"]`).count(),1,p);
+ assert.equal(await page.locator('[data-buyer-mode="presenter"]').getAttribute('aria-pressed'),'true');
  await shot('simulator.png',false);
- await page.getByRole('button',{name:/Receive a phone inquiry/}).click();
- assert.match(await page.locator('#wbDrawerBody').innerText(),/We don’t have room for the full stay/);
- assert.equal(await page.locator('[data-date="2027-04-10"]').isDisabled(),true);
- await shot('unavailable.png',false);
- await page.getByRole('button',{name:'1 day later',exact:true}).click();
- assert.match(await page.locator('#wbReply').inputValue(),/2027-04-11.*2027-04-14/);
- await page.locator('#wbReply').fill((await page.locator('#wbReply').inputValue())+' We would love to host your wedding party.');
- await page.getByRole('button',{name:'Send reviewed reply · simulated'}).click();
- await page.getByRole('button',{name:'Simulate customer acceptance'}).click();
- assert.match(await page.locator('#wbDrawerBody').innerText(),/Prepare the proposal/);
+ // A bad seed is refused in the drawer; a good one sends the preset and opens the real deal.
+ await page.locator('#wbSeed').fill('abc');await page.locator('[data-preset="full_lifecycle"]').click();
+ assert.match(await page.locator('#wbDrawer .wb-feedback').innerText(),/whole number/);
+ await page.locator('#wbSeed').fill('4242');await page.locator('[data-preset="full_lifecycle"]').click();
+ await page.locator('#liveDrawer[open]').waitFor();
+ const gen=await page.evaluate(()=>window.Harbour.state().deals.find(d=>d.generated?.seed===4242));
+ assert.equal(gen.generated.preset,'full_lifecycle');
+ assert.match(await page.locator('#deal').innerText(),new RegExp(gen.company));
  await page.keyboard.press('Escape');
- // Search keeps focus through a polling tick; filters and row open work by keyboard.
- await page.locator('#wbSearch').fill('Bennett');await page.waitForTimeout(1700);
+ await page.getByText('Generated · Full lifecycle with a refund · seed 4242',{exact:true}).waitFor();
+ // Replaying the seed in the same run is refused, not merged into the first deal.
+ await page.locator('#wbSimulate').click();await page.locator('#wbSeed').fill('4242');
+ await page.locator('[data-preset="full_lifecycle"]').click();
+ assert.match(await page.locator('#wbDrawer .wb-feedback').innerText(),/already has an inquiry/);
+ // Traits chosen by hand: a payer abroad with details left out.
+ await page.locator('#wbSeed').fill('77');
+ await page.getByText('Or choose the traits yourself').click();
+ await page.locator('#wbT_payer_country').selectOption('DE');
+ await page.locator('[name=wbMissing][value=taxes]').check();
+ await page.locator('#wbCustom').click();
+ await page.locator('#liveDrawer[open]').waitFor();await page.keyboard.press('Escape');
+ await page.getByText('Generated · Custom traits · seed 77',{exact:true}).waitFor();
+ // The buyer-mode switch changes the server's setting.
+ await page.locator('#wbSimulate').click();await page.locator('[data-buyer-mode="agent"]').click();
+ await page.waitForFunction(()=>window.Harbour.state().runner.settings.buyer_mode==='agent');
+ assert.equal(await page.locator('[data-buyer-mode="agent"]').getAttribute('aria-pressed'),'true');
+ await page.locator('[data-buyer-mode="presenter"]').click();
+ await page.waitForFunction(()=>window.Harbour.state().runner.settings.buyer_mode==='presenter');
+ // Write your own: a real RFP with no brief.
+ await page.locator('#wbInquiryFrom').fill('Jamie Chen <jamie@acme.example>');
+ await page.locator('#wbInquiryText').fill('Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays.');
+ await page.locator('#wbSend').click();
+ await page.locator('#liveDrawer[open]').waitFor();await page.keyboard.press('Escape');
+ // Search keeps focus through a polling tick; filters work.
+ await page.locator('#wbSearch').fill('Acme');await page.waitForTimeout(1700);
  assert.equal(await page.locator('#wbSearch').evaluate(el=>el===document.activeElement),true);
  assert.equal(await page.locator('.wb-table tbody tr').count(),1);
  await page.locator('#wbSearch').fill('');
- await page.getByRole('button',{name:'Confirmed',exact:true}).click();
- assert.equal(await page.locator('.wb-table tbody tr').count(),1);
  await page.getByRole('button',{name:'All inquiries',exact:true}).click();
- assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+2);
+ assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+3);
  await page.getByRole('button',{name:'Payments',exact:true}).first().click();
- assert.match(await page.locator('#wbBody').innerText(),/Simulated · browser fixture/);
- assert.match(await page.locator('#wbBody').innerText(),/£2,718/);
+ const pay=await page.locator('#wbBody').innerText();
+ assert.match(pay,/Harbour simulated provider|Airwallex sandbox/);
+ assert.doesNotMatch(pay,/browser fixture/);
  await page.getByRole('button',{name:'Overview',exact:true}).click();
  await shot('overview.png');
- // Fresh page proves simulator persistence and opens a manager link in this browser.
- await page.reload();await page.getByRole('button',{name:'The Bennett wedding'}).first().waitFor();
- await page.goto(base+'/'+reviewLink);await page.locator('#wbDrawer[open]').waitFor();
- await page.keyboard.press('Escape');
  await page.setViewportSize({width:390,height:844});
  await page.waitForFunction(()=>!document.querySelector('.wb-bottom').open);
  await page.getByText('Property tools',{exact:true}).click();
@@ -107,13 +96,15 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.getByText('Property tools',{exact:true}).click();
  await shot('mobile.png');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- await page.locator('#wbSimulate').click();
+ await page.locator('#wbSimulate').click();await page.locator('[data-preset="full_lifecycle"]').waitFor();
+ await page.getByText('Or choose the traits yourself').click();
  await shot('mobile-simulator.png',false);
  assert.equal(await page.locator('#wbDrawer').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.keyboard.press('Escape');
  assert.equal(await page.locator('#wbSimulate').evaluate(el=>el===document.activeElement),true);
- assert.deepEqual(posts,[],'Simulator must never POST to Harbour APIs');
+ // The workbench only writes through the intended endpoints.
+ assert.deepEqual([...new Set(posts)].sort(),['/api/inbox','/api/settings','/api/simulate/rfp']);
  assert.deepEqual(errors,[],'No browser runtime errors');
- console.log('PASS: connected Harbour detail/rules, available & unavailable simulator paths, stale approval, revision, deposit, handoff, search/polling, filters, payments, persistence, keyboard focus, mobile. No simulator API writes.');
+ console.log('PASS: connected Harbour detail/rules, presets from the server, seeded and custom generated inquiries, replay refused, buyer-mode switch, write your own, search/polling, filters, payments, keyboard focus, mobile.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

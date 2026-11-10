@@ -779,6 +779,13 @@ class Engine:
             briefs[domain] = copy.deepcopy(brief)
             self._save()
 
+    def mark_generated(self, deal_id: str, preset: str | None, seed: int) -> None:
+        """Note on the deal which generated inquiry it came from, for the presenter (snapshot) only: the seller's
+        and buyer's views list their fields explicitly and don't include it."""
+        with self.lock:
+            self.deal(deal_id)["generated"] = {"preset": preset, "seed": int(seed)}
+            self._save()
+
     def ask_buyer(self, deal_id: str, questions: list[str], message: str, actor: str = "seller") -> dict:
         with self.lock:
             d = self.deal(deal_id)
