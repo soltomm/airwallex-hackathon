@@ -29,7 +29,7 @@ from pathlib import Path
 
 from . import bookable, calc, rules
 from .calc import gbp
-from .extract import extract, missing_info, stay_nights
+from .extract import MAX_EMAIL_CHARS, MAX_MESSAGE_CHARS, extract, missing_info, stay_nights
 from .policy import hotel_check, rule
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
@@ -367,6 +367,11 @@ class Engine:
     # ================================================================ intake
     def ingest_email(self, sender: str, subject: str, body: str, message_id: str | None = None,
                      in_reply_to: str | None = None, received_at: str | None = None, wake: bool = True) -> dict:
+        if not isinstance(sender, str) or not isinstance(body, str) or not isinstance(subject, str):
+            raise Refused("an email's sender, subject and text must be text")
+        if len(body) > MAX_EMAIL_CHARS:
+            raise Refused(f"this email is too long to read automatically ({len(body):,} characters; the limit is "
+                          f"{MAX_EMAIL_CHARS:,}). Send the key details (rooms, dates, meeting, payer) in a shorter email.")
         with self.lock:
             norm = re.sub(r"\s+", " ", body.strip().lower())
             key = message_id or "h:" + hashlib.sha256(f"{sender.lower()}|{norm}".encode()).hexdigest()[:20]
@@ -1212,6 +1217,10 @@ class Engine:
                      actor: str = "buyer") -> dict:
         """Requests, counteroffers, acceptance and change requests, from the authenticated buyer only."""
         payload = payload or {}
+        if not isinstance(text, str):
+            raise Refused("a message's text must be text")
+        if len(text) > MAX_MESSAGE_CHARS:
+            raise Refused(f"this message is too long ({len(text):,} characters; the limit is {MAX_MESSAGE_CHARS:,})")
         with self.lock:
             self._sweep()
             d = self.deal(deal_id)
