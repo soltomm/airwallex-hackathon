@@ -26,12 +26,23 @@ SERVICES = ["group dinner", "lunch", "airport transfers", "transfers", "spa", "p
             "split billing", "coach transport", "drinks reception", "single rooms", "other services"]
 
 
-def _nullable(t: str | list, **kw) -> dict:
-    return {"type": [t, "null"] if isinstance(t, str) else [*t, "null"], **kw}
+def _nullable(t: str, **kw) -> dict:
+    """A field that may be null. Structured outputs take one type name per schema node, so a nullable field is
+    anyOf [the type, null] (as the SDK's own transform_schema writes it), never a type list like ["integer", "null"],
+    which the API rejects with a 400. An enum's null goes in the null branch, not in the enum."""
+    desc = kw.pop("description", None)
+    if "enum" in kw:
+        branch = {"enum": [v for v in kw.pop("enum") if v is not None], **kw}     # an enum carries no "type"
+    else:
+        branch = {"type": t, **kw}
+    out = {"anyOf": [branch, {"type": "null"}]}
+    if desc:
+        out["description"] = desc
+    return out
 
 
-_MEETING = {
-    "type": ["object", "null"],
+_MEETING_OBJECT = {
+    "type": "object",
     "properties": {
         "attendees": _nullable("integer", description="people in the meeting"),
         "date": _nullable("string", description="YYYY-MM-DD"),
@@ -42,6 +53,7 @@ _MEETING = {
     "required": ["attendees", "date", "layout", "hours"],
     "additionalProperties": False,
 }
+_MEETING = {"anyOf": [_MEETING_OBJECT, {"type": "null"}]}
 
 SCHEMA = {
     "type": "object",
@@ -68,7 +80,7 @@ SCHEMA = {
         "payer": _nullable("string", description="legal name of the company paying, exactly as written"),
         "contact": _nullable("string", description="first name of the person writing"),
         "reply_by": _nullable("string", description="deadline as YYYY-MM-DDTHH:MM in London time"),
-        "unsupported": {"type": "array", "items": {"type": "string", "enum": SERVICES},
+        "unsupported": {"type": "array", "items": {"enum": SERVICES},
                         "description": "services asked for beyond rooms, breakfast and the meeting room"},
     },
     "required": ["rooms", "room_type", "guests", "arrival", "departure", "breakfast", "meeting", "no_meeting",
@@ -138,7 +150,8 @@ def read(text: str, *, today: str, subject: str = "", context: dict | None = Non
         name = type(err).__name__
         status = getattr(err, "status_code", None)
         why = f"reading the message with the model failed ({name}{f' {status}' if status else ''})"
-        log.warning("%s; falling back to the pattern extractor", why)     # visible in the server logs (Render)
+        detail = str(getattr(err, "message", "") or err)[:300]      # the API's reason; it never contains the key
+        log.warning("%s: %s; falling back to the pattern extractor", why, detail)   # shows in the server logs
         return None, why
     if getattr(resp, "stop_reason", None) == "refusal":
         return None, "the model declined to read this message"
