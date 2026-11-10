@@ -177,7 +177,7 @@ function actions() {
       ${f.refund_owed ? `<p>${gbp(f.refund_owed)} is owed back to you.</p>` : ''}${f.still_due ? `<p class="small muted">${gbp(f.still_due)} still due on the payment schedule.</p>` : ''}</div>`;
   }
   if (V.hotel_busy) h += `<p class="small muted"><span class="dot pulse"></span>${esc(V.hotel)} is replying…</p>`;
-  if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. Switch the buyer to "You" in the hotel's Demo controls to reply here.</p></div>`;
+  if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. To reply here yourself, open <b>＋ New inquiry</b> on the hotel dashboard and set <b>Buyer replies</b> to <b>By you, in the buyer’s mailbox</b>.</p></div>`;
   const v = cur(), s = V.suggestion, open = v && v.status === 'sent', booked = V.booking && V.booking.status === 'confirmed';
   const canWrite = !['lost', 'declined', 'handoff'].includes(V.status);
   if (!canWrite) return h;

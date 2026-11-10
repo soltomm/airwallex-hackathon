@@ -235,7 +235,10 @@ class BuyerAgent:
             from ..agent.loop import make_client
             self._client = make_client()
         view = self.e.deal_view(deal_id, for_="buyer")
-        if change_due(self.e, d, b) and d["status"] == "confirmed":
+        # The organizer's news is told once: after the buyer has asked for the change, repeating it on every
+        # turn made the agent ask for the same reduction again and again.
+        asked = any(m["from"] == "buyer" and m.get("action") == "change_request" for m in d["thread"])
+        if change_due(self.e, d, b) and d["status"] == "confirmed" and not asked:
             view["event"] = "News from your organizer: " + b["change_event"]["text"]
         resp = self._client.beta.messages.create(
             model=self.model, max_tokens=4000,

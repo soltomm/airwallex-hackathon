@@ -114,7 +114,13 @@ class Runner:
                     if not (wants_reply(engine, d["id"]) if claude_buyer else suggest(engine, d["id"])):
                         continue
                     if claude_buyer:
-                        BuyerAgent(engine).run(d["id"])
+                        # One deal's failure (an API error, say) is noted on that deal and must not stop the
+                        # buyer agent answering on every other deal.
+                        try:
+                            BuyerAgent(engine).run(d["id"])
+                        except Exception as e:
+                            traceback.print_exc()
+                            engine.note(d["id"], f"Buyer agent failed: {e}", actor="buyer agent")
                     else:
                         try:
                             act(engine, d["id"], suggest(engine, d["id"]), actor="buyer agent")
