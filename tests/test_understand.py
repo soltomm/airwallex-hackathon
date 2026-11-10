@@ -68,17 +68,17 @@ def test_free_text_reply_is_understood_in_context(eng):
     reader = StubReader(
         model_json(rooms=10, guests=10, arrival="2027-11-12", departure="2027-11-15", breakfast="yes",
                    meeting=meeting(attendees=10, date="2027-11-13")),
-        model_json(room_type="any", payer="TestGuest Holdings Ltd", meeting=meeting(layout="boardroom")))
+        model_json(room_type="any", payer="TestGuest Holdings Ltd", meeting=meeting(layout="classroom")))
     eng.ingest_email("TestGuest <guest@testguest.example>", "Group inquiry", TESTGUEST, wake=False)
     seller = RulesSeller(eng, reader=reader)
     seller.run()
     d = deal(eng)
     eng.buyer_action(d["id"], d["buyer_token"], "message",
-                     "whatever room is fine, boardroom please, invoice TestGuest Holdings Ltd")
+                     "whatever room is fine, classroom please, invoice TestGuest Holdings Ltd")
     seller.run()
     d = deal(eng)
     assert d["requirements"]["room_type"] == "king" and d["requirements"]["payer"] == "TestGuest Holdings Ltd"
-    assert d["requirements"]["meeting"]["layout"] == "boardroom"
+    assert d["requirements"]["meeting"]["layout"] == "classroom"
     assert d["status"] in ("offer_sent", "dates_proposed", "pending_approval") and not d["missing"]
     ctx = reader.calls[1]["context"]                  # the reply is read knowing what was asked and already known
     assert ctx["hotel_asked"] and ctx["already_known"]["arrival"] == "2027-11-12"
