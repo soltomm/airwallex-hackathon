@@ -1508,6 +1508,17 @@ class Engine:
                 f"{gbp(ev['revised_deposit'])}" + (f"; we will refund {gbp(ev['refund_due'])} to your original card "
                                                     "once you accept." if ev["refund_due"] else "."))
 
+    @staticmethod
+    def _manual_amendment_flag(n: int, ev: dict) -> str:
+        """Why an accepted reduction got no automatic refund, from calc.evaluate_reduction's own result."""
+        reasons = list(ev.get("review_reasons") or [])            # over the allowance, after the release deadline
+        if not ev.get("before_first_installment", True):
+            reasons.append("after the first installment date")
+        if not reasons:
+            reasons.append("outside the automatic refund terms")
+        return (f"amendment v{n} accepted with no automatic refund ({'; '.join(reasons)}): payments to be "
+                "reconciled manually by the manager")
+
     def _apply_amendment(self, d, v):
         """Accepted reduction: update booking, release inventory exactly once, record refund owed."""
         b = d["booking"]
@@ -1533,8 +1544,7 @@ class Engine:
             d["status"] = "refund_due"
         elif ev["refund_mode"] != "automatic":
             d["status"] = "confirmed"
-            d["flags"].append(f"amendment v{v['n']} accepted after the first installment date: payments to be "
-                              "reconciled manually by the manager")
+            d["flags"].append(self._manual_amendment_flag(v["n"], ev))
         else:
             d["status"] = "confirmed"
         self.log(d["id"], "buyer", "amendment_accepted",
