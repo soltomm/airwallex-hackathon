@@ -209,9 +209,10 @@ class RulesSeller:
             e.check_systems(deal_id)
             if d["missing"]:
                 qs = d["missing"]
+                have_dates = "arrival and departure dates" not in qs
                 e.ask_buyer(deal_id, qs, "Thank you for your request. Before we can confirm an itemized offer, could you "
-                            "tell us: " + "; ".join(qs) + "? We have checked availability for your dates and can hold "
-                            "your rooms once we quote.")
+                            "tell us: " + "; ".join(qs) + "?" + (" We have checked availability for your dates and can "
+                            "hold your rooms once we quote." if have_dates else ""))
                 return f"{ref}: asked {len(qs)} questions"
             return self._quote(deal_id)
         if st == "needs_info" and d["unread"]:
@@ -220,18 +221,33 @@ class RulesSeller:
                 first = d["thread"][0]
                 e.record_requirements(deal_id, extract(d["subject"], first["text"], d["sender"]))
             m = _latest_buyer_msg(d)
+            asked = next((x.get("questions") for x in reversed(d["thread"]) if x["from"] == "seller"
+                          and x.get("questions")), None) or list(d["missing"])
             answers = (m.get("payload") or {}).get("answers") or self._answers_from_text(m["text"])
-            upd = {}
+            upd = self._details_from_reply(d, m["text"])
             if answers.get("meeting_layout") and d["requirements"].get("meeting"):
-                upd["meeting"] = {"layout": answers["meeting_layout"]}
+                upd["meeting"] = {**(upd.get("meeting") or {}), "layout": answers["meeting_layout"]}
             if answers.get("payer"):
                 upd["payer"] = answers["payer"]
             if answers.get("budget_includes_taxes") is not None:
                 upd["budget_includes_taxes"] = bool(answers["budget_includes_taxes"])
-            e.record_requirements(deal_id, upd)
+            res = e.record_requirements(deal_id, upd)
             e.deal_view(deal_id, mark_read=True)
+            if res["date_issue"]:
+                return self._offer_dates(deal_id)            # dates given in the reply that the hotel can't sell
             if d["missing"]:
-                e.ask_buyer(deal_id, d["missing"], "Thanks. We still need: " + "; ".join(d["missing"]) + ".")
+                if set(d["missing"]) >= set(asked):
+                    # The reply answered none of what we asked: asking the same list again only loops. A person reads it.
+                    e.escalate(deal_id, "buyer's reply did not answer: " + "; ".join(d["missing"]),
+                               why="The rules seller asked for these details and couldn't read them from the buyer's "
+                                   "reply, so asking again would repeat the same questions.",
+                               todo="Read the thread, fill in the missing details and hand the deal back, or reply "
+                                    "to the buyer directly.",
+                               message="Thank you for your reply. A member of our group sales team will review the "
+                                       "details with you and come back to you shortly.\n\nGroup Sales, Harbour House")
+                    return f"{ref}: escalated (reply not understood)"
+                e.ask_buyer(deal_id, d["missing"], "Thank you, that helps. To complete your offer we only need: "
+                            + "; ".join(d["missing"]) + ".")
                 return f"{ref}: still missing info"
             e.check_systems(deal_id)
             return self._quote(deal_id)
@@ -587,6 +603,23 @@ class RulesSeller:
         if unmet:
             body += "\nWhere this differs from your request: " + "; ".join(unmet) + "."
         return body if short else "Thank you for your inquiry. " + body
+
+    @staticmethod
+    def _details_from_reply(d: dict, text: str) -> dict:
+        """Everything a free-text reply settles about the request (rooms, room type, dates, meeting date and layout),
+        read with the same extractor as the inquiry. Only what the reply states is returned, so it never clears a
+        detail the buyer gave earlier."""
+        req = d["requirements"] or {}
+        year = int((req.get("arrival") or "2027")[:4])
+        got = extract("", text, default_year=year)
+        out = {k: got[k] for k in ("rooms", "room_type", "arrival", "departure") if got.get(k)}
+        if not (got.get("arrival") and got.get("departure")):
+            out.pop("arrival", None), out.pop("departure", None)       # half a date range is not an answer
+        if req.get("meeting") and got.get("meeting"):
+            mt = {k: got["meeting"][k] for k in ("date", "layout", "attendees", "hours") if got["meeting"].get(k)}
+            if mt:
+                out["meeting"] = mt
+        return out
 
     @staticmethod
     def _answers_from_text(text: str) -> dict:

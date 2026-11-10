@@ -537,6 +537,13 @@ class Engine:
                 merged["meeting"] = {**base["meeting"], **{k: v for k, v in req["meeting"].items() if v is not None}}
             if req.get("meeting") is None and "meeting" in req and base.get("meeting") is None:
                 merged["meeting"] = None
+            # "Any room type / any layout is fine": the hotel picks, and says so in the offer, instead of asking again.
+            if merged.get("room_type") == "any":
+                merged["room_type"] = "king" if "king" in self.hotel["room_types"] else next(iter(self.hotel["room_types"]))
+                merged["notes"] = [*(merged.get("notes") or []), f"Buyer accepts any room type; quoted {merged['room_type']}."]
+            if isinstance(merged.get("meeting"), dict) and merged["meeting"].get("layout") == "any":
+                mr = next(iter(self.hotel["meeting_rooms"].values()))
+                merged["meeting"] = {**merged["meeting"], "layout": next(iter(mr["capacity"]))}
             rt = merged.get("room_type")
             if rt and rt not in self.hotel["room_types"]:
                 merged.setdefault("unsupported", []).append(f"{rt} rooms")
