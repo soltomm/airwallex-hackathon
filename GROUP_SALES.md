@@ -174,7 +174,15 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   to 10% are the seller's own call. A rate below the floor (down to £195/£170), attrition up to 20% or
   a deposit of 20-29% needs the manager. A below-floor rate or attrition above 10% forces a 40%
   deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
-  release allowance used. Only the named approver can decide.
+  release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
+  displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
+  demand times that night's demand: the share of the group allocation other business has already
+  taken, read from the same calendar the availability page shows (`hotel.background_demand`), so
+  sold-out nights count 100% and quiet ones little. The demo stay's allocation is set by hand, so
+  `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
+  sold out). Rooms released before the cutoff are counted 50% resold. On the demo dates (80% / 80% / 64%)
+  the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
+  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide.
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
 - **Buyer mandate.** Accepting above the budget or the deposit limits creates an organizer approval
@@ -332,6 +340,30 @@ ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review.
 5,000 new cases passed (seeds 1000-3499 per seller, 100 steps each, about 70 minutes), ending with
 4,156 confirmed bookings, 470 refunds, 17 refunds failed and handled, and 43 payments received with
 a booking exception, plus deals handed to a person or declined.
+
+### Generated inquiries
+
+`src/agentbank/groupsales/generator.py` writes new inquiries for automated runs and demos. Each one is an
+RFP email plus a private brief for the buyer agent (its answers, goals, limits and a later change). The
+generator only writes the inbound: the seller agent, the buyer agent and the engine handle everything after
+it, and the seller never sees the brief.
+
+An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
+(`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
+(`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
+
+| Preset | Path with the rules seller |
+|---|---|
+| `straight_booking` | quote, accept, deposit paid |
+| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, organizer sign-off, paid |
+| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), organizer sign-off, paid, fewer rooms, partial refund, hotel payout reversed |
+| `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
+| `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
+
+The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the
+seed, so replaying a seed in the same run is refused rather than merged. From the server:
+`GET /api/simulate/presets`, `POST /api/simulate/rfp {"preset": ..., "traits": {...}, "seed": ...}`.
+`tests/test_generator.py` runs every preset end to end.
 
 ### Browser check of the demo script
 

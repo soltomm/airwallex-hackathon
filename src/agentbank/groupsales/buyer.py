@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date, datetime, timedelta
 
 from .calc import gbp
 from .engine import Engine, Refused
@@ -18,7 +19,22 @@ BUYER_MODEL = os.environ.get("GS_BUYER_MODEL", "claude-opus-5-5")
 
 
 def brief(engine: Engine, d: dict) -> dict | None:
-    return engine.scenario["buyers"].get(d.get("buyer_profile") or "")
+    return engine.buyer_brief(d)
+
+
+def change_due(engine: Engine, d: dict, b: dict) -> bool:
+    """Whether the brief's later change (fewer rooms) is due: at a fixed scenario time, or a set number of
+    scenario hours after the booking was confirmed (generated buyers, whose booking time isn't known upfront)."""
+    ev = b.get("change_event")
+    bk = d.get("booking")
+    if not ev or not bk or bk.get("status") != "confirmed":
+        return False
+    if ev.get("after"):
+        return engine.now() >= ev["after"]
+    if ev.get("after_booked_hours") is not None and bk.get("confirmed_at"):
+        due = datetime.fromisoformat(bk["confirmed_at"]) + timedelta(hours=float(ev["after_booked_hours"]))
+        return datetime.fromisoformat(engine.now()) >= due
+    return False
 
 
 def suggest(engine: Engine, deal_id: str) -> dict | None:
@@ -33,7 +49,10 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
         sent_actions = [m.get("action") for m in d["thread"] if m["from"] == "buyer"]
         if st == "needs_info":
             last_q = next((m for m in reversed(d["thread"]) if m["from"] == "seller" and m.get("questions")), None)
-            if last_q and d["thread"][-1] is last_q:
+            # The brief only answers the intake questions (layout, payer, taxes): never for a booked stay, and
+            # never the same answer twice. Anything else is for the person playing the buyer to answer.
+            if last_q and d["thread"][-1] is last_q and not d.get("booking") and not any(
+                    m["from"] == "buyer" and (m.get("payload") or {}).get("answers") for m in d["thread"]):
                 k = b["known_answers"]
                 parts = []
                 if "meeting_layout" in k:
@@ -47,18 +66,40 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
                     parts.append("Please confirm twin beds in the shared rooms and breakfast for 24 on all three mornings.")
                 return {"action": "reply", "text": " ".join(parts), "payload": {"answers": k}}
             return None
+        if st == "dates_proposed":
+            last = d["thread"][-1] if d["thread"] else None
+            opts = (last or {}).get("date_options") if (last or {}).get("from") == "seller" else None
+            if opts:
+                o = opts[0]   # the hotel lists its best match first, as the mailbox's primary button does
+                return {"action": "reply", "text": f"{_span(o['arrival'], o['departure'])} works for us. Please send "
+                                                   "the offer for those dates.",
+                        "payload": {"dates": {"arrival": o["arrival"], "departure": o["departure"]}}}
+            return None
+        clar = _clarify_change(d)
+        if clar:
+            return clar
         if st == "offer_sent" and cur and cur["status"] == "sent" and cur["kind"] == "offer":
             if d["thread"][-1]["from"] == "buyer":
                 return None
             obj = b.get("objectives") or {}
-            want_att = obj.get("attrition_pct")
-            if want_att and cur["terms"]["attrition_pct"] < want_att and "counter" not in sent_actions:
+            want_att, want_rate = obj.get("attrition_pct"), obj.get("target_rate")
+            need_att = bool(want_att and cur["terms"]["attrition_pct"] < want_att)
+            need_rate = bool(want_rate and cur["terms"]["rate"] > want_rate)
+            if (need_att or need_rate) and "counter" not in sent_actions:
                 dep = obj.get("opening_deposit_pct", cur["terms"]["deposit_pct"])
-                return {"action": "counter",
-                        "text": f"Thank you, the £{cur['terms']['rate'] // 100} room rate works for us. Attendance is "
-                                f"still uncertain, so we need a {want_att}% attrition allowance. We propose a "
-                                f"{dep}% deposit.",
-                        "payload": {"attrition_pct": want_att, "deposit_pct": dep}}
+                payload: dict = {}
+                if need_rate:
+                    parts = [f"Thank you for the offer. Our target is {gbp(want_rate)} per room-night, so we'd ask you "
+                             "to meet that rate."]
+                    payload["rate"] = want_rate
+                else:
+                    parts = [f"Thank you, the £{cur['terms']['rate'] // 100} room rate works for us."]
+                if need_att:
+                    parts.append(f"Attendance is still uncertain, so we need a {want_att}% attrition allowance.")
+                    payload["attrition_pct"] = want_att
+                parts.append(f"We propose a {dep}% deposit.")
+                payload["deposit_pct"] = dep
+                return {"action": "counter", "text": " ".join(parts), "payload": payload}
             if b.get("waits_for_organizer_after_quote"):
                 if "message" not in sent_actions:
                     return {"action": "message", "text": "Thanks for the quote. I'm taking it to our organizer for "
@@ -74,10 +115,70 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
             return {"action": "accept", "text": f"We accept amendment v{cur['n']}.", "payload": {"version": cur["n"]}}
         if st == "confirmed" and b.get("change_event") and "change_request" not in sent_actions:
             ev = b["change_event"]
-            if engine.now() >= ev["after"]:
+            if change_due(engine, d, b):
                 return {"action": "change_request", "text": ev["text"],
                         "payload": {"rooms_per_night": ev["release_rooms_per_night"]}}
         return None
+
+
+def _span(a: str, b: str) -> str:
+    x, y = date.fromisoformat(a), date.fromisoformat(b)
+    return (f"{x.day}-{y.day} {y:%B %Y}" if (x.year, x.month) == (y.year, y.month)
+            else f"{x.day} {x:%B} - {y.day} {y:%B %Y}")
+
+
+def _clarify_change(d: dict) -> dict | None:
+    """The hotel asked about the buyer's own open change request on a booked stay: restate it precisely, once.
+
+    Built only from what the buyer already sent and the booking it can see, never from the private mandate. It is
+    sent as a change_request so either seller can act on it."""
+    b, th = d.get("booking"), d["thread"]
+    if not b or b.get("status") != "confirmed" or not th:
+        return None
+    q = th[-1]
+    if q["from"] != "seller" or not q.get("questions"):
+        return None
+    i = next((j for j in range(len(th) - 1, -1, -1) if th[j]["from"] == "buyer" and th[j].get("action") == "change_request"
+              and not (th[j].get("payload") or {}).get("clarifies")), None)
+    if i is None:
+        return None
+    req = th[i]
+    if any(m["from"] == "seller" and m.get("version") for m in th[i + 1:]):
+        return None   # an amendment already answered it
+    if any((m.get("payload") or {}).get("clarifies") == req["id"] for m in th[i + 1:]):
+        return None   # restated once already: anything further is for a person
+    n = (req.get("payload") or {}).get("rooms_per_night")
+    if not n:
+        return None
+    rooms = b.get("rooms") or {}
+    per_night = sorted(set(rooms.values()))
+    kind = (b.get("room_type") or "").strip()
+    unit = f"{kind} room" if kind else "room"
+    nights = sorted(rooms)
+    if len(per_night) == 1 and per_night[0] > n:
+        cur = per_night[0]
+        ds = [date.fromisoformat(x) for x in nights]
+        last = f"{ds[-1].day} {ds[-1]:%B %Y}"
+        when = ", ".join(str(x.day) for x in ds[:-1]) + " and " + last if len(ds) > 1 else last
+        text = (f"To confirm: please release {n} {unit}{'s' if n != 1 else ''} on each night, taking our block from "
+                f"{cur} to {cur - n} {unit}s per night on {when}. We understand any room-nights beyond our remaining "
+                "allowance are charged at the contracted rate.")
+    else:
+        text = (f"To confirm: please release {n} {unit}{'s' if n != 1 else ''} on each night of our stay. We understand "
+                "any room-nights beyond our remaining allowance are charged at the contracted rate.")
+    return {"action": "change_request", "text": text, "payload": {"rooms_per_night": n, "clarifies": req["id"]}}
+
+
+def wants_reply(engine: Engine, deal_id: str) -> bool:
+    """Whether a buyer agent should take a turn: a drafted move, or a hotel question the draft can't answer."""
+    if suggest(engine, deal_id) is not None:
+        return True
+    with engine.lock:
+        d = engine.deal(deal_id)
+        if not brief(engine, d) or d["status"] in ("lost", "declined", "handoff"):
+            return False
+        last = d["thread"][-1] if d["thread"] else None
+        return bool(last and last["from"] == "seller" and last.get("questions"))
 
 
 def act(engine: Engine, deal_id: str, s: dict, actor: str = "buyer") -> dict:
@@ -102,13 +203,15 @@ BUYER_TOOLS = [{
     "name": "buyer_act", "strict": True,
     "description": "Send one message to the hotel: reply, counter, accept, change_request or message.",
     "input_schema": {"type": "object", "additionalProperties": False,
-                     "required": ["action", "text", "version", "attrition_pct", "deposit_pct", "rooms_per_night", "answers"],
+                     "required": ["action", "text", "version", "attrition_pct", "deposit_pct", "rate", "rooms_per_night",
+                                  "answers"],
                      "properties": {
                          "action": {"type": "string", "enum": ["reply", "counter", "accept", "change_request", "message"]},
                          "text": {"type": "string"},
                          "version": {"type": ["integer", "null"]},
                          "attrition_pct": {"type": ["integer", "null"]},
                          "deposit_pct": {"type": ["integer", "null"]},
+                         "rate": {"type": ["integer", "null"], "description": "proposed room rate in pence"},
                          "rooms_per_night": {"type": ["integer", "null"]},
                          "answers": {"type": ["object", "null"], "additionalProperties": False,
                                      "required": ["meeting_layout", "payer", "budget_includes_taxes"],
@@ -124,7 +227,7 @@ class BuyerAgent:
         self._client = client
 
     def run(self, deal_id: str) -> dict | None:
-        if suggest(self.e, deal_id) is None:
+        if not wants_reply(self.e, deal_id):
             return None   # nothing for the buyer to do now
         d = self.e.deal(deal_id)
         b = brief(self.e, d)
@@ -132,7 +235,7 @@ class BuyerAgent:
             from ..agent.loop import make_client
             self._client = make_client()
         view = self.e.deal_view(deal_id, for_="buyer")
-        if b.get("change_event") and self.e.now() >= b["change_event"]["after"] and d["status"] == "confirmed":
+        if change_due(self.e, d, b) and d["status"] == "confirmed":
             view["event"] = "News from your organizer: " + b["change_event"]["text"]
         resp = self._client.beta.messages.create(
             model=self.model, max_tokens=4000,
@@ -148,7 +251,7 @@ class BuyerAgent:
         if a["action"] == "accept":
             payload["version"] = a.get("version") or d["versions"][-1]["n"]
         if a["action"] == "counter":
-            payload.update({k: a[k] for k in ("attrition_pct", "deposit_pct") if a.get(k) is not None})
+            payload.update({k: a[k] for k in ("attrition_pct", "deposit_pct", "rate") if a.get(k) is not None})
         if a["action"] == "change_request":
             payload["rooms_per_night"] = a.get("rooms_per_night")
         if a["action"] == "reply" and a.get("answers"):

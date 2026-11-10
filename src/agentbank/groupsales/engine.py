@@ -51,7 +51,7 @@ def _company_from(sender: str, domain: str) -> str:
     person = sender.split("<")[0].strip().strip('"') if "<" in sender else ""
     if label.lower() in FREE_MAIL or not label:
         return person or sender.strip() or "Unknown sender"
-    return label[:1].upper() + label[1:]
+    return " ".join(w[:1].upper() + w[1:] for w in label.split("-") if w) or label
 
 
 class Refused(Exception):
@@ -416,7 +416,8 @@ class Engine:
                 "records": [], "versions": [], "hold_id": None, "accepted_version": None, "booking": None,
                 "finance": {"refund_owed": 0, "refund_owed_version": None}, "flags": [],
                 "buyer_token": secrets.token_urlsafe(12), "unread": True, "handoff": None,
-                "buyer_profile": domain if domain in self.scenario["buyers"] else None,
+                "buyer_profile": domain if domain in self.scenario["buyers"] or domain in self.s.get("buyer_briefs", {})
+                else None,
                 "fx_reference": 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + did).hex[:24],
                 "pending_acceptance": None,
             }
@@ -518,6 +519,8 @@ class Engine:
         if for_ == "seller":
             out["pricing"]["margin_all_rooms"] = p["margin_all_rooms"]
             out["pricing"]["margin_full_release"] = p["margin_full_release"]
+            if "displacement" in p:
+                out["pricing"]["displacement"] = p["displacement"]
             out["hotel_check"] = v.get("hotel_check")
             out["reduction"] = v.get("reduction")
         elif v.get("reduction"):
@@ -743,7 +746,8 @@ class Engine:
                                                                  for m, v in bf.items()), "data": bf},
                 {"system": "RMS", "summary": (f"{rt}: target {gbp(rates['target'])}, seller floor {gbp(rates['autonomous_floor'])}, "
                                               f"absolute min {gbp(rates['absolute_min'])}; min margin {self.rms['min_contribution_margin_pct']}%")
-                 if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"]}},
+                 if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"],
+                                                                   "displacement": self.rms.get("displacement", {})}},
                 {"system": "CRM", "summary": f"{crm.get('account') or d['domain']}: {crm.get('type')}, "
                                              f"credit terms {'yes' if crm.get('credit_terms') else 'no'}", "data": crm},
                 {"system": "Policy", "summary": "Deposit 30% standard (up to 40%; 20-29% needs manager); attrition 10% "
@@ -761,12 +765,33 @@ class Engine:
             return {"checked_at": now, "pms": pms, "meeting": meeting, "breakfast": bf, "rms": rates,
                     "crm": crm, "key_dates": req_dates}
 
+    # ---- buyer briefs: each buyer's private mandate. Scenario buyers come from scenario.json; generated buyers
+    # (generator.py) are registered for this run before their RFP arrives. Neither is in any seller view.
+    def buyer_brief(self, d: dict) -> dict | None:
+        p = d.get("buyer_profile") or ""
+        return self.scenario["buyers"].get(p) or self.s.get("buyer_briefs", {}).get(p)
+
+    def register_buyer_brief(self, domain: str, brief: dict) -> None:
+        with self.lock:
+            domain = (domain or "").strip().lower()
+            if not domain:
+                raise Refused("a generated buyer needs an email domain")
+            briefs = self.s.setdefault("buyer_briefs", {})
+            if (domain in self.scenario["buyers"] or domain in briefs
+                    or any(x["domain"] == domain for x in self.s["deals"].values())):
+                raise Refused(f"{domain} already has an inquiry in this run; use another seed")
+            briefs[domain] = copy.deepcopy(brief)
+            self._save()
+
     def ask_buyer(self, deal_id: str, questions: list[str], message: str, actor: str = "seller") -> dict:
         with self.lock:
             d = self.deal(deal_id)
             d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                                 "text": message, "questions": questions})
-            d["status"] = "needs_info"
+            # A question about a booked stay (say, which reduction the buyer means) is a message: the deal stays
+            # confirmed. Setting needs_info here used to block amendments and loop the buyer's intake answers.
+            if not d.get("booking"):
+                d["status"] = "needs_info"
             self._seller_acted(d)
             self.log(d["id"], actor, "clarification", f"Asked {d['company']}: {'; '.join(questions)}")
             self._save()
@@ -1159,7 +1184,7 @@ class Engine:
             hold = self.s["holds"].get(d.get("hold_id") or "")
             if not hold or hold["status"] != "active" or _dt(hold["expires_at"]) <= _dt(self.now()):
                 raise Refused("this offer has expired; the hotel must re-check availability and renew it")
-        mandate = self.scenario["buyers"].get(d.get("buyer_profile") or "")
+        mandate = self.buyer_brief(d)
         reasons = buyer_check(v["terms"], v["pricing"], mandate) if mandate and v["kind"] == "offer" else []
         if reasons and not self._approval_valid(d, "acceptance", v["n"], v["hash"], approver="organizer"):
             pending = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]

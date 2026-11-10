@@ -78,11 +78,15 @@ def test_spec_figures():
     assert (p["total"], p["deposit"]) == (960000, 288000)
     p = calc.price(northstar_terms(), H, RMS)
     assert (p["total"], p["deposit"], p["attrition_allowance"]) == (960000, 384000, 7)
-    assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 313200, "contribution": 646800, "margin_pct": 67.4}
-    assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 264200
+    # Displacement: 12 rooms x (£64 + £64 + £51.20) for demand 80% / 80% / 64% on Wed-Fri in March.
+    assert p["displacement"]["blocked"] == 215040
+    assert [x["demand_pct"] for x in p["displacement"]["nights"]] == [80, 80, 64]
+    assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 528240, "contribution": 431760, "margin_pct": 45.0}
+    assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 458334
+    assert p["margin_full_release"]["margin_pct"] == 43.1
     r = calc.evaluate_reduction(northstar_terms(), {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     assert (r["new_pricing"]["total"], r["revised_deposit"], r["refund_due"], r["remaining_after"]) == (828000, 331200, 52800, 1)
-    assert r["new_pricing"]["margin_all_rooms"]["costs"] == 271200
+    assert r["new_pricing"]["margin_all_rooms"]["costs"] == 468320          # released rooms: half the displacement back
     sched = calc.schedule(828000, 40, 331200, "2027-03-10", POL, "2027-01-11")
     assert [x["amount"] for x in sched] == [0, 82800, 414000]
 
@@ -191,7 +195,7 @@ def test_stale_approval_and_hard_limits(eng):
     old = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     with pytest.raises(Refused):
         e.decide_approval(old["id"], "approve", "organizer")          # wrong approver
-    e.propose_offer(n["id"], 21000, 40, 20, "revised")                # materially changed offer
+    e.propose_offer(n["id"], 22000, 40, 15, "revised")                # materially changed offer
     assert e.s["approvals"][old["id"]]["status"] == "stale"
     with pytest.raises(Refused):
         e.decide_approval(old["id"], "approve", "hotel_manager")
@@ -597,7 +601,7 @@ def test_buyer_never_sees_hotel_internals(eng):
     n = deal_by(e, "Northstar")
     manager = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     rates, costs = RMS["rates"]["twin"], RMS["delivery_costs"]
-    hotel_only = {"margin_all_rooms", "margin_full_release", "hotel_check", "records", "records_consulted", "hold",
+    hotel_only = {"margin_all_rooms", "margin_full_release", "displacement", "hotel_check", "records", "records_consulted", "hold",
                   "approvals", "flags", "costs", "contribution", "margin_pct", "next_step", "key_dates"}
 
     def check(view, extra=()):
@@ -778,6 +782,8 @@ def test_below_floor_rate_needs_approval_and_40_percent(eng):
     s, n = _quoted(e)
     with pytest.raises(Refused, match="40% deposit"):
         e.propose_offer(n["id"], 20500, 30, 10, "below floor at 30%")
+    with pytest.raises(Refused, match="contribution margin"):        # busy March dates: £200 costs too much displacement
+        e.propose_offer(n["id"], 20000, 40, 10, "too far below floor")
     r = e.propose_offer(n["id"], 20500, 40, 10, "below floor at 40%")
     assert r["status"] == "pending_approval"
     appr = e.s["approvals"][r["approval_id"]]
@@ -786,6 +792,96 @@ def test_below_floor_rate_needs_approval_and_40_percent(eng):
         e.send_offer(n["id"], r["version"])
     e.decide_approval(r["approval_id"], "approve", "hotel_manager")
     assert e.send_offer(n["id"], r["version"])["status"] == "sent"
+
+
+def test_margin_moves_with_concessions():
+    """Rate cuts and free release cost the hotel margin once displacement is counted."""
+    def m(**kw):
+        p = calc.price(northstar_terms(**kw), H, RMS)
+        return p["margin_all_rooms"]["margin_pct"], p["margin_full_release"]["margin_pct"]
+    assert m(att=10, rate=22000) == (45.0, 44.3)
+    assert m(att=20, rate=22000) == (45.0, 43.1)          # more free release: lower worst case
+    assert m(att=10, rate=21000) == (42.8, 42.1)          # rate cut: lower in both cases
+    assert m(att=20, rate=20500)[1] < 40 < m(att=10, rate=20500)[1]
+    assert m(att=10, rate=19500)[0] < 40
+
+
+def test_displacement_follows_the_dates():
+    """Busy midweek dates carry more displacement than a quiet January weekend, so the same discount
+    that is refused in March is fine in January."""
+    quiet = ["2027-01-15", "2027-01-16", "2027-01-17"]                # Fri, Sat, Sun in January
+    t = {**northstar_terms(att=20, rate=19500), "rooms": {n: 12 for n in quiet}, "released": {n: 0 for n in quiet},
+         "breakfast": {m: 24 for m in ("2027-01-16", "2027-01-17", "2027-01-18")},
+         "meeting": {"room": "thames", "date": "2027-01-15", "layout": "classroom", "attendees": 24}}
+    # Demand comes from the availability calendar: the share of the allocation other business has taken.
+    alloc = H_ALL["availability"]["twin"]
+    assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in quiet] == [
+        (alloc - H_ALL["capacity"][n]["twin"]) * 100 // alloc for n in quiet] == [30, 0, 10]
+    assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in MARCH] == [80, 80, 64]     # stated by the RMS
+    sold_out = next(n for n in H_ALL["nights"] if H_ALL["capacity"][n]["twin"] == 0)
+    assert calc.demand_pct(sold_out, "twin", H_ALL, RMS) == 100
+    q = calc.price(t, H_ALL, RMS)
+    busy = calc.price(northstar_terms(att=20, rate=19500), H, RMS)
+    assert q["displacement"]["blocked"] < busy["displacement"]["blocked"]
+    assert q["margin_full_release"]["margin_pct"] >= 40 > busy["margin_full_release"]["margin_pct"]
+    # Without a displacement table the margin is delivery costs only.
+    flat = calc.price(northstar_terms(), H, {k: v for k, v in RMS.items() if k != "displacement"})
+    assert flat["margin_all_rooms"]["margin_pct"] == 67.4 and flat["displacement"]["blocked"] == 0
+
+
+def test_margin_floor_bites_on_the_default_rules(eng):
+    """On the busy demo dates the 40% floor refuses a below-floor rate combined with 20% attrition."""
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    n = deal_by(e, "Northstar")
+    buyer_turn(e, "Northstar")
+    s.run()
+    assert e.price_terms(n["id"], 20500, 40, 10)["hotel_check"]["ok"]
+    p = e.price_terms(n["id"], 20500, 40, 20)
+    assert any("contribution margin" in x and "full allowance released" in x for x in p["hotel_check"]["hard"])
+    p = e.price_terms(n["id"], 19500, 40, 10)
+    assert any("contribution margin" in x and "all rooms used" in x for x in p["hotel_check"]["hard"])
+    with pytest.raises(Refused, match="contribution margin"):
+        e.propose_offer(n["id"], 20500, 40, 20, "rate cut and wide release")
+    assert "displacement" not in json.dumps(e.deal_view(n["id"], for_="buyer"))
+
+
+def _busier(tmp_path, **disp):
+    sc = json.loads(SCENARIO.read_text())
+    sc["rms"]["displacement"].update(disp)
+    path = tmp_path / "scenario.json"
+    path.write_text(json.dumps(sc))
+    return Engine(tmp_path / "var", SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0), scenario_path=path)
+
+
+def test_rules_seller_keeps_standard_release_when_margin_cannot_carry_more(tmp_path):
+    """Northstar asks for 20% attrition; on dates this busy only 10% keeps the margin, so the seller
+    offers 10% at the same rate instead of drafting a version the backend refuses."""
+    e = _busier(tmp_path, full_demand={"twin": 9000, "king": 6000}, resale_pct=0)
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    assert n["versions"][0]["terms"]["attrition_pct"] == 10
+    buyer_turn(e, "Northstar")                                       # counter: 20% attrition
+    s.run()
+    v = n["versions"][-1]
+    assert len(n["versions"]) == 2 and v["terms"]["attrition_pct"] == 10 and v["terms"]["rate"] == 22000
+    assert "demand on your dates is high" in v["message"].lower()
+    assert not any("Engine refused" in a["text"] for a in e.s["activity"])
+
+
+def test_rules_seller_hands_off_when_even_the_target_rate_misses_the_margin(tmp_path):
+    e = _busier(tmp_path, full_demand={"twin": 15000, "king": 15000})
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    assert n["status"] == "handoff" and "margin" in n["handoff"]["reason"] and not n["versions"]
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 0
 
 
 def test_package_below_margin_floor_is_refused(tmp_path):
@@ -1255,6 +1351,78 @@ def test_rules_seller_reads_the_inquiry_if_questions_went_out_first(eng):
     assert n["requirements"]["rooms"] == 12 and n["versions"] and n["versions"][-1]["pricing"]["total"] == 960000
 
 
+def test_question_about_a_booked_stay_keeps_it_confirmed_and_drafts_no_intake_answers(eng):
+    """A seller question after booking (which reduction do you mean?) set the deal to needs_info, so the buyer's
+    draft re-sent the intake answers (layout, payer, taxes) every time the seller asked again."""
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce our block by 4 rooms per night.",
+                   {"rooms_per_night": 4})
+    e.ask_buyer(n["id"], ["Reduce to 6 rooms a night, or release 4 room-nights in total?"],
+                "Before we prepare the amendment, please confirm which reduction you mean.")
+    assert n["status"] == "confirmed"                                 # still booked: amendments stay possible
+    sug = suggest(e, n["id"])                                         # restates the request, not the intake answers
+    assert sug["action"] == "change_request" and "Classroom" not in sug["text"]
+    _reduce(e, n, 1)                                                  # the amendment still goes through
+
+
+def test_intake_answers_are_drafted_once(eng):
+    e = eng
+    n = deal_by(e, "Northstar")
+    e.ask_buyer(n["id"], ["payer?"], "Who is the legal payer, and which meeting layout do you need?")
+    first = suggest(e, n["id"])
+    assert first and first["payload"]["answers"]
+    act(e, n["id"], first)
+    e.ask_buyer(n["id"], ["anything else?"], "Thanks. One more question before we quote.")
+    assert suggest(e, n["id"]) is None                                # never the same answers twice
+
+
+def test_buyer_clarifies_its_own_change_request_once_and_the_seller_applies_it(eng):
+    """The hotel asks which reduction the buyer means: the draft restates the request from the booking it can see."""
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce our block by 1 room per night.",
+                   {"rooms_per_night": 1})
+    n["unread"] = False                                               # as if a seller had read it and asked back
+    e.ask_buyer(n["id"], ["Release 1 room on each night, or 1 room-night in total?"], "Which reduction do you mean?")
+    sug = suggest(e, n["id"])
+    assert sug["action"] == "change_request" and sug["payload"]["rooms_per_night"] == 1
+    assert "from 12 to 11 twin rooms per night on 10, 11 and 12 March 2027" in sug["text"]
+    assert "Classroom" not in sug["text"]
+    act(e, n["id"], sug)
+    e.ask_buyer(n["id"], ["Anything else?"], "One more question.")
+    assert suggest(e, n["id"]) is None                                # restated once; further questions are a person's
+    s.run()                                                           # the rules seller acts on the clarification
+    v = n["versions"][-1]
+    assert v["kind"] == "amendment" and v["terms"]["released"] == {x: 1 for x in MARCH}
+
+
+def test_buyer_takes_the_first_dates_offered(eng):
+    from agentbank.groupsales.buyer import _span
+    e = eng
+    RulesSeller(e).run()
+    n = deal_by(e, "Northstar")
+    act(e, n["id"], suggest(e, n["id"]))                              # intake answers -> requirements recorded
+    n["versions"].clear()
+    # Offer dates the calendar actually has free (the seeded availability changes which ones those are).
+    free = [o for o in e.suggest_dates(n["id"])["options"] if o["fits_rooms"]][:2]
+    assert len(free) == 2
+    e.offer_dates(n["id"], [{"arrival": o["arrival"], "departure": o["departure"]} for o in free], "These dates are free.")
+    first = {"arrival": free[0]["arrival"], "departure": free[0]["departure"]}
+    sug = suggest(e, n["id"])
+    assert sug["action"] == "reply" and sug["payload"]["dates"] == first
+    assert sug["text"].startswith(f"{_span(first['arrival'], first['departure'])} works for us")
+
+
+def test_buyer_agent_takes_a_turn_for_questions_its_drafts_cannot_answer(eng):
+    from agentbank.groupsales.buyer import wants_reply
+    e = eng
+    s, n = run_to_confirmed(e)                                        # before the organizer's change event is due
+    assert not wants_reply(e, n["id"])
+    e.ask_buyer(n["id"], ["Will anyone need an accessible room?"], "A quick question about your stay.")
+    assert suggest(e, n["id"]) is None and wants_reply(e, n["id"])
+
+
 def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng):
     """Found by the randomized scenarios: approving after the offer lapsed left a half-made decision in memory."""
     e = eng
@@ -1386,6 +1554,20 @@ def test_buyer_mailbox_and_organizer_sign_off(server):
                                                                 "decision": "approve"})
     assert st == 200, body
     assert e.s["approvals"][r["approval_id"]]["status"] == "approved"
+
+
+def test_generated_inquiry_endpoint(server):
+    st, _, body = _req(server, "/api/simulate/presets")
+    assert st == 200 and "full_lifecycle" in json.loads(body)["presets"]
+    st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
+    r = json.loads(body)
+    assert st == 200 and r["seed"] == 4242 and r["rfp"]["from"].endswith("4242.example>")
+    d = server.engine.deal(r["deal_id"])
+    assert d["buyer_profile"] and d["payer_origin"]["country_code"] == "DE"
+    st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
+    assert st == 400 and "already has an inquiry" in json.loads(body)["error"]
+    st, _, body = _req(server, "/api/simulate/rfp", {"traits": {"price": "free"}})
+    assert st == 400 and "price must be one of" in json.loads(body)["error"]
 
 
 def test_rules_api(server):

@@ -45,6 +45,12 @@
       "king": {"target": 19000, "autonomous_floor": 18000, "absolute_min": 17000}
     },
     "delivery_costs": {"twin": 7000, "king": 6000, "breakfast": 600, "meeting_day": 18000},
+    "displacement": {
+      "_note": "Opportunity cost of blocking a room for a group: the contribution another guest would have paid, times that night's demand. Demand is the share of the group allocation other business has already taken (hotel.background_demand, the same calendar the availability page shows), except nights listed in demand_by_night_pct. Released rooms are partly resold.",
+      "full_demand": {"twin": 8000, "king": 6000},
+      "demand_by_night_pct": {"2027-03-10": 80, "2027-03-11": 80, "2027-03-12": 64},
+      "resale_pct": 50
+    },
     "min_contribution_margin_pct": 40
   },
   "policy": {
