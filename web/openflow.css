@@ -145,3 +145,21 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 .fx-outcome p { margin:5px 0; }
 .fx-reference { display:block; padding:10px; background:var(--sunk); overflow-wrap:anywhere; }
 #fxDirectoryTitle:focus { outline:none; }
+
+.vendor-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; }
+.vendor-grid p { overflow-wrap:anywhere; }
+.vendor-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+.vendor-actions button { white-space:normal; }
+.vendor-total { font-size:28px; font-weight:600; margin:16px 0; }
+.vendor-warning,.vendor-error { color:#8a4c24; background:#fff6e8; border-radius:7px; padding:10px; }
+.vendor-lane { font-size:11px; color:var(--muted); margin:16px 0 6px; }
+#vendorPage h2 { font-size:16px; margin-top:0; }
+#vendorPageTitle { outline:none; }
+#vendorPage .wb-terms input,#vendorPage .wb-terms select { min-width:0; }
+#vendorPage aside { min-width:0; }
+#vendorPage td { overflow-wrap:anywhere; }
+@media(max-width:760px) { #vendorPage .wb-heading { flex-wrap:wrap; } #vendorPage .wb-heading h1 { font-size:23px; } .wb-nav { flex-wrap:wrap; } .wb-nav button { min-width:90px; } }
+#vendorPage .wb-field input, #vendorPage .wb-field select, #vendorPage .wb-field textarea, #vendorPage .vendor-actions input { border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:var(--panel); }
+#vendorPage td.r { white-space:nowrap; }
+#vendorPage .wb-heading > div { min-width:0; }
+#vendorPage h1 { overflow-wrap:anywhere; }

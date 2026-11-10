@@ -30,3 +30,4 @@ jobs:
         run: |
           node --check web/openflow.js
           node --check web/fx.js
+          node --check web/vendors.js

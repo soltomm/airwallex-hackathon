@@ -196,6 +196,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <nav class="wb-nav">
     <button data-wb-view="overview" aria-current="page"><span class="wb-icon" aria-hidden="true">▦</span>Overview</button>
     <button data-wb-view="payments"><span class="wb-icon" aria-hidden="true">▱</span>Payments</button>
+    <button id="vendorDirectoryNav"><span class="wb-icon" aria-hidden="true">▤</span>Directory</button>
   </nav>
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
@@ -425,7 +426,7 @@ function offerCard(d) {
   const v = curVersion(d);
   if (!v) return '';
   const p = v.pricing, t = v.terms, f = d.finance_view;
-  const lines = p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.qty} × ${gbp(l.unit)}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('');
+  const lines = p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.unit == null ? `Bundled service · ${l.qty} units` : `${l.qty} × ${gbp(l.unit)}`}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('');
   const head = v.kind === 'amendment' ? 'Agreement as amended' : d.booking ? 'Agreement' : 'Current offer';
   let h = `<div class="card offer"><div class="label"><span>${head} · v${v.n}</span><span class="chip">${esc(v.status.replaceAll('_', ' '))}</span></div>
     <table>${lines}<tr class="tot"><td>Total</td><td class="r">${gbp(p.total)}</td></tr></table>
@@ -508,6 +509,7 @@ function renderDeal(d) {
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.FX) window.FX.mount(d);
+  if (window.Vendors) window.Vendors.mount(d);
 }
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
@@ -847,6 +849,7 @@ $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
 <script src="/assets/fx.js"></script>
+<script src="/assets/vendors.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>
 </html>

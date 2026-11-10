@@ -35,6 +35,7 @@ from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # 
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
+from agentbank.groupsales import vendors  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.webhooks import signature_ok  # noqa: E402
@@ -217,12 +218,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
             assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
-                      "/assets/fx.js": ("fx.js", "text/javascript")}
+                      "/assets/fx.js": ("fx.js", "text/javascript"),
+                      "/assets/vendors.js": ("vendors.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
             if p == "/api/state":
                 return self._send(200, state())
+            if p == '/api/vendor_directory':
+                return self._send(200, vendors.directory())
+            if p.startswith('/api/deals/') and p.endswith('/vendors'):
+                return self._send(200, engine.vendor_workspace(p.split('/')[3]))
             if p.startswith("/api/buyer/") and p.endswith("/suggest"):
                 return self._send(200, {"suggestion": suggest(engine, p.split("/")[3])})
             if p.startswith("/inbox/"):
@@ -268,6 +274,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._webhook(raw)
             if p == "/api/reset":
                 return self._send(200, engine.reset())
+            if p.startswith('/api/deals/') and p.endswith('/vendors'):
+                did = p.split('/')[3]
+                if b.get('command') == 'propose':
+                    if not vendors.workspace(engine.deal(did))['enabled']:
+                        raise Refused('Enable third-party management first.')
+                    rt = (engine.deal(did).get('requirements') or {}).get('room_type') or 'king'
+                    return self._send(200, engine.propose_offer(did, engine.rms['rates'][rt]['target'],
+                        engine.policy['deposit']['standard_pct'], engine.policy['attrition']['standard_pct'],
+                        'Master proposal including confirmed third-party services. External service charges are guaranteed and excluded from automatic hotel-room attrition.', actor='hotel staff'))
+                return self._send(200, engine.vendor_action(did, b.get('command'), b.get('payload') or {}))
             if p == "/api/rules":
                 return self._send(200, engine.update_rules(b.get("changes") or {}, actor="hotel manager"))
             if p == "/api/rules/reset":
