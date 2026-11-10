@@ -46,6 +46,7 @@ VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
 PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
+MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
 OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
 # token instead, so a buyer can use the link without the hotel's access token. Presenter tools
@@ -179,9 +180,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(n) if n else b""
-        return raw
+        """The request body, or None when it is refused (the response has then been sent): no request needs more
+        than MAX_BODY bytes, and reading whatever length a client claims let one request hold the server."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:
+            self._send(400, {"error": "invalid Content-Length"})
+            return None
+        if n > MAX_BODY:
+            self._send(413, {"error": f"request too large ({n:,} bytes; the limit is {MAX_BODY:,})"})
+            self.close_connection = True
+            return None
+        return self.rfile.read(n) if n else b""
 
     def _json(self, raw):
         try:
@@ -263,6 +275,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p = u.path.rstrip("/")
         raw = self._body()
+        if raw is None:
+            return
         b = self._json(raw)
         if not self._authorized(p, {}):
             return self._send(401, {"error": "access token required"})

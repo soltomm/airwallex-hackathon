@@ -19,7 +19,7 @@ from . import rules
 from .calc import gbp
 from .bookable import window_text
 from .engine import Engine, Refused
-from .extract import extract, stay_nights
+from .extract import PAYER, extract, stay_nights
 from . import understand
 from .trace import Traced
 
@@ -774,7 +774,7 @@ class RulesSeller:
         for lay in ("classroom", "boardroom", "theatre", "u-shape"):
             if lay in low:
                 out["meeting_layout"] = lay
-        m = re.search(r"([A-Z][A-Za-z&]+(?:\s+[A-Z][A-Za-z&]+)*\s+(?:Demo\s+)?(?:Ltd|Limited|LLP|plc|Inc))", text)
+        m = re.search(PAYER, text)
         if m:
             out["payer"] = m.group(1)
         if re.search(r"inclusive of tax|includes tax|including tax|tax(es)? included|incl\.? tax", low):

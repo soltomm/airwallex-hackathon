@@ -48,6 +48,13 @@ def _currency(text: str) -> str:
     return "GBP"
 
 
+# A company name ending in a legal suffix. Anchored at word starts with bounded words: unanchored and unbounded,
+# a long run of letters (a pasted base64 blob) made the search quadratic and froze the server for minutes.
+PAYER = r"\b([A-Z][A-Za-z&]{1,40}(?:\s+[A-Z][A-Za-z&]{0,40}){0,8}\s+(?:Demo\s+)?(?:Ltd|Limited|LLP|plc|Inc|GmbH|LLC))\b"
+MAX_EMAIL_CHARS = 20_000      # longer emails are refused at intake (see Engine.ingest_email)
+MAX_MESSAGE_CHARS = 10_000    # a buyer's reply in the mailbox
+
+
 def _n(s: str) -> int:
     s = s.lower()
     return WORDS[s] if s in WORDS else int(s)
@@ -164,7 +171,7 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
         # London is on GMT in January; the demo only uses winter deadlines.
         req["reply_by"] = datetime(year, MONTHS[m.group(2)], int(m.group(1)), hour, tzinfo=timezone.utc).isoformat()
 
-    m = re.search(r"([A-Z][A-Za-z&]+(?:\s+[A-Z][A-Za-z&]+)*\s+(?:Demo\s+)?(?:Ltd|Limited|LLP|plc|Inc|GmbH|LLC))\b", body)
+    m = re.search(PAYER, body)
     if m:
         req["payer"] = m.group(1).strip()
 

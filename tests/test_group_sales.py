@@ -2247,3 +2247,25 @@ def test_a_block_that_fits_is_still_promised(eng):
     e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
     RulesSeller(e).run()
     assert "can hold your rooms once we quote" in deal_by(e, "groupie.example")["thread"][-1]["text"]
+
+
+def test_a_long_run_of_letters_does_not_freeze_the_extractor():
+    """The payer pattern was quadratic on a long unbroken run of letters (a pasted base64 blob): 20,000 letters took
+    about 8 seconds and 100,000 about 3 minutes, holding up the whole server."""
+    import time
+    t = time.time()
+    r = extract("x", "Please quote 5 king rooms. " + "A" * 200_000 + " Billed to Groupie LLC.")
+    assert time.time() - t < 2 and r["payer"] == "Groupie LLC"
+    assert extract("x", "Billed to Northstar Analytics Demo Ltd.")["payer"] == "Northstar Analytics Demo Ltd"
+
+
+def test_oversized_or_malformed_emails_and_messages_are_refused_with_a_reason(eng):
+    e = eng
+    with pytest.raises(Refused, match="too long"):
+        e.ingest_email("Lo <lo@long.example>", "Trip", "Please quote 5 king rooms. " + "x " * 12_500, wake=False)
+    with pytest.raises(Refused, match="must be text"):
+        e.ingest_email(["x"], "Trip", "hello", wake=False)
+    n = deal_by(e, "Northstar")
+    with pytest.raises(Refused, match="too long"):
+        e.buyer_action(n["id"], n["buyer_token"], "message", "y" * 10_001)
+    assert e.ingest_email("Ok <ok@ok.example>", "Trip", "Please quote 2 king rooms.", wake=False)["duplicate"] is False
