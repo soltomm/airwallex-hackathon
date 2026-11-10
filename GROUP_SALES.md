@@ -336,6 +336,30 @@ ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review.
 4,156 confirmed bookings, 470 refunds, 17 refunds failed and handled, and 43 payments received with
 a booking exception, plus deals handed to a person or declined.
 
+### Generated inquiries
+
+`src/agentbank/groupsales/generator.py` writes new inquiries for automated runs and demos. Each one is an
+RFP email plus a private brief for the buyer agent (its answers, goals, limits and a later change). The
+generator only writes the inbound: the seller agent, the buyer agent and the engine handle everything after
+it, and the seller never sees the brief.
+
+An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
+(`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
+(`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
+
+| Preset | Path with the rules seller |
+|---|---|
+| `straight_booking` | quote, accept, deposit paid |
+| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, organizer sign-off, paid |
+| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), organizer sign-off, paid, fewer rooms, partial refund, hotel payout reversed |
+| `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
+| `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
+
+The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the
+seed, so replaying a seed in the same run is refused rather than merged. From the server:
+`GET /api/simulate/presets`, `POST /api/simulate/rfp {"preset": ..., "traits": {...}, "seed": ...}`.
+`tests/test_generator.py` runs every preset end to end.
+
 ### Browser check of the demo script
 
 `scripts/e2e_demo.js` clicks through the demo script in a real browser against a running server with

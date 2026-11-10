@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from .calc import gbp
 from .engine import Engine, Refused
@@ -19,7 +19,22 @@ BUYER_MODEL = os.environ.get("GS_BUYER_MODEL", "claude-opus-5-5")
 
 
 def brief(engine: Engine, d: dict) -> dict | None:
-    return engine.scenario["buyers"].get(d.get("buyer_profile") or "")
+    return engine.buyer_brief(d)
+
+
+def change_due(engine: Engine, d: dict, b: dict) -> bool:
+    """Whether the brief's later change (fewer rooms) is due: at a fixed scenario time, or a set number of
+    scenario hours after the booking was confirmed (generated buyers, whose booking time isn't known upfront)."""
+    ev = b.get("change_event")
+    bk = d.get("booking")
+    if not ev or not bk or bk.get("status") != "confirmed":
+        return False
+    if ev.get("after"):
+        return engine.now() >= ev["after"]
+    if ev.get("after_booked_hours") is not None and bk.get("confirmed_at"):
+        due = datetime.fromisoformat(bk["confirmed_at"]) + timedelta(hours=float(ev["after_booked_hours"]))
+        return datetime.fromisoformat(engine.now()) >= due
+    return False
 
 
 def suggest(engine: Engine, deal_id: str) -> dict | None:
@@ -67,14 +82,24 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
             if d["thread"][-1]["from"] == "buyer":
                 return None
             obj = b.get("objectives") or {}
-            want_att = obj.get("attrition_pct")
-            if want_att and cur["terms"]["attrition_pct"] < want_att and "counter" not in sent_actions:
+            want_att, want_rate = obj.get("attrition_pct"), obj.get("target_rate")
+            need_att = bool(want_att and cur["terms"]["attrition_pct"] < want_att)
+            need_rate = bool(want_rate and cur["terms"]["rate"] > want_rate)
+            if (need_att or need_rate) and "counter" not in sent_actions:
                 dep = obj.get("opening_deposit_pct", cur["terms"]["deposit_pct"])
-                return {"action": "counter",
-                        "text": f"Thank you, the £{cur['terms']['rate'] // 100} room rate works for us. Attendance is "
-                                f"still uncertain, so we need a {want_att}% attrition allowance. We propose a "
-                                f"{dep}% deposit.",
-                        "payload": {"attrition_pct": want_att, "deposit_pct": dep}}
+                payload: dict = {}
+                if need_rate:
+                    parts = [f"Thank you for the offer. Our target is {gbp(want_rate)} per room-night, so we'd ask you "
+                             "to meet that rate."]
+                    payload["rate"] = want_rate
+                else:
+                    parts = [f"Thank you, the £{cur['terms']['rate'] // 100} room rate works for us."]
+                if need_att:
+                    parts.append(f"Attendance is still uncertain, so we need a {want_att}% attrition allowance.")
+                    payload["attrition_pct"] = want_att
+                parts.append(f"We propose a {dep}% deposit.")
+                payload["deposit_pct"] = dep
+                return {"action": "counter", "text": " ".join(parts), "payload": payload}
             if b.get("waits_for_organizer_after_quote"):
                 if "message" not in sent_actions:
                     return {"action": "message", "text": "Thanks for the quote. I'm taking it to our organizer for "
@@ -90,7 +115,7 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
             return {"action": "accept", "text": f"We accept amendment v{cur['n']}.", "payload": {"version": cur["n"]}}
         if st == "confirmed" and b.get("change_event") and "change_request" not in sent_actions:
             ev = b["change_event"]
-            if engine.now() >= ev["after"]:
+            if change_due(engine, d, b):
                 return {"action": "change_request", "text": ev["text"],
                         "payload": {"rooms_per_night": ev["release_rooms_per_night"]}}
         return None
@@ -178,13 +203,15 @@ BUYER_TOOLS = [{
     "name": "buyer_act", "strict": True,
     "description": "Send one message to the hotel: reply, counter, accept, change_request or message.",
     "input_schema": {"type": "object", "additionalProperties": False,
-                     "required": ["action", "text", "version", "attrition_pct", "deposit_pct", "rooms_per_night", "answers"],
+                     "required": ["action", "text", "version", "attrition_pct", "deposit_pct", "rate", "rooms_per_night",
+                                  "answers"],
                      "properties": {
                          "action": {"type": "string", "enum": ["reply", "counter", "accept", "change_request", "message"]},
                          "text": {"type": "string"},
                          "version": {"type": ["integer", "null"]},
                          "attrition_pct": {"type": ["integer", "null"]},
                          "deposit_pct": {"type": ["integer", "null"]},
+                         "rate": {"type": ["integer", "null"], "description": "proposed room rate in pence"},
                          "rooms_per_night": {"type": ["integer", "null"]},
                          "answers": {"type": ["object", "null"], "additionalProperties": False,
                                      "required": ["meeting_layout", "payer", "budget_includes_taxes"],
@@ -208,7 +235,7 @@ class BuyerAgent:
             from ..agent.loop import make_client
             self._client = make_client()
         view = self.e.deal_view(deal_id, for_="buyer")
-        if b.get("change_event") and self.e.now() >= b["change_event"]["after"] and d["status"] == "confirmed":
+        if change_due(self.e, d, b) and d["status"] == "confirmed":
             view["event"] = "News from your organizer: " + b["change_event"]["text"]
         resp = self._client.beta.messages.create(
             model=self.model, max_tokens=4000,
@@ -224,7 +251,7 @@ class BuyerAgent:
         if a["action"] == "accept":
             payload["version"] = a.get("version") or d["versions"][-1]["n"]
         if a["action"] == "counter":
-            payload.update({k: a[k] for k in ("attrition_pct", "deposit_pct") if a.get(k) is not None})
+            payload.update({k: a[k] for k in ("attrition_pct", "deposit_pct", "rate") if a.get(k) is not None})
         if a["action"] == "change_request":
             payload["rooms_per_night"] = a.get("rooms_per_night")
         if a["action"] == "reply" and a.get("answers"):

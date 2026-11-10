@@ -1556,6 +1556,20 @@ def test_buyer_mailbox_and_organizer_sign_off(server):
     assert e.s["approvals"][r["approval_id"]]["status"] == "approved"
 
 
+def test_generated_inquiry_endpoint(server):
+    st, _, body = _req(server, "/api/simulate/presets")
+    assert st == 200 and "full_lifecycle" in json.loads(body)["presets"]
+    st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
+    r = json.loads(body)
+    assert st == 200 and r["seed"] == 4242 and r["rfp"]["from"].endswith("4242.example>")
+    d = server.engine.deal(r["deal_id"])
+    assert d["buyer_profile"] and d["payer_origin"]["country_code"] == "DE"
+    st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
+    assert st == 400 and "already has an inquiry" in json.loads(body)["error"]
+    st, _, body = _req(server, "/api/simulate/rfp", {"traits": {"price": "free"}})
+    assert st == 400 and "price must be one of" in json.loads(body)["error"]
+
+
 def test_rules_api(server):
     mod = server
     st, _, body = _req(mod, "/api/rules")

@@ -30,6 +30,7 @@ from agentbank.config import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
+from agentbank.groupsales import generator  # noqa: E402
 from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
@@ -238,6 +239,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.hotel_account_view(check=q.get("check") == "1"))
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
+            if p == "/api/simulate/presets":
+                return self._send(200, {"presets": generator.PRESETS, "traits": generator.TRAITS,
+                                        "defaults": generator.DEFAULTS})
             if p == "/api/fx/countries":
                 return self._send(200, fx.directory())
             if p.startswith("/pay/"):
@@ -310,6 +314,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/notifications/release":
                 return self._send(200, engine.release_notifications())
+            if p == "/api/simulate/rfp":
+                # A generated inquiry: the RFP email plus its buyer's private brief. The seller and buyer agents
+                # take it from there; nothing else in the deal is simulated.
+                gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
+                                         seed=b.get("seed"))
+                return self._send(200, generator.send(engine, gen))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
