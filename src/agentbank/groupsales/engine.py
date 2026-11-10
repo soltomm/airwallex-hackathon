@@ -86,6 +86,7 @@ class Engine:
         # One JSON document: a file under var/, or a Postgres row when DATABASE_URL is set (storage.py),
         # so a hosted instance keeps its state across deploys and idle spin-downs.
         self.store = doc(self.var / "groupsales_state.json")
+        self.vendor_history_store = doc(self.var / "groupsales_vendor_history.json")
         self.runs = doc(self.var / "groupsales_runs.json")
         self.followups = doc(self.var / "groupsales_followups.json")
         # Hotel staff's changes to the seller's rules (rules.EDITABLE), kept apart from the scenario
@@ -160,6 +161,8 @@ class Engine:
     # ================================================================ reset / clock
     def reset(self, reason: str = "presenter reset", archive: bool = True) -> dict:
         with self.lock:
+            if self.s:
+                self._sync_vendor_history()
             followups = []
             if archive and self.s:
                 for op in self.s.get("operations", {}).values():
@@ -366,8 +369,12 @@ class Engine:
 
     # ================================================================ intake
     def ingest_email(self, sender: str, subject: str, body: str, message_id: str | None = None,
-                     in_reply_to: str | None = None, received_at: str | None = None, wake: bool = True) -> dict:
+                     in_reply_to: str | None = None, received_at: str | None = None, wake: bool = True, third_party: dict | None = None) -> dict:
         with self.lock:
+            try:
+                third_party = vendors.simulation_options(third_party)
+            except ValueError as exc:
+                raise Refused(str(exc))
             norm = re.sub(r"\s+", " ", body.strip().lower())
             key = message_id or "h:" + hashlib.sha256(f"{sender.lower()}|{norm}".encode()).hexdigest()[:20]
             content_key = "c:" + hashlib.sha256(f"{sender.lower()}|{norm}".encode()).hexdigest()[:20]
@@ -421,6 +428,8 @@ class Engine:
                 "fx_reference": 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + did).hex[:24],
                 "pending_acceptance": None,
             }
+            if third_party:
+                deal["third_party"] = {**vendors.workspace(deal), "enabled": True, "simulation_pending": third_party}
             self.s["deals"][did] = deal
             self.s["emails"][eid] = {"id": eid, "key": key, "content_key": content_key, "deal_id": did,
                                      "from": sender, "subject": subject, "body": body, "at": at}
@@ -552,6 +561,25 @@ class Engine:
             merged["date_issue"] = self._date_issue(merged)
             merged["out_of_scope"] = problems
             d["requirements"] = merged
+            pending = vendors.workspace(d).get('simulation_pending')
+            if pending and merged.get('arrival') and merged.get('departure') and not merged['date_issue']:
+                candidate = copy.deepcopy(d)
+                category = pending['category']
+                supplier = next(v for v in vendors.directory()['providers'] if category in v['categories'])
+                payload = {'vendor_id': supplier['id'], 'category': category, 'title': 'Simulated ' + category + ' package',
+                           'start': merged['arrival'], 'end': merged['departure'],
+                           'quantity': min(1000, max(1, int(merged.get('guests') or merged.get('rooms') or 1))) if category == 'catering' else 1}
+                # A generated service supplements the hotel allocation by default. Partner rooms replace one host room.
+                if category == 'rooms': candidate['third_party']['host_rooms'] = max(0, int(merged.get('rooms') or 1) - 1)
+                if category == 'meeting': candidate['third_party']['external_meetings'] = 1
+                vendors.mutate(candidate, 'request', payload, self.now(), lambda prefix: prefix + uuid.uuid4().hex[:12], self.s['deals'].values(), 'simulator')
+                if pending['quote_response']:
+                    rid = candidate['third_party']['requests'][-1]['id']
+                    vendors.mutate(candidate, 'quote', vendors.hypothetical_quote(candidate, rid, self.now()), self.now(), None, [], 'simulator')
+                candidate['third_party'].pop('simulation_pending')
+                d['third_party'] = candidate['third_party']
+                self._sync_vendor_history()
+                self.log(d['id'], 'simulator', 'vendor_workflow', 'Created simulated vendor request; hypothetical pricing requires normal approval and confirmation.')
             d["missing"] = missing_info(merged)
             if d["status"] == "new" or (d["status"] == "dates_proposed" and not merged["date_issue"]
                                         and merged.get("arrival")):
@@ -830,6 +858,25 @@ class Engine:
                 self._save()
 
     # ================================================================ offers
+    def _sync_vendor_history(self):
+        rows = {r['id']: r for r in (self.vendor_history_store.read() or [])}
+        states = [r['state'] for r in (self.runs.read() or [])] + [self.s]
+        for state in states:
+            for d in state.get('deals', {}).values():
+                for row in vendors.history_rows(d, state['run_id']):
+                    rows[row['id']] = row
+        self.vendor_history_store.write(list(rows.values()))
+
+    def vendor_history(self, vendor_id, exclude_deal=None):
+        with self.lock:
+            provider = next((v for v in vendors.directory()['providers'] if v['id'] == vendor_id), None)
+            if not provider: raise Refused('Provider not found.')
+            self._sync_vendor_history()
+            rows = [dict(r, current_run=r['run_id'] == self.s['run_id']) for r in self.vendor_history_store.read()
+                    if r['vendor_id'] == vendor_id and not (r['run_id'] == self.s['run_id'] and r['deal_id'] == exclude_deal)]
+            rows.sort(key=lambda r: (r['start'], r['id']), reverse=True)
+            return {'provider': copy.deepcopy(provider), 'transactions': rows, 'currency': 'GBP'}
+
     def vendor_workspace(self, deal_id):
         with self.lock:
             d = self.deal(deal_id)
@@ -878,10 +925,14 @@ class Engine:
                 return self.vendor_workspace(deal_id)
             candidate = copy.deepcopy(d)
             try:
+                if command == 'simulate_quote':
+                    body = vendors.hypothetical_quote(candidate, body.get('request_id'), self.now())
+                    command = 'quote'
                 text = vendors.mutate(candidate, command, body, self.now(), lambda prefix: prefix + uuid.uuid4().hex[:12], self.s['deals'].values(), actor)
             except (ValueError, TypeError, KeyError) as exc:
                 raise Refused(str(exc))
             d['third_party'] = candidate['third_party']
+            self._sync_vendor_history()
             if command not in ('execution', 'payment_status'):
                 for v in d['versions']:
                     if v['status'] in ('draft', 'pending_approval', 'approved', 'sent'):

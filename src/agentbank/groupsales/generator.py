@@ -238,10 +238,10 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
             "payer": {"country": country, "currency": t["payer_currency"]} if t["payer_country"] else None}
 
 
-def send(engine: Engine, gen: dict) -> dict:
+def send(engine: Engine, gen: dict, third_party=None) -> dict:
     """Deliver a generated inquiry: register its brief, then the email, then the payer's country if abroad."""
     engine.register_buyer_brief(gen["domain"], gen["brief"])
-    r = engine.ingest_email(gen["from"], gen["subject"], gen["body"])
+    r = engine.ingest_email(gen["from"], gen["subject"], gen["body"], third_party=third_party)
     if gen.get("payer"):
         engine.update_payer(r["deal_id"], gen["payer"]["country"], gen["payer"]["currency"], actor="generator")
     engine.mark_generated(r["deal_id"], gen.get("preset"), gen["seed"])

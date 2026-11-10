@@ -225,6 +225,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (WEB / name).read_text(), mime)
             if p == "/api/state":
                 return self._send(200, state())
+            if p.startswith('/api/vendors/') and p.endswith('/history'):
+                return self._send(200, engine.vendor_history(p.split('/')[3], q.get('exclude_deal')))
             if p == '/api/vendor_directory':
                 return self._send(200, vendors.directory())
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
@@ -335,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
                 # take it from there; nothing else in the deal is simulated.
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
                                          seed=b.get("seed"))
-                return self._send(200, generator.send(engine, gen))
+                return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party"))))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
@@ -345,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc:
                         raise Refused(str(exc))
                 result = engine.ingest_email(b["from"], b.get("subject") or "(no subject)", b["body"],
-                                            message_id=b.get("message_id") or None)
+                                            message_id=b.get("message_id") or None, third_party=b.get("third_party"))
                 if b.get('payer_country'):
                     engine.update_payer(result['deal_id'], b['payer_country'], b.get('payer_currency'))
                 return self._send(200, result)
