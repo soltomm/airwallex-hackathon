@@ -134,6 +134,15 @@ def test_same_seed_same_inquiry_and_other_seeds_differ(tmp_path):
     assert a["body"] != c["body"] and a["domain"] != c["domain"]
 
 
+def test_every_preset_finds_dates_against_the_seeded_calendar(eng):
+    """The room count used to come from total capacity (20), so with the calendar's existing bookings some
+    seeds asked for more rooms than any window had free and generate() refused (seed 11, full_lifecycle)."""
+    for preset in generator.PRESETS:
+        for seed in range(1, 41):
+            g = generator.generate(eng, preset=preset, seed=seed)
+            assert g["body"] and g["brief"], (preset, seed)
+
+
 def test_a_replayed_seed_in_the_same_run_is_refused_not_merged(eng):
     new(eng, "straight_booking", 9)
     with pytest.raises(Refused, match="already has an inquiry"):

@@ -129,7 +129,12 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
         rooms = t["rooms"] or rng.randint(lo, min(room_cap, lo + 6))
         arrival = _too_soon(engine, rng, nights_n)
     else:
-        rooms = t["rooms"] or rng.randint(lo, min(room_cap, lo + 6))
+        if not t["rooms"]:
+            # Ask for no more rooms than some window in the live calendar has free (bookings already hold some).
+            most = _most_free(engine, rt, nights_n, lead_min, t["meeting"])
+            if most < lo:
+                raise Refused(f"no {nights_n}-night stay with {lo} {rt} rooms free in the next months; try fewer rooms")
+        rooms = t["rooms"] or rng.randint(lo, min(room_cap, lo + 6, most))
         arrival = _fitting_window(engine, rng, rt, nights_n, rooms, lead_min, t["meeting"])
     nights = stay_nights(arrival, _plus(arrival, nights_n))
     departure = _plus(arrival, nights_n)
@@ -265,6 +270,19 @@ def _fitting_window(engine: Engine, rng: random.Random, rt: str, n: int, rooms: 
     if not options:
         raise Refused(f"no {n}-night stay with {rooms} {rt} rooms free in the next months; try fewer rooms")
     return rng.choice(options)
+
+
+def _most_free(engine: Engine, rt: str, n: int, lead_min: int, meeting: bool) -> int:
+    """The most rooms of this type free on every night of some n-night stay that _fitting_window would search."""
+    today = date.fromisoformat(engine.now()[:10])
+    best = 0
+    for k in range(lead_min, lead_min + 150):
+        a = (today + timedelta(days=k)).isoformat()
+        nights = stay_nights(a, _plus(a, n))
+        free = [_free(engine, x, rt) for x in nights]
+        if free and None not in free and (not meeting or _meeting_day(engine, nights)):
+            best = max(best, min(free))
+    return best
 
 
 def _too_soon(engine: Engine, rng: random.Random, n: int) -> str:
