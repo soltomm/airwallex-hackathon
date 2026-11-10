@@ -568,11 +568,32 @@ class Engine:
                     "date_issue": merged["date_issue"]}
 
     def _refresh_missing(self, d: dict) -> None:
-        d["missing"] = missing_info(d["requirements"])
+        req = d["requirements"]
+        d["missing"] = missing_info(req)
         w = vendors.workspace(d)
-        too_big = self.meeting_too_big(d["requirements"])
-        if too_big and not (w["enabled"] and w.get("external_meetings")):
+        external = w["enabled"] and w.get("external_meetings")
+        layouts = self.meeting_layouts()
+        if layouts and not external:
+            # Ask only for layouts the hotel's rooms are set up for: offering "boardroom, theatre..." and then
+            # handing the deal to staff when the buyer picks one was a dead end.
+            options = ", ".join(layouts)
+            d["missing"] = [f"meeting room layout ({options})" if q.startswith("meeting room layout") else q
+                            for q in d["missing"]]
+            mt = req.get("meeting") if isinstance(req.get("meeting"), dict) else None
+            asked = (mt or {}).get("layout")
+            if asked and asked != "any" and asked not in layouts:
+                rooms = " or ".join(r["label"] for r in self.hotel["meeting_rooms"].values())
+                d["missing"].append(f"meeting room layout ({options}): the {rooms} can't be set up as {asked}")
+        too_big = self.meeting_too_big(req)
+        if too_big and not external:
             d["missing"].append(too_big["question"])
+
+    def meeting_layouts(self) -> list[str]:
+        """The layouts the hotel's meeting rooms are set up for, in the order the hotel data lists them."""
+        out: list[str] = []
+        for room in self.hotel["meeting_rooms"].values():
+            out += [lay for lay in room["capacity"] if lay not in out]
+        return out
 
     def meeting_too_big(self, req: dict) -> dict | None:
         """When the group's meeting has more attendees than any meeting room seats (in the layout asked for, or in

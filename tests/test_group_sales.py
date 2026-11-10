@@ -2151,7 +2151,7 @@ def _groupie(e, n):
     first = d["thread"][-1]
     assert d["status"] == "needs_info"
     # Only what is really missing; never the rooms or dates the buyer gave.
-    assert first["questions"] == ["room type (king or twin)", "meeting room layout (classroom, boardroom, theatre...)",
+    assert first["questions"] == ["room type (king or twin)", "meeting room layout (classroom)",
                                   "meeting date"]
     e.buyer_action(d["id"], d["buyer_token"], "message", GROUPIE_REPLY.format(n=n))
     RulesSeller(e).run()
