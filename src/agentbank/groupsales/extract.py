@@ -72,6 +72,10 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
             req["arrival"] = _date(m.group(1), m.group(3), year)
             req["departure"] = _date(m.group(2), m.group(3), year)
 
+    multiple_meetings = re.search(NUM + r"\s+meeting rooms", low)
+    if multiple_meetings:
+        req["meeting_count"] = _n(multiple_meetings.group(1))
+
     req["breakfast"] = "breakfast" in low and "no breakfast" not in low and "without breakfast" not in low
 
     if re.search(r"no meeting (room|space)", low):

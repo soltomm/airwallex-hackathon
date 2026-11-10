@@ -32,3 +32,4 @@ jobs:
           node --check web/openflow.js
           node --check web/openflow-demo.js
           node --check web/fx.js
+          node --check web/vendors.js

@@ -77,7 +77,13 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
                               f"{', '.join(mr['includes'])})", "qty": 1, "unit": meeting_price,
                       "amount": meeting_price})
     accommodation = used_rn * rate
-    total = accommodation + bf_count * bf_unit + meeting_price
+    vendor_lines = terms.get('vendor_lines', [])
+    vendor_total = sum(line['total'] for line in vendor_lines)
+    vendor_cost = sum(line['cost'] for line in vendor_lines)
+    for line in vendor_lines:
+        lines.append({'item': line['label'] + ' (third-party service)', 'qty': line['quantity'],
+                      'unit': None, 'amount': line['total'], 'note': f"{line['start']} to {line['end']}; {line['location']}; bundled price"})
+    total = accommodation + bf_count * bf_unit + meeting_price + vendor_total
     deposit = pct_of(total, int(terms["deposit_pct"]))
 
     costs = rms["delivery_costs"]
@@ -85,12 +91,12 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     def contribution(room_nights: int) -> dict:
         # Delivery costs follow the rooms used. Displacement is carried on every contracted room-night;
         # released rooms get the resale share back (actual releases night by night, the rest of the
-        # allowance at the average for the stay).
-        revenue = room_nights * rate + bf_count * bf_unit + meeting_price
+        # allowance at the average for the stay). Third-party vendor services pass through at their cost.
+        revenue = room_nights * rate + bf_count * bf_unit + meeting_price + vendor_total
         more = used_rn - room_nights
         resold = disp["resold_released"] + (disp["blocked"] * more * disp["resale_pct"]) // (contracted * 100 or 1)
         cost = (room_nights * costs[rt] + disp["blocked"] - resold + bf_count * costs["breakfast"]
-                + (costs["meeting_day"] if meeting else 0))
+                + (costs["meeting_day"] if meeting else 0) + vendor_cost)
         contrib = revenue - cost
         return {"revenue": revenue, "costs": cost, "contribution": contrib,
                 "margin_pct": round(100 * contrib / revenue, 1) if revenue else 0.0}

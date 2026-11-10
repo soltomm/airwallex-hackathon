@@ -534,7 +534,7 @@ def system_prompt(engine) -> str:
     return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario))
             .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
             .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
-                                 f"{engine.policy['min_days_before_arrival']} days ahead"))
+                                 f"{engine.policy['min_days_before_arrival']} days ahead") + "\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff to resolve them.")
 
 
 _I = {"type": "integer"}
@@ -550,6 +550,8 @@ def _tool(name, desc, props, required=None):
 
 _DEAL = {"deal_id": {"type": "string", "description": "deal id or ref, e.g. GS-1001"}}
 TOOLS = [
+    _tool('vendor_workspace', 'Read this inquiry’s internal third-party requests, quotes and readiness. Hotel-only costs; never disclose to the buyer.', _DEAL),
+    _tool('request_vendor_quote', 'Issue a simulated sub-RFP to a directory provider after hotel staff enable third-party management. Does not approve, confirm or pay a vendor.', {**_DEAL, 'vendor_id': _S, 'category': _S, 'title': _S, 'start': _S, 'end': _S, 'quantity': _I}, ['deal_id','vendor_id','category','title','start','end']),
     _tool("list_queue", "All inquiries with status, deadline, waiting-on and next step.", {}),
     _tool("read_deal", "Full deal: emails/thread, requirements, versions, approvals, records, finance. Marks new input read.", _DEAL),
     {"name": "record_requirements", "description": "Record structured requirements from the inquiry (merged into what "
@@ -558,6 +560,7 @@ TOOLS = [
          **_DEAL,
          "requirements": {"type": "object", "additionalProperties": False, "properties": {
              "room_type": {"type": "string", "enum": ["twin", "king"]}, "rooms": _I, "guests": _I,
+             "meeting_count": _I,
              "occupancy": {"type": "integer", "description": "guests per room"},
              "arrival": {"type": "string", "description": "YYYY-MM-DD"}, "departure": {"type": "string", "description": "YYYY-MM-DD"},
              "breakfast": {"type": "boolean"},
@@ -624,6 +627,13 @@ class ClaudeSeller:
     def _do(self, name: str, a: dict):
         e = self.e
         did = a.get("deal_id")
+        if name == 'vendor_workspace':
+            return e.vendor_workspace(did)
+        if name == 'request_vendor_quote':
+            required = {'deal_id', 'vendor_id', 'category', 'title', 'start', 'end'}
+            if not required.issubset(a) or set(a) - (required | {'quantity'}):
+                raise Refused('Supply deal_id, vendor_id, category, title, start and end for a vendor request.')
+            return e.request_vendor_quote(**a)
         if name == "list_queue":
             return e.queue()
         if name == "read_deal":

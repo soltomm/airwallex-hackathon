@@ -1,5 +1,10 @@
 # Harbour House group sales agent
 
+Third-party sourcing, partner capacity and bundled master proposals are documented
+in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
+workflows; provider delivery/confirmation is simulated and vendor payouts are
+tracked without transferring money.
+
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex
 sandbox payments. This is the build for product spec v2 (Airwallex hackathon).
