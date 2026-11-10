@@ -2247,3 +2247,53 @@ def test_a_block_that_fits_is_still_promised(eng):
     e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
     RulesSeller(e).run()
     assert "can hold your rooms once we quote" in deal_by(e, "groupie.example")["thread"][-1]["text"]
+
+
+# The mailbox's answer form sends one structured answer per question the hotel asked.
+VAGUE_RFP = ("Hi, I need 6 rooms for 6 employees traveling from 12th Nov to 15th Novemeber, breakfast included. "
+             "We also need a meeting room on the 13th Nov. Billed to Vague Demo Ltd.")
+
+
+def test_answer_form_answers_complete_the_request_without_the_model(eng):
+    e = eng
+    e.ingest_email("Vic <vic@vague.example>", "Offsite", VAGUE_RFP, wake=False)
+    RulesSeller(e).run()                            # read by patterns (no model): rooms only, no dates
+    d = deal_by(e, "vague.example")
+    asked = d["thread"][-1]["questions"]
+    assert "arrival and departure dates" in asked and "room type (king or twin)" in asked
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "King rooms. Arriving 2027-03-10, departing 2027-03-13. ...",
+                   {"answers": {"room_type": "king", "arrival": "2027-03-10", "departure": "2027-03-13",
+                                "meeting_date": "2027-03-11", "meeting_layout": "classroom"}})
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    req = d["requirements"]
+    assert (req["room_type"], req["arrival"], req["departure"]) == ("king", "2027-03-10", "2027-03-13")
+    assert req["meeting"]["date"] == "2027-03-11" and req["meeting"]["layout"] == "classroom"
+    assert not d["missing"] and d["status"] == "offer_sent"
+
+
+def test_answer_form_values_are_validated(eng):
+    e = eng
+    e.ingest_email("Vic <vic@vague.example>", "Offsite", VAGUE_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "...",
+                   {"answers": {"room_type": "penthouse", "rooms": -4, "arrival": "2027-03-13",
+                                "departure": "2027-03-10", "meeting_layout": "ballroom", "meeting_date": "soon"}})
+    RulesSeller(e).run()
+    req = deal_by(e, "vague.example")["requirements"]
+    assert req.get("room_type") is None and req["rooms"] == 6 and req.get("arrival") is None
+    assert req["meeting"].get("layout") is None and req["meeting"].get("date") is None
+
+
+def test_buyer_can_still_write_after_a_handoff(eng):
+    e = eng
+    e.ingest_email("Vic <vic@vague.example>", "Offsite", VAGUE_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    e.escalate(d["id"], "test hand-off")
+    e.buyer_action(d["id"], d["buyer_token"], "message", "Any news? We could also do 8 rooms.")
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    assert d["status"] == "handoff" and d["unread"]                       # with staff, flagged for them
+    assert d["thread"][-1]["from"] == "buyer"                              # the seller agent doesn't answer it
