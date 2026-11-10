@@ -2167,10 +2167,49 @@ def test_free_text_answers_and_any_preferences_complete_the_request(eng):
     assert sum(1 for m in d["thread"] if m["from"] == "seller" and m.get("questions")) == 1
 
 
-def test_a_meeting_room_too_small_goes_to_a_person_instead_of_asking_again(eng):
-    d = _groupie(eng, 50)                       # the Thames Room seats 32
-    assert d["status"] == "handoff" and "32" in d["handoff"]["reason"]
-    assert sum(1 for m in d["thread"] if m["from"] == "seller" and m.get("questions")) == 1
+SIZE_Q = ("whether to quote the Thames Room for 32 people or leave the meeting room out "
+          "(it seats 32 in classroom layout, not 50)")
+
+
+def _too_big(e):
+    """Owen's inquiry and reply with a 50-person meeting: the Thames Room seats 32."""
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=50), wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    assert d["thread"][-1]["questions"][-1] == SIZE_Q             # said in the first reply, not after dates
+    e.buyer_action(d["id"], d["buyer_token"], "message", GROUPIE_REPLY.format(n=50))
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    assert d["status"] == "needs_info" and d["thread"][-1]["questions"] == [SIZE_Q]   # only what's left
+    return d
+
+
+def test_a_meeting_too_big_for_the_room_is_offered_at_the_room_size(eng):
+    d = _too_big(eng)
+    eng.buyer_action(d["id"], d["buyer_token"], "message", "OK, 32 is fine then.")
+    RulesSeller(eng).run()
+    d = deal_by(eng, "groupie.example")
+    assert d["status"] == "offer_sent" and not d["handoff"]
+    assert d["versions"][-1]["terms"]["meeting"]["attendees"] == 32
+
+
+def test_a_meeting_too_big_for_the_room_can_be_left_out(eng):
+    d = _too_big(eng)
+    eng.buyer_action(d["id"], d["buyer_token"], "message", "We'll go without the meeting room.")
+    RulesSeller(eng).run()
+    d = deal_by(eng, "groupie.example")
+    assert d["status"] == "offer_sent" and d["requirements"]["meeting"] is None
+    assert not d["versions"][-1]["terms"].get("meeting")
+
+
+def test_a_budget_in_another_currency_is_read_and_never_compared_with_gbp_prices(eng):
+    r = extract("Group inquiry", GROUPIE_RFP.format(r=40, n=50))
+    assert (r["budget_total"], r["budget_currency"], r["budget_includes_taxes"]) == (2000000, "USD", True)
+    d = _groupie(eng, 30)
+    v = d["versions"][-1]
+    assert v["terms"]["rate"] == S["rms"]["rates"]["king"]["target"]   # not cut to the floor on a $ figure
+    assert any("$20,000 (USD)" in u and "priced in GBP" in u for u in v["unmet"])
+    assert "above your" not in v["message"]
 
 
 def test_a_reply_that_answers_nothing_is_not_met_with_the_same_questions(eng):

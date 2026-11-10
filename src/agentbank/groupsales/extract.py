@@ -28,6 +28,26 @@ _ANY = r"(?:any|whatever|either|no preference(?: on| for)?(?: the)?)"
 _FINE = r"(?:is |are )?(?:fine|ok|okay|good|works)|doesn'?t matter|does not matter|not important"
 
 
+# Currencies a budget may be written in, before or after the amount. Anything else isn't read as a budget.
+_CURRENCIES = {"£": "GBP", "gbp": "GBP", "pounds": "GBP", "$": "USD", "us$": "USD", "usd": "USD", "dollars": "USD",
+               "€": "EUR", "eur": "EUR", "euros": "EUR"}
+_CUR = r"£|us\$|\$|€|gbp|usd|eur"
+_CUR_AFTER = r"gbp|usd|eur|pounds|dollars|euros"
+
+
+def _minor(amount: str) -> int:
+    """'20,000' or '20,000.50' -> minor units (pence or cents), without going through a float."""
+    whole, _, cents = amount.replace(",", "").partition(".")
+    return int(whole) * 100 + int((cents + "00")[:2])
+
+
+def _currency(text: str) -> str:
+    for k in sorted(_CURRENCIES, key=len, reverse=True):
+        if re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", text):
+            return _CURRENCIES[k]
+    return "GBP"
+
+
 def _n(s: str) -> int:
     s = s.lower()
     return WORDS[s] if s in WORDS else int(s)
@@ -41,7 +61,7 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
     text = f"{subject}\n{body}"
     low = text.lower()
     req: dict = {"room_type": None, "rooms": None, "guests": None, "arrival": None, "departure": None,
-                 "breakfast": False, "meeting": None, "budget_total": None, "budget_includes_taxes": None,
+                 "breakfast": False, "meeting": None, "budget_total": None, "budget_currency": None, "budget_includes_taxes": None,
                  "target_per_room_night": None, "target_includes_breakfast": None, "payer": None,
                  "reply_by": None, "contact": None, "occupancy": None, "unsupported": [], "notes": []}
 
@@ -116,9 +136,13 @@ def extract(subject: str, body: str, sender: str = "", default_year: int = 2027)
         mt["equipment"] = [e for e in ("projector", "microphone", "wi-fi", "screen", "flipchart") if e in low]
         req["meeting"] = mt
 
-    m = re.search(r"£\s?([\d,]+)\s+total budget|total budget\s+(?:is\s+|of\s+)?£\s?([\d,]+)|budget\s+(?:is\s+|of\s+)?£\s?([\d,]+)", low)
+    # "£20,000 total budget", "total budget is $20,000", "budget of USD 20,000", "budget is 20,000 euros".
+    m = re.search(r"(?:" + _CUR + r")\s?([\d,]+(?:\.\d\d)?)\s*(?:" + _CUR_AFTER + r")?\s+total budget"
+                  r"|budget\s+(?:is\s+|of\s+)?(?:" + _CUR + r")\s?([\d,]+(?:\.\d\d)?)"
+                  r"|budget\s+(?:is\s+|of\s+)?([\d,]+(?:\.\d\d)?)\s*(?:" + _CUR_AFTER + r")", low)
     if m:
-        req["budget_total"] = int((m.group(1) or m.group(2) or m.group(3)).replace(",", "")) * 100
+        req["budget_total"] = _minor(m.group(1) or m.group(2) or m.group(3))
+        req["budget_currency"] = _currency(m.group(0))
         tail = low[m.end(): m.end() + 60]
         head = low[max(0, m.start() - 40): m.start()]
         if re.search(r"inclusive of tax|incl\.? (?:of )?tax|including tax|tax(es)? included", tail + head):
