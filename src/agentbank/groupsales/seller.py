@@ -451,17 +451,27 @@ class RulesSeller:
             return self._cannot_requote(deal_id, "the offered package can no longer be held (rooms, meeting space "
                                                  "or breakfast capacity)", AVAILABILITY_CHANGED)
         rooms, unmet, p = fit
+        withdrawn = False
         if _margin_short(p) and (rate != t["rate"] or att > e.policy["attrition"]["standard_pct"]):
             # Busy dates: displacement leaves no room for this concession. Keep the current rate and offer
-            # the standard release instead of asking for something the backend would refuse.
+            # the standard release instead of asking for something the backend would refuse. The deposit goes
+            # back to what the buyer asked, within what the seller may agree alone: the 40% exception deposit
+            # only pays for the concession, so keeping it would leave the buyer worse off than before asking.
+            withdrawn = True
             rate, att = t["rate"], e.policy["attrition"]["standard_pct"]
-            dep = max(e.policy["deposit"]["standard_pct"], min(dep, e.policy["deposit"]["max_pct"]))
+            asked = int(ask.get("deposit_pct") or t["deposit_pct"])
+            dep = max(e.policy["deposit"]["standard_pct"], min(asked, e.policy["deposit"]["max_pct"]))
             why = [f"demand on your dates is high, so the most we can release free is {att}%, at the {gbp(rate)} rate"]
+            if asked < dep:
+                why.append(f"our standard deposit is {dep}% for new accounts")
             p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
         pr = p["pricing"]
-        msg = (f"Thank you. We can offer {att}% attrition (up to {pr['attrition_allowance']} room-nights released without "
-               f"penalty until {e.policy['attrition']['release_days_before_arrival']} days before arrival) in exchange for "
-               f"a {dep}% deposit. " + " ".join(w[0].upper() + w[1:] + "." for w in why) + " "
+        release = (f"{att}% attrition (up to {pr['attrition_allowance']} room-nights released without penalty until "
+                   f"{e.policy['attrition']['release_days_before_arrival']} days before arrival)")
+        head = (f"Thank you for asking. We can't extend the free release on your dates; our offer stays at {release} "
+                f"and a {dep}% deposit. " if withdrawn else
+                f"Thank you. We can offer {release} in exchange for a {dep}% deposit. ")
+        msg = (head + " ".join(w[0].upper() + w[1:] + "." for w in why) + " "
                + self._offer_message(d, p, unmet, short=True))
         just = (f"Attendance uncertain; buyer asked for {ask.get('attrition_pct')}% attrition and a "
                 f"{ask.get('deposit_pct')}% deposit. Rate held at {gbp(rate)}; {dep}% deposit covers the extra flexibility; "
