@@ -14,10 +14,13 @@ TESTGUEST = ("I need 10 rooms for 10 employees traveling from 12th Nov to 15th N
              "We also need a meeting room on the 13th Nov")
 
 
+def meeting(**kw):
+    return {"status": "requested", "attendees": 0, "date": "", "layout": "unknown", "hours": "", **kw}
+
+
 def model_json(**kw):
-    """A reply shaped exactly like understand.SCHEMA, with nulls for everything not given."""
-    base = {k: None for k in understand.SCHEMA["required"]}
-    base.update(no_meeting=False, unsupported=[])
+    """A reply shaped exactly like understand.SCHEMA: "not stated" values for everything not given."""
+    base = understand.blank()
     base.update(kw)
     return base
 
@@ -46,8 +49,8 @@ def deal(e):
 
 
 def test_natural_language_inquiry_is_understood(eng):
-    reader = StubReader(model_json(rooms=10, guests=10, arrival="2027-11-12", departure="2027-11-15", breakfast=True,
-                                   meeting={"attendees": None, "date": "2027-11-13", "layout": None, "hours": None}))
+    reader = StubReader(model_json(rooms=10, guests=10, arrival="2027-11-12", departure="2027-11-15", breakfast="yes",
+                                   meeting=meeting(date="2027-11-13")))
     eng.ingest_email("TestGuest <guest@testguest.example>", "Group inquiry", TESTGUEST, wake=False)
     RulesSeller(eng, reader=reader).run()
     d = deal(eng)
@@ -63,10 +66,9 @@ def test_natural_language_inquiry_is_understood(eng):
 
 def test_free_text_reply_is_understood_in_context(eng):
     reader = StubReader(
-        model_json(rooms=10, guests=10, arrival="2027-11-12", departure="2027-11-15", breakfast=True,
-                   meeting={"attendees": 10, "date": "2027-11-13", "layout": None, "hours": None}),
-        model_json(room_type="any", payer="TestGuest Holdings Ltd",
-                   meeting={"attendees": None, "date": None, "layout": "boardroom", "hours": None}))
+        model_json(rooms=10, guests=10, arrival="2027-11-12", departure="2027-11-15", breakfast="yes",
+                   meeting=meeting(attendees=10, date="2027-11-13")),
+        model_json(room_type="any", payer="TestGuest Holdings Ltd", meeting=meeting(layout="boardroom")))
     eng.ingest_email("TestGuest <guest@testguest.example>", "Group inquiry", TESTGUEST, wake=False)
     seller = RulesSeller(eng, reader=reader)
     seller.run()
@@ -87,7 +89,8 @@ def test_buyer_picks_an_offered_date_option_in_words(eng):
     rfp = ("Please quote 4 king rooms for 4 employees arriving 3 January and departing 6 January 2027 with breakfast. "
            "No meeting room is needed. Billed to Microshift Demo Ltd.")
     reader = StubReader(model_json(rooms=4, room_type="king", guests=4, arrival="2027-01-03",
-                                   departure="2027-01-06", breakfast=True, no_meeting=True,
+                                   departure="2027-01-06", breakfast="yes",
+                                   meeting={**meeting(), "status": "not_needed"},
                                    payer="Microshift Demo Ltd"),
                         model_json(chosen_date_option=1))
     e.ingest_email("Jo <jo@microshift.example>", "Group RFP", rfp, wake=False)
@@ -119,7 +122,7 @@ def test_model_fields_are_validated_before_they_reach_the_engine():
     got = understand.to_requirements(model_json(
         rooms=-3, guests=True, arrival="2027-02-30", departure="2027-03-02", budget_amount="20,000.50",
         budget_currency="usd", room_type="single", unsupported=["spa", "not-a-service"],
-        meeting={"attendees": 0, "date": "nope", "layout": "ballroom", "hours": "all day"}))
+        meeting=meeting(attendees=-1, date="nope", layout="ballroom", hours="all day")))
     assert "rooms" not in got and "guests" not in got and "arrival" not in got
     assert (got["budget_total"], got["budget_currency"]) == (2000050, "USD")
     assert got["unsupported"] == ["single rooms", "spa"] and got["meeting"] == {}
@@ -167,15 +170,15 @@ def test_reader_client_sends_the_workspace_for_user_level_keys(monkeypatch):
 
 
 def test_schema_is_in_the_form_the_api_accepts():
-    """Structured outputs take one type name per node; nullable fields are anyOf [type, null]. A type list such as
-    ["integer", "null"] made every live call a 400, and the seller silently read with patterns. The SDK's own
-    transform_schema must leave the schema exactly as it is."""
+    """The API compiles the schema into a grammar: one type name per node, and at most 16 union-typed fields. Type
+    lists, then 21 anyOf fields, each made every live call a 400 and the seller silently read with patterns. So the
+    schema has no unions at all, and the SDK's own transform_schema leaves it exactly as it is."""
     import copy
     from anthropic.lib._parse._transform import transform_schema
 
     def walk(n):
         if isinstance(n, dict):
-            assert not isinstance(n.get("type"), list) and None not in (n.get("enum") or [])
+            assert not isinstance(n.get("type"), list) and "anyOf" not in n and None not in (n.get("enum") or [])
             for v in n.values():
                 walk(v)
         elif isinstance(n, list):
@@ -183,3 +186,5 @@ def test_schema_is_in_the_form_the_api_accepts():
                 walk(v)
     walk(understand.SCHEMA)
     assert transform_schema(copy.deepcopy(understand.SCHEMA)) == understand.SCHEMA
+    assert set(understand.blank()) == set(understand.SCHEMA["required"])
+    assert understand.to_requirements(understand.blank()) == {}           # "not stated" reads as nothing stated
