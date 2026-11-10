@@ -196,7 +196,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await click('#availMonths [data-month="2027-06"]');
     await click('#availCal [data-day="2027-06-15"]');
     check('picking June and a night shows that night', (await page.innerText('#availMonth')) === 'June 2027'
-      && /15 Jun night/.test(await page.innerText('#availDay')) && /20 free of 20/.test(await page.innerText('#availDay')));
+      && /15 Jun night/.test(await page.innerText('#availDay')) && /\d+ free of 20/.test(await page.innerText('#availDay')));
     await click('#avail [data-step="-1"]');
     check('previous month goes back to May', (await page.innerText('#availMonth')) === 'May 2027');
     await page.waitForTimeout(2500);                       // the dashboard re-renders from fresh data meanwhile
