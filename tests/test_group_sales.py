@@ -2183,3 +2183,28 @@ def test_a_reply_that_answers_nothing_is_not_met_with_the_same_questions(eng):
     d = deal_by(e, "groupie.example")
     assert d["status"] == "handoff" and "did not answer" in d["handoff"]["reason"]
     assert sum(1 for m in d["thread"] if m["from"] == "seller" and m.get("questions")) == 1
+
+
+def test_a_block_that_does_not_fit_is_described_night_by_night_and_never_promised(eng):
+    """The 40-room Groupie inquiry: 10, 9 and 6 kings are free on its three nights."""
+    e = eng
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=40, n=30), wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    first = d["thread"][-1]["text"]
+    assert "can hold your rooms" not in first and "can't hold the full block" in first
+    e.buyer_action(d["id"], d["buyer_token"], "message", GROUPIE_REPLY.format(n=30))
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    m = d["thread"][-1]
+    assert d["status"] == "dates_proposed" and m["date_options"]
+    assert m["text"].startswith("Thank you for your reply.")         # a follow-up, not a new inquiry
+    assert ("only 10 are free on 12 September 2027, 9 on 13 September 2027 and 6 on 14 September 2027"
+            in m["text"])
+
+
+def test_a_block_that_fits_is_still_promised(eng):
+    e = eng
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
+    RulesSeller(e).run()
+    assert "can hold your rooms once we quote" in deal_by(e, "groupie.example")["thread"][-1]["text"]
