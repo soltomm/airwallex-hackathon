@@ -20,6 +20,7 @@ from .calc import gbp
 from .bookable import window_text
 from .engine import Engine, Refused
 from .extract import extract, stay_nights
+from . import understand
 from .trace import Traced
 
 SELLER_MODEL = os.environ.get("GS_SELLER_MODEL", "claude-opus-5-5")
@@ -103,8 +104,59 @@ def _margin_short(p: dict) -> list[str]:
 class RulesSeller:
     name = "rules"
 
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: Engine, reader=None):
+        """`reader(text, today=, subject=, context=)` -> (fields, error) reads buyer text with the model
+        (understand.read). The decisions stay rule-based; only the reading is the model's. With no reader available
+        (no credentials, or the call fails) the pattern extractor reads the text instead."""
         self.e = engine
+        self.reader = reader or understand.read
+
+    # ---- reading buyer text ---------------------------------------------------------------
+    def _llm(self, deal_id: str | None, text: str, subject: str = "", context: dict | None = None) -> dict | None:
+        fields, err = self.reader(text, today=self.e.now(), subject=subject, context=context)
+        if err:
+            self.e.note(deal_id, f"Read the message with patterns instead: {err}.")
+        return fields
+
+    def _read_inquiry(self, d: dict) -> dict:
+        """The first email as requirements: the model's reading when it is available, else the patterns'."""
+        first = d["thread"][0]
+        base = extract(d["subject"], first["text"], d["sender"])
+        got = self._llm(d["id"], first["text"], subject=d["subject"])
+        if got is None:
+            return base
+        req = dict(base)
+        # The model's reading is the one used: a detail it didn't find is unknown, not whatever a pattern guessed.
+        for k in ("rooms", "room_type", "guests", "arrival", "departure", "payer", "budget_total", "budget_currency",
+                  "budget_includes_taxes", "target_per_room_night", "target_includes_breakfast"):
+            req[k] = got.get(k)
+        req["breakfast"] = got.get("breakfast", False)
+        if "meeting" in got and got["meeting"] is not None:
+            mt = {"attendees": None, "date": None, "hours": None, "layout": None,
+                  "equipment": (base.get("meeting") or {}).get("equipment", [])}
+            req["meeting"] = {**mt, **got["meeting"]}
+        else:
+            req["meeting"] = None
+        if req.get("room_type") == "twin":
+            req["occupancy"] = req.get("occupancy") or 2
+        for k in ("contact", "reply_by"):
+            req[k] = got.get(k) or base.get(k)
+        # Services the desk doesn't sell go to a person; either reading is enough to flag one.
+        req["unsupported"] = sorted(set(base.get("unsupported") or []) | set(got.get("unsupported") or []))
+        req["read_by"] = "model"
+        return req
+
+    def _reply_context(self, d: dict) -> dict:
+        req = d["requirements"] or {}
+        asked = next((x.get("questions") or [] for x in reversed(d["thread"]) if x["from"] == "seller"), [])
+        offered = next((x["date_options"] for x in reversed(d["thread"]) if x.get("date_options")), [])
+        known = {k: req.get(k) for k in ("rooms", "room_type", "guests", "arrival", "departure", "breakfast",
+                                         "meeting", "payer") if req.get(k) is not None}
+        ctx = {"already_known": known, "hotel_asked": asked}
+        if offered:
+            ctx["date_options_offered"] = [f"{i}. {o['arrival']} to {o['departure']}, {o['rooms_per_night']} "
+                                           f"{o['room_type']} rooms a night" for i, o in enumerate(offered, 1)]
+        return ctx
 
     def run(self, max_steps: int = 30, trigger: str = "") -> list[str]:
         raw, self.e = self.e, Traced(self.e, "rules", trigger, reads=False)
@@ -198,8 +250,7 @@ class RulesSeller:
         st = d["status"]
         ref = d["ref"]
         if st == "new":
-            first = d["thread"][0]
-            req = extract(d["subject"], first["text"], d["sender"])
+            req = self._read_inquiry(d)
             res = e.record_requirements(deal_id, req)
             e.deal_view(deal_id, mark_read=True)
             if res["out_of_scope"]:
@@ -242,13 +293,15 @@ class RulesSeller:
         if st == "needs_info" and d["unread"]:
             if not d["requirements"]:
                 # Questions went out before the inquiry was read (another seller asked them): read it first.
-                first = d["thread"][0]
-                e.record_requirements(deal_id, extract(d["subject"], first["text"], d["sender"]))
+                e.record_requirements(deal_id, self._read_inquiry(d))
             m = _latest_buyer_msg(d)
             asked = next((x.get("questions") for x in reversed(d["thread"]) if x["from"] == "seller"
                           and x.get("questions")), None) or list(d["missing"])
-            answers = (m.get("payload") or {}).get("answers") or self._answers_from_text(m["text"])
+            answers = (m.get("payload") or {}).get("answers") or {}
             upd = self._details_from_reply(d, m["text"])
+            if not answers and not upd.pop("_read_by_model", False):
+                answers = self._answers_from_text(m["text"])
+            upd.pop("_read_by_model", None)
             if answers.get("meeting_layout") and d["requirements"].get("meeting"):
                 upd["meeting"] = {**(upd.get("meeting") or {}), "layout": answers["meeting_layout"]}
             if answers.get("payer"):
@@ -442,6 +495,14 @@ class RulesSeller:
         e.deal_view(deal_id, mark_read=True)
         offered = next((x["date_options"] for x in reversed(d["thread"]) if x.get("date_options")), [])
         pick = (m.get("payload") or {}).get("dates") if m else None
+        if not pick and m:
+            read = self._llm(deal_id, m["text"], context=self._reply_context(d))
+            if read is not None:
+                n = read.get("chosen_date_option")
+                if n and 0 < n <= len(offered):
+                    pick = {"arrival": offered[n - 1]["arrival"], "departure": offered[n - 1]["departure"]}
+                elif read.get("arrival") and read.get("departure"):
+                    pick = {"arrival": read["arrival"], "departure": read["departure"]}
         if not pick and m:
             got = extract("", m["text"])
             if got.get("arrival") and got.get("departure"):
@@ -652,11 +713,34 @@ class RulesSeller:
             body += "\nWhere this differs from your request: " + "; ".join(unmet) + "."
         return body if short else "Thank you for your inquiry. " + body
 
+    def _details_from_reply(self, d: dict, text: str) -> dict:
+        """Everything a free-text reply settles about the request. Only what the reply states is returned, so it never
+        clears a detail the buyer gave earlier. Read by the model when it is available, else by the patterns."""
+        got = self._llm(d["id"], text, context=self._reply_context(d))
+        if got is not None:
+            return {**self._reply_update(d, got), "_read_by_model": True}
+        return self._details_from_patterns(d, text)
+
+    def _reply_update(self, d: dict, got: dict) -> dict:
+        req = d["requirements"] or {}
+        out = {k: got[k] for k in ("rooms", "room_type", "guests", "arrival", "departure", "breakfast", "payer",
+                                   "budget_total", "budget_currency", "budget_includes_taxes", "target_per_room_night",
+                                   "target_includes_breakfast") if k in got}
+        if req.get("meeting") and got.get("meeting"):
+            out["meeting"] = dict(got["meeting"])
+        elif "meeting" in got and got["meeting"] is None and req.get("meeting"):
+            out["meeting_declined"] = True                    # "we don't need the meeting room after all"
+        size = got.get("meeting_size_answer")
+        too_big = self.e.meeting_too_big(req) if req.get("meeting") else None
+        if size == "drop_meeting":
+            out.pop("meeting", None)
+            out["meeting_declined"] = True
+        elif size == "use_room_capacity" and too_big:
+            out["meeting"] = {**out.get("meeting", {}), "attendees": too_big["capacity"]}
+        return out
+
     @staticmethod
-    def _details_from_reply(d: dict, text: str) -> dict:
-        """Everything a free-text reply settles about the request (rooms, room type, dates, meeting date and layout),
-        read with the same extractor as the inquiry. Only what the reply states is returned, so it never clears a
-        detail the buyer gave earlier."""
+    def _details_from_patterns(d: dict, text: str) -> dict:
         req = d["requirements"] or {}
         year = int((req.get("arrival") or "2027")[:4])
         got = extract("", text, default_year=year)
