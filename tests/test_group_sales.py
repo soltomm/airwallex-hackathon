@@ -737,26 +737,24 @@ def test_seller_never_sees_buyer_mandate(eng):
     e = eng
     s, n = _to_accepted(e)
     mandate = S["buyers"]["northstar.example"]
-    forbidden = [gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit", "limit", "authority",
-                 mandate["organizer"], mandate["flexibility"]]
-    assert gbp(mandate["deposit_limit"]) not in n["thread"][0]["text"]   # not something the RFP disclosed
+    forbidden = ["authority", mandate["organizer"], mandate["flexibility"]]
     s.run()
     assert n["status"] == "awaiting_payment"
     surface = _seller_surface(e, n)
     for f in forbidden:
         assert f not in surface, f
-    for k in ("deposit_limit", "deposit_limit_pct", "budget_mandate", "objectives", "known_answers"):
+    for k in ("objectives", "known_answers", "opening_deposit_pct"):
         assert k not in set(_keys(json.loads(surface)))
 
 
-def test_buyer_accepts_beyond_its_own_mandate_without_a_buyer_side_approval(eng):
-    """The engine enforces only the hotel's rules: a buyer accepting above its own budget or deposit limits
-    is an accepted offer, with no approval from the buyer's side and no wait before checkout."""
+def test_buyer_acceptance_needs_no_buyer_side_approval(eng):
+    """The engine enforces only the hotel's rules: a buyer accepting a sent offer is an accepted offer, with
+    no approval from the buyer's side and no wait before checkout. Briefs carry no buyer-side limits."""
     e = eng
+    assert not any({"budget_total", "deposit_limit", "deposit_limit_pct"} & set(b) for b in S["buyers"].values())
     s, n = _to_accepted(e)
-    mandate = S["buyers"]["northstar.example"]
     v = n["versions"][-1]
-    assert v["pricing"]["deposit"] > mandate["deposit_limit"]          # v2's deposit is over Northstar's limit
+    assert v["pricing"]["deposit"] == 384000                            # the £3,840 deposit, accepted as sent
     assert n["status"] == "accepted" and n["accepted_version"] == v["n"]
     assert all(a["approver"] == "hotel_manager" for a in e.s["approvals"].values())
     assert not (e.waiting_on(n) or "").startswith("buyer")

@@ -1,4 +1,4 @@
-"""Authority rules. The hotel's commercial rules bind the seller; the buyer's mandate binds the buyer.
+"""Authority rules. The hotel's commercial rules bind the seller; the engine enforces no buyer-side limits.
 
 Each check returns hard violations (nobody can approve them) and exceptions that need a named
 approver. Each exception also comes as a rule ({"rule", "alone", "asked"}): which limit is crossed,

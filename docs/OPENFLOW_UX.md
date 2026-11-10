@@ -22,7 +22,7 @@ checks rooms and rates, asks for anything missing, quotes, asks the hotel manage
 be exceeded, and takes the deposit through Airwallex like any other deal. The drawer offers:
 
 - **Generated inquiries** (`POST /api/simulate/rfp`, see `src/agentbank/groupsales/generator.py`): one card
-  per preset, or traits chosen by hand (dates, price pressure, the buyer's deposit limit, attrition, room
+  per preset, or traits chosen by hand (dates, price pressure, attrition, room
   type, payer country, a later reduction, a meeting room, details left out of the RFP). Each inquiry comes
   with a private brief for the buyer agent; the seller never sees it. An optional seed replays the same
   inquiry against the same calendar, for example after a reset.

@@ -80,8 +80,7 @@
   const COUNTRIES = [['', 'United Kingdom (GBP)'], ['DE', 'Germany (EUR)'], ['FR', 'France (EUR)'], ['NL', 'Netherlands (EUR)'],
     ['US', 'United States (USD)'], ['AU', 'Australia (AUD)'], ['SG', 'Singapore (SGD)'], ['JP', 'Japan (JPY)']];
   const TRAIT_LABEL = {fits:'Rooms free on the dates', short_rooms:'Fewer rooms free than asked', too_soon:'Too soon to sell to a group',
-    comfortable:'Comfortable budget', tight:'Tight: at the seller’s floor', below_floor:'Below the seller’s floor',
-    standard:'Standard deposit limit (40%)', low:'Low deposit limit (25%)'};
+    comfortable:'Comfortable budget', tight:'Tight: at the seller’s floor', below_floor:'Below the seller’s floor'};
   const opts = (name, values, pick) => `<select id="wbT_${name}">${values.map(([v, l]) => `<option value="${html(v)}" ${String(v)===String(pick ?? '')?'selected':''}>${html(l)}</option>`).join('')}</select>`;
   function traitForm(c) {
     const d = c.defaults, t = c.traits, pairs = k => t[k].map(v => [v, TRAIT_LABEL[v] || v]);
@@ -90,7 +89,6 @@
       <div class="wb-terms">
         <label class="wb-field">Dates${opts('availability', pairs('availability'), d.availability)}</label>
         <label class="wb-field">Price pressure${opts('price', pairs('price'), d.price)}</label>
-        <label class="wb-field">Buyer’s deposit limit${opts('deposit', pairs('deposit'), d.deposit)}</label>
         <label class="wb-field">Attrition the buyer wants${opts('attrition', [['', 'Hotel standard'], ['20', '20% (traded for a bigger deposit)']], d.attrition)}</label>
         <label class="wb-field">Room type${opts('room_type', [['', 'Either'], ['twin', 'Twin'], ['king', 'King']], d.room_type)}</label>
         <label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>
@@ -102,7 +100,7 @@
       <button class="wb-primary" type="button" id="wbCustom">Send this inquiry to Harbour House</button></details>`;
   }
   function readTraits() {
-    const v = k => $('wbT_' + k).value, out = {availability: v('availability'), price: v('price'), deposit: v('deposit'),
+    const v = k => $('wbT_' + k).value, out = {availability: v('availability'), price: v('price'),
       change_rooms: Number(v('change_rooms')), meeting: v('meeting') === '1',
       missing: [...document.querySelectorAll('[name=wbMissing]:checked')].map(x => x.value)};
     if (v('attrition')) out.attrition = Number(v('attrition'));
@@ -124,7 +122,7 @@
     const S = actual(), b = S?.bookable;
     const cards = Object.keys(catalog.presets).map(k => { const i = catalog.info[k] || {title: k, shows: ''};
       return `<button class="wb-channel" data-preset="${html(k)}"><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry →</span></button>`; }).join('');
-    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Harbour House a generated group inquiry. Each one comes with a private brief for the buyer agent: its answers, goals and limits, which the seller never sees. From the email on, the seller agent, the buyer agent and the backend’s rules take over${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
+    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Harbour House a generated group inquiry. Each one comes with a private brief for the buyer agent: its answers and goals, which the seller never sees. From the email on, the seller agent, the buyer agent and the backend’s rules take over${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
       ${buyerToggle(catalog.buyer_mode)}
       <label class="wb-field wb-seed">Seed (optional)<input id="wbSeed" inputmode="numeric" pattern="[0-9]*" placeholder="Leave blank for a new inquiry each time"></label>
       <p class="wb-sub">The same seed sends the same inquiry against the same calendar. After a reset, reuse a seed to replay a run.</p>

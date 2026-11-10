@@ -63,8 +63,6 @@ Pass when:
 - the figures match the spec (£4,920 Summit; £9,600 v1; £220 and 40% = £3,840 for v2; £8,280 v3,
   £528 refund);
 - after the buyer accepts v2, the seller opens checkout on its own;
-- no seller note or email guesses Northstar's budget (£10,000 is in its RFP, so it may appear) or its
-  deposit limits (£3,000, 30%);
 - the AI Agent tab reads clearly for Claude's runs, with no red refused lines you can't explain.
 
 ## 3. Randomized scenarios with the Claude seller (costs API calls)
@@ -81,7 +79,7 @@ means a model call failed, so that case did not test Claude.
 
 Start check 2 again with `BUYER_MODE=agent` added at the front. The buyer side now answers on its own.
 
-Pass when its messages never state its budget ceiling or deposit limits.
+Pass when it answers the hotel from its brief and reaches a paid booking.
 
 ## 5. Real phone (a person)
 

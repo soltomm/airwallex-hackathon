@@ -119,7 +119,8 @@ def test_the_rfp_reads_back_into_the_brief_it_came_with(eng):
         req = extract(g["subject"], g["body"])
         b = g["brief"]
         assert req["rooms"] and req["room_type"] and req["arrival"] and req["departure"], preset
-        assert req["budget_total"] == b["budget_total"], preset
+        assert req["budget_total"] == g["budget"], preset
+        assert not {"budget_total", "deposit_limit", "deposit_limit_pct"} & set(b), preset   # no buyer-side limits
         if "payer" not in g["traits"]["missing"]:
             assert req["payer"] == b["known_answers"]["payer"], preset
 
@@ -154,10 +155,10 @@ def test_the_seller_never_sees_the_generated_brief(eng):
     b = eng.buyer_brief(d)
     seller_view = json.dumps(eng.deal_view(d["id"], for_="seller"), default=str)
     snap = json.dumps(eng.snapshot(), default=str)
-    # The stated budget is in the RFP itself; the limits, goals and prepared answers are private.
-    for secret in ("deposit_limit", "objectives", "known_answers", "target_rate", "change_event"):
+    # The stated budget is in the RFP itself; the goals, notes and prepared answers are private.
+    for secret in ("objectives", "known_answers", "target_rate", "change_event"):
         assert secret not in seller_view and secret not in snap
-    assert str(b["deposit_limit"]) not in seller_view
+    assert b["flexibility"] not in seller_view
 
 
 def test_generated_deals_are_marked_for_the_presenter_only(eng):

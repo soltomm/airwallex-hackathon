@@ -461,8 +461,8 @@ class Engine:
                 self._save()
             if for_ not in ("seller", "buyer"):
                 raise Refused("deal views exist for the seller or the buyer only")
-            # Each side sees only its own private constraints. The seller never gets the buyer's mandate
-            # (budget, deposit limits, notes); the buyer never gets floors, costs, margins, hotel checks,
+            # Each side sees only its own private constraints. The seller never gets the buyer's brief
+            # (objectives, prepared answers, notes); the buyer never gets floors, costs, margins, hotel checks,
             # records, holds, flags or the hotel manager's approval summaries. Thread messages are what
             # each side chose to send. The presenter dashboard (snapshot) shows both sides.
             view = {k: copy.deepcopy(d[k]) for k in ("id", "ref", "company", "sender", "subject", "status",

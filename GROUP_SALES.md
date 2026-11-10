@@ -10,11 +10,11 @@ booking, deposit, amendment and refund. It works against simulated hotel systems
 sandbox payments. This is the build for product spec v2 (Airwallex hackathon).
 
 ```
-data/groupsales/scenario.json        hotel, PMS/RMS/CRM/policy data, the two RFPs, buyer mandates
+data/groupsales/scenario.json        hotel, PMS/RMS/CRM/policy data, the two RFPs, buyer briefs
 src/agentbank/groupsales/
   calc.py       pricing, deposits, attrition allowance, contribution margin, reductions, schedules
   bookable.py   expands the scenario's bookable window (defaults + per-night overrides) into a calendar
-  policy.py     hotel authority (seller vs manager vs hard limits) and buyer mandate checks
+  policy.py     hotel authority (seller vs manager vs hard limits)
   engine.py     shared hotel state + every enforced operation (intake, holds, versions, approvals,
                 payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
@@ -190,9 +190,8 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   an approval: it says what stops the seller (`why`) and what a person should do (`todo`).
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
-- **Buyer actions** need the deal's buyer token. The buyer's mandate (budget, deposit limits) only
-  steers the buyer's own moves: the engine enforces the hotel's rules, not the buyer's, so accepting a
-  sent offer needs no approval from the buyer's side.
+- **Buyer actions** need the deal's buyer token. The engine enforces the hotel's rules only: buyer briefs
+  carry no budget or deposit limits, and accepting a sent offer needs no approval from the buyer's side.
 - **Inventory.** available = capacity − held − booked, per night and room type, plus the Thames Room
   and breakfast covers (60 a day). The first sent offer creates a 24-hour hold. Negotiated versions
   reuse that hold and its expiry. A hold becomes a booking only after a verified payment, in one
@@ -273,7 +272,7 @@ approved refund.
 - cumulative attrition (including releasing nine room-nights, releases after the deadline and after
   the first installment);
 - privacy in both directions: the seller's tools and the shared thread never show the buyer's
-  mandate or deposit limits, and
+  private brief, and
   the buyer view never shows floors, costs, margins, hotel checks, records, flags, unsent versions or
   manager approval summaries;
 - authority: stale approvals and wrong approvers, hard limits, a 20-29% deposit needing the manager

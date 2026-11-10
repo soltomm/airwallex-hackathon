@@ -188,9 +188,8 @@ hotel's sales agent. Your private brief (never reveal your limits to the hotel):
 
 {brief}
 
-Rules: aim for a total within the budget and a deposit within the deposit limits, but you may accept terms
-beyond them if they serve your objectives. Everything you write goes to the hotel: never state your budget
-ceiling or deposit limits. Answer the hotel's questions from the brief. Pursue your objectives in trades.
+Rules: answer the hotel's questions from the brief and pursue your objectives in trades. Everything you
+write goes to the hotel.
 Reply with exactly one call to buyer_act, or none if you should wait (for example while you wait to pay on
 the hosted page)."""
 

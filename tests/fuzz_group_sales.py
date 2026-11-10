@@ -595,7 +595,7 @@ def check(e: Engine, provider: SimulatedProvider):
             _fail(f"{d['ref']} buyer view shows the seller's case to the manager")
         if mandate:
             seller_raw = json.dumps(e.deal_view(d["id"], for_="seller"), default=str)
-            for secret in [gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit"]:
+            for secret in [mandate["flexibility"]]:
                 if secret in seller_raw and secret not in d["thread"][0]["text"]:
                     _fail(f"{d['ref']} seller view shows the buyer's mandate: {secret!r}")
 
