@@ -100,7 +100,7 @@ endpoint is refused when using the real Airwallex provider.
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest tests -q
 node --check web/fx.js
-node --test tests/test_openflow_demo.cjs
+node --check web/openflow.js
 
 # Isolated test server; do not use a real database or hosted dashboard.
 DATABASE_URL= PAYMENTS=simulated SELLER_MODE=rules GS_PORT=8014 \

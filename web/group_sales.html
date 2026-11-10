@@ -196,12 +196,12 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <nav class="wb-nav">
     <button data-wb-view="overview" aria-current="page"><span class="wb-icon" aria-hidden="true">▦</span>Overview</button>
     <button data-wb-view="payments"><span class="wb-icon" aria-hidden="true">▱</span>Payments</button>
+    <button id="vendorDirectoryNav"><span class="wb-icon" aria-hidden="true">▤</span>Directory</button>
   </nav>
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
     <button id="wbAccount">Hotel payout account ↗</button>
     <button id="wbDemo" aria-controls="demo" aria-expanded="false">Demo controls ▾</button>
-    <button id="wbReset">↻ Reset simulator</button>
   </details>
 </aside>
 <div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
@@ -229,7 +229,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
 </main>
-<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">INBOUND SIMULATOR</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
+<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">NEW INQUIRY</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
 <dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
 <dialog id="fxDirectory" class="wb-drawer" aria-labelledby="fxDirectoryTitle"><div class="wb-drawer-head"><span>SELLER RULES · CURRENCY POLICY</span><button class="wb-close" aria-label="Close currency directory" data-wb-close>×</button></div><div class="wb-drawer-body" id="fxDirectoryBody"></div></dialog>
 <dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
@@ -427,7 +427,7 @@ function offerCard(d) {
   const v = curVersion(d);
   if (!v) return '';
   const p = v.pricing, t = v.terms, f = d.finance_view;
-  const lines = p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.qty} × ${gbp(l.unit)}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('');
+  const lines = p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.unit == null ? `Bundled service · ${l.qty} units` : `${l.qty} × ${gbp(l.unit)}`}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('');
   const head = v.kind === 'amendment' ? 'Agreement as amended' : d.booking ? 'Agreement' : 'Current offer';
   let h = `<div class="card offer"><div class="label"><span>${head} · v${v.n}</span><span class="chip">${esc(v.status.replaceAll('_', ' '))}</span></div>
     <table>${lines}<tr class="tot"><td>Total</td><td class="r">${gbp(p.total)}</td></tr></table>
@@ -510,6 +510,7 @@ function renderDeal(d) {
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.FX) window.FX.mount(d);
+  if (window.Vendors) window.Vendors.mount(d);
 }
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
@@ -821,6 +822,10 @@ window.Harbour = {
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
   inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r.deal_id; },
+  // Generated inquiries (generator.py): the RFP plus its buyer's private brief; the agents do the rest.
+  presets: () => api('/api/simulate/presets'),
+  generate: async body => { const r = await api('/api/simulate/rfp', body); lastJSON = ''; await load(); return r; },
+  setBuyerMode: async mode => { await api('/api/settings', {buyer_mode: mode}); lastJSON = ''; await load(); },
 };
 // ---- the hotel's Airwallex connected account (Payments for Platforms) -------------------------------
 const ONBOARD = {starting: 'Starting', account_created: 'Account created', submitted: 'Submitted for verification',
@@ -853,8 +858,8 @@ $('wbAccount').onclick = () => { $('acctDrawer').showModal(); renderAccount(true
 $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
-<script src="/assets/openflow-demo.js"></script>
 <script src="/assets/fx.js"></script>
+<script src="/assets/vendors.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>
 </html>

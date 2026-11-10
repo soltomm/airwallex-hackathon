@@ -1,0 +1,92 @@
+// Isolated loopback simulated server only. Resets the local scenario.
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');const path=require('node:path');
+const base=process.env.VENDOR_TEST_URL||'http://127.0.0.1:8018';
+if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw Error('Use an isolated loopback server.');
+const screenshots=path.resolve(__dirname,'../../docs/screenshots/vendors');fs.mkdirSync(screenshots,{recursive:true});
+(async()=>{
+ const browser=await chromium.launch({...(process.env.CHROMIUM_PATH||fs.existsSync('/usr/bin/chromium')?{executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium'}:{}),args:['--no-sandbox']});
+ try{
+  const ctx=await browser.newContext({viewport:{width:1440,height:1100}}),p=await ctx.newPage(),errors=[];
+  p.on('pageerror',e=>errors.push(e.message));
+  await p.goto(base);
+  const state=()=>p.evaluate(()=>fetch('/api/state').then(r=>r.json()));
+  assert.equal((await state()).provider,'simulated');
+  await p.evaluate(()=>fetch('/api/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}));
+  await p.reload();await p.locator('#wbTable .wb-inquiry').first().waitFor();
+  await p.waitForFunction(()=>window.Harbour.state()?.deals.find(d=>d.company==='Summit Robotics')?.requirements?.rooms===8);
+  await p.locator('#vendorDirectoryNav').click();await p.locator('#vendorContactSearch').waitFor();
+  assert.match(await p.locator('#vendorContacts').innerText(),/Revenue operations/);
+  await p.locator('#vendorContactSearch').fill('catering');assert.match(await p.locator('#vendorContacts').innerText(),/Gather & Table/);
+  await p.locator('#vendorContactSearch').fill('');
+  await p.evaluate(()=>window.scrollTo(0,0));await p.locator('#vendorPageTitle').click();
+  await p.screenshot({path:path.join(screenshots,'directory.png'),fullPage:false});
+  await p.getByRole('link',{name:'Back to overview'}).click();
+  await p.getByRole('button',{name:'Summit Robotics'}).first().click();
+  await p.locator('#vendorInquiryToggle').check();
+  await p.locator('#vendorRequest').waitFor();
+  const id=(await state()).deals.find(d=>d.company==='Summit Robotics').id;
+  assert.equal(p.url().split('#')[1],'vendors/'+id);
+  await p.locator('#vendorCategory').selectOption('av');await p.locator('#vendorTitle').fill('Conference AV support');
+  await p.getByRole('button',{name:'Issue sub-RFP · simulated',exact:true}).click();
+  await p.getByText('Record vendor quote · simulated',{exact:true}).click();
+  await p.locator('[name=unit_cost]').fill('10');
+  await p.getByRole('button',{name:'Save quote revision',exact:true}).click();
+  assert.equal(await p.locator('#vendorMaster').isDisabled(),true);
+  await p.locator('#vendorProvisional').click();
+  let s=await state(),d=s.deals.find(d=>d.id===id);
+  assert(d.third_party.drafts.at(-1).not_bookable);
+  assert.match(d.thread.at(-1).text,/PROVISIONAL ESTIMATE/);
+  await p.evaluate(()=>window.scrollTo(0,0));await p.locator('#vendorPageTitle').click();
+  await p.screenshot({path:path.join(screenshots,'workspace-review.png'),fullPage:false});
+  // Internal next move is visible and opens the correct inquiry workspace.
+  await p.getByRole('button',{name:'Overview',exact:true}).click();
+  await p.getByRole('button',{name:/RevOps review required/}).click();
+  assert.equal(p.url().split('#')[1],'vendors/'+id);
+  await p.getByRole('button',{name:'RevOps approve exact quote',exact:true}).click();
+  await p.getByRole('button',{name:'Overview',exact:true}).click();
+  assert.match(await p.locator('.wb-moves').innerText(),/Waiting on external providers[\s\S]*Waiting on vendor confirmation/);
+  await p.getByRole('button',{name:/Waiting on vendor confirmation/}).click();
+  await p.getByRole('button',{name:'Simulate vendor confirmation',exact:true}).click();
+  await p.waitForFunction(()=>document.querySelector('#vendorMaster')?.disabled===false);
+  assert.equal(await p.locator('#vendorMaster').isDisabled(),false);
+  await p.locator('#vendorMaster').click();
+  await p.getByRole('button',{name:'Back to inquiry',exact:true}).click();
+  await p.locator('#liveDrawer[open]').waitFor();
+  await p.locator('#deal [data-ap][data-d=approve]').click();
+  await p.waitForFunction(id=>window.Harbour.state()?.deals.find(d=>d.id===id)?.status==='offer_sent',id);
+  s=await state();d=s.deals.find(d=>d.id===id);const version=d.versions.at(-1);
+  assert.equal(version.pricing.total,493200);assert.equal(version.pricing.deposit,147960);
+  // Buyer gets only public bundled prices, never vendor unit costs or markup.
+  const buyer=await ctx.newPage();buyer.on('pageerror',e=>errors.push(e.message));
+  await buyer.goto(base+d.inbox_url);await buyer.waitForSelector('#act');
+  assert.match(await buyer.locator('body').innerText(),/Conference AV support/);
+  assert(!/Unit cost:|RevOps|Supplier costs/.test(await buyer.locator('body').innerText()));
+  const response=await buyer.evaluate(async({id,token,version})=>{
+    const r=await fetch('/api/buyer/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,action:'accept',payload:{version}})});return r.json();
+  },{id,token:d.buyer_token,version:version.n});
+  assert.equal(response.accepted,true);
+  // Complete the existing simulated hosted checkout, not a new vendor payment route.
+  await p.waitForFunction(id=>window.Harbour.state()?.deals.find(d=>d.id===id)?.status==='awaiting_payment',id);
+  d=(await state()).deals.find(d=>d.id===id);
+  const pay=await ctx.newPage();await pay.goto(d.pay_url);
+  await pay.getByRole('link',{name:/Pay deposit/}).click();
+  await pay.getByRole('button',{name:/Pay/}).click();
+  await p.waitForFunction(id=>window.Harbour.state()?.deals.find(d=>d.id===id)?.booking?.status==='confirmed',id);
+  await p.locator('#vendorInquiryOpen').click();
+  await p.getByRole('button',{name:'Mark delivered',exact:true}).click();
+  await p.getByRole('button',{name:'Mark payment recorded',exact:true}).click();
+  d=(await state()).deals.find(d=>d.id===id);
+  assert.equal(d.third_party.requests[0].status,'delivered');assert.equal(d.third_party.requests[0].payment_status,'paid');
+  await p.reload();await p.getByText('Payment: paid · Tracking only, no transfer.',{exact:true}).waitFor();
+  await p.evaluate(()=>window.scrollTo(0,0));await p.locator('#vendorPageTitle').click();
+  await p.screenshot({path:path.join(screenshots,'master-confirmed.png'),fullPage:false});
+  await p.setViewportSize({width:390,height:844});
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await p.evaluate(()=>window.scrollTo(0,0));await p.locator('#vendorPageTitle').click();
+  await p.screenshot({path:path.join(screenshots,'mobile.png'),fullPage:false});
+  assert.deepEqual(errors,[]);
+  console.log('PASS: directory, inquiry toggle, quote sourcing, provisional sharing, internal/external next steps, manager approval, buyer privacy, master checkout, delivery/payment tracking, persistence and mobile.');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});

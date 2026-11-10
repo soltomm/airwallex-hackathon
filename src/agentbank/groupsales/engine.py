@@ -33,6 +33,7 @@ from .extract import extract, missing_info, stay_nights
 from .policy import buyer_check, hotel_check
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
+from . import vendors
 from .fx_provider import SandboxFX, SimulatedFX
 from ..storage import doc
 
@@ -50,7 +51,7 @@ def _company_from(sender: str, domain: str) -> str:
     person = sender.split("<")[0].strip().strip('"') if "<" in sender else ""
     if label.lower() in FREE_MAIL or not label:
         return person or sender.strip() or "Unknown sender"
-    return label[:1].upper() + label[1:]
+    return " ".join(w[:1].upper() + w[1:] for w in label.split("-") if w) or label
 
 
 class Refused(Exception):
@@ -415,7 +416,8 @@ class Engine:
                 "records": [], "versions": [], "hold_id": None, "accepted_version": None, "booking": None,
                 "finance": {"refund_owed": 0, "refund_owed_version": None}, "flags": [],
                 "buyer_token": secrets.token_urlsafe(12), "unread": True, "handoff": None,
-                "buyer_profile": domain if domain in self.scenario["buyers"] else None,
+                "buyer_profile": domain if domain in self.scenario["buyers"] or domain in self.s.get("buyer_briefs", {})
+                else None,
                 "fx_reference": 'HH-' + uuid.uuid5(uuid.NAMESPACE_URL, self.s['run_id'] + ':' + did).hex[:24],
                 "pending_acceptance": None,
             }
@@ -507,6 +509,9 @@ class Engine:
         out = {k: v[k] for k in ("n", "kind", "status", "hash", "terms", "created_at", "sent_at", "message",
                                  "explanation", "unmet", "expires_at") if k in v}
         p = v["pricing"]
+        if for_ != 'seller' and out.get('terms', {}).get('vendor_lines'):
+            out['terms'] = copy.deepcopy(out['terms'])
+            out['terms']['vendor_lines'] = [{k: line[k] for k in ('category', 'label', 'start', 'end', 'capacity', 'quantity', 'total', 'location')} for line in out['terms']['vendor_lines']]
         out["pricing"] = {k: p[k] for k in ("lines", "total", "deposit", "deposit_pct", "attrition_pct",
                                             "attrition_allowance", "allowance_remaining", "room_nights",
                                             "contracted_room_nights", "released_room_nights",
@@ -760,12 +765,40 @@ class Engine:
             return {"checked_at": now, "pms": pms, "meeting": meeting, "breakfast": bf, "rms": rates,
                     "crm": crm, "key_dates": req_dates}
 
+    # ---- buyer briefs: each buyer's private mandate. Scenario buyers come from scenario.json; generated buyers
+    # (generator.py) are registered for this run before their RFP arrives. Neither is in any seller view.
+    def buyer_brief(self, d: dict) -> dict | None:
+        p = d.get("buyer_profile") or ""
+        return self.scenario["buyers"].get(p) or self.s.get("buyer_briefs", {}).get(p)
+
+    def register_buyer_brief(self, domain: str, brief: dict) -> None:
+        with self.lock:
+            domain = (domain or "").strip().lower()
+            if not domain:
+                raise Refused("a generated buyer needs an email domain")
+            briefs = self.s.setdefault("buyer_briefs", {})
+            if (domain in self.scenario["buyers"] or domain in briefs
+                    or any(x["domain"] == domain for x in self.s["deals"].values())):
+                raise Refused(f"{domain} already has an inquiry in this run; use another seed")
+            briefs[domain] = copy.deepcopy(brief)
+            self._save()
+
+    def mark_generated(self, deal_id: str, preset: str | None, seed: int) -> None:
+        """Note on the deal which generated inquiry it came from, for the presenter (snapshot) only: the seller's
+        and buyer's views list their fields explicitly and don't include it."""
+        with self.lock:
+            self.deal(deal_id)["generated"] = {"preset": preset, "seed": int(seed)}
+            self._save()
+
     def ask_buyer(self, deal_id: str, questions: list[str], message: str, actor: str = "seller") -> dict:
         with self.lock:
             d = self.deal(deal_id)
             d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                                 "text": message, "questions": questions})
-            d["status"] = "needs_info"
+            # A question about a booked stay (say, which reduction the buyer means) is a message: the deal stays
+            # confirmed. Setting needs_info here used to block amendments and loop the buyer's intake answers.
+            if not d.get("booking"):
+                d["status"] = "needs_info"
             self._seller_acted(d)
             self.log(d["id"], actor, "clarification", f"Asked {d['company']}: {'; '.join(questions)}")
             self._save()
@@ -797,11 +830,91 @@ class Engine:
                 self._save()
 
     # ================================================================ offers
+    def vendor_workspace(self, deal_id):
+        with self.lock:
+            d = self.deal(deal_id)
+            w = copy.deepcopy(vendors.workspace(d))
+            problems = vendors.readiness(d, self.now()) if w['enabled'] else []
+            preview = None
+            if w['enabled']:
+                try:
+                    req = d.get('requirements') or {}
+                    rt = req.get('room_type') or 'king'
+                    terms = self.build_terms(d, self.rms['rates'][rt]['target'], self.policy['deposit']['standard_pct'], self.policy['attrition']['standard_pct'])
+                    preview = {'pricing': calc.price(terms, self.hotel, self.rms), 'policy': hotel_check(terms, calc.price(terms, self.hotel, self.rms), self.scenario), 'fits_hotel_inventory': self._can_hold(terms, d)}
+                except (Refused, ValueError, KeyError) as exc:
+                    problems.append(str(exc))
+                if d.get('accepted_version'):
+                    agreed = self._version(d, d['accepted_version'])
+                    preview = {'pricing': copy.deepcopy(agreed['pricing']), 'policy': copy.deepcopy(agreed['hotel_check']), 'fits_hotel_inventory': True}
+            return {'deal_id': d['id'], 'company': d['company'], 'requirements': d.get('requirements'),
+                    'workspace': w, 'problems': problems, 'preview': preview, 'simulated': True,
+                    'providers': vendors.directory()['providers'], 'accepted': bool(d.get('accepted_version'))}
+
+    def vendor_action(self, deal_id, command, body, actor='hotel_manager'):
+        if not isinstance(body, dict):
+            raise Refused('Vendor action payload must be an object.')
+        with self.lock:
+            d = self.deal(deal_id)
+            if command == 'provisional':
+                if not vendors.workspace(d)['enabled'] or d.get('accepted_version'):
+                    raise Refused('Provisional estimates require an enabled, unaccepted inquiry.')
+                view = self.vendor_workspace(deal_id)
+                if not view['preview']:
+                    raise Refused('Complete the stay requirements before drafting a provisional estimate.')
+                pricing = view['preview']['pricing']
+                unpriced = [r['title'] for r in vendors.active(d) if not r.get('quote')]
+                draft = {'id': 'master_draft_' + uuid.uuid4().hex[:12], 'created_at': self.now(),
+                         'lines': copy.deepcopy(pricing['lines']), 'priced_subtotal': pricing['total'],
+                         'unpriced_services': unpriced, 'provisional': True, 'not_bookable': True}
+                d['third_party'].setdefault('drafts', []).append(draft)
+                d['thread'].append({'id': self._id('msg'), 'at': self.now(), 'from': 'seller', 'channel': 'portal',
+                    'text': 'PROVISIONAL ESTIMATE — NOT BOOKABLE. Priced subtotal: ' + gbp(pricing['total']) +
+                    '. ' + '; '.join(line['item'] + ': ' + gbp(line['amount']) for line in pricing['lines']) +
+                    ('. Unpriced services excluded: ' + ', '.join(unpriced) if unpriced else '') +
+                    '. Subject to vendor availability, current confirmations and hotel approval.'})
+                self.log(d['id'], actor, 'vendor_workflow', 'Saved provisional master estimate and shared in the buyer portal (no email sent).')
+                self._save()
+                return self.vendor_workspace(deal_id)
+            candidate = copy.deepcopy(d)
+            try:
+                text = vendors.mutate(candidate, command, body, self.now(), lambda prefix: prefix + uuid.uuid4().hex[:12], self.s['deals'].values(), actor)
+            except (ValueError, TypeError, KeyError) as exc:
+                raise Refused(str(exc))
+            d['third_party'] = candidate['third_party']
+            if command not in ('execution', 'payment_status'):
+                for v in d['versions']:
+                    if v['status'] in ('draft', 'pending_approval', 'approved', 'sent'):
+                        v['status'] = 'superseded'
+                for a in self.s['approvals'].values():
+                    if a['deal_id'] == d['id'] and a['status'] == 'pending':
+                        a['status'] = 'stale'
+                hold = self.s['holds'].get(d.get('hold_id') or '')
+                if hold and hold['status'] == 'active':
+                    self._release_hold(hold, 'vendor terms changed; master proposal requires fresh approval')
+                if d['versions']:
+                    d['status'] = 'revise'
+            self.log(d['id'], actor, 'vendor_workflow', text)
+            self._save()
+            return self.vendor_workspace(d['id'])
+
+    def request_vendor_quote(self, deal_id, vendor_id, category, title, start, end, quantity=1):
+        return self.vendor_action(deal_id, 'request', dict(vendor_id=vendor_id, category=category, title=title, start=start, end=end, quantity=quantity), actor='seller')
+
+    def _vendor_ready(self, d, terms):
+        problems = vendors.readiness(d, self.now(), terms)
+        if problems:
+            raise Refused('Master contract not ready: ' + '; '.join(problems))
+
     def build_terms(self, d: dict, rate: int, deposit_pct: int, attrition_pct: int,
                     rooms_per_night: int | None = None, room_type: str | None = None) -> dict:
         req = d["requirements"] or {}
-        if req.get("out_of_scope"):
-            raise Refused("request is outside supported dates/services: " + "; ".join(req["out_of_scope"])
+        vendor_mode = vendors.workspace(d)['enabled']
+        if int(req.get('meeting_count') or 1) > 1 and (not vendor_mode or vendors.workspace(d)['external_meetings'] < req['meeting_count']):
+            raise Refused('Multiple meeting rooms require confirmed third-party coverage for all requested meeting rooms.')
+        remaining_scope = [p for p in req.get('out_of_scope', []) if not vendor_mode or p not in vendors.covered(d)]
+        if remaining_scope:
+            raise Refused("request is outside supported dates/services: " + "; ".join(remaining_scope)
                           + ". Hand it to a person (escalate).")
         if req.get("date_issue"):
             raise Refused(req["date_issue"] + ". Call suggest_dates and send the buyer available dates with "
@@ -816,6 +929,8 @@ class Engine:
         if n_rooms <= 0:
             raise Refused("need a number of rooms")
         guests = int(req.get("guests") or n_rooms * int(req.get("occupancy") or 1))
+        if vendor_mode and vendors.workspace(d)['host_rooms'] is not None:
+            n_rooms = vendors.workspace(d)['host_rooms']
         terms = {
             "room_type": room_type or req["room_type"], "rate": int(rate),
             "rooms": {n: n_rooms for n in nights}, "released": {n: 0 for n in nights},
@@ -827,6 +942,12 @@ class Engine:
             m = req["meeting"]
             terms["meeting"] = {"room": "thames", "date": m.get("date"), "layout": m.get("layout"),
                                 "attendees": int(m.get("attendees") or guests), "hours": m.get("hours")}
+        if vendor_mode:
+            terms['vendor_lines'] = vendors.snapshots(d)
+            if 'breakfast' in vendors.covered(d):
+                terms['breakfast'] = {}
+            if vendors.workspace(d)['external_meetings']:
+                terms['meeting'] = None
         return terms
 
     def price_terms(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int,
@@ -851,6 +972,7 @@ class Engine:
             if d["missing"]:
                 raise Refused("still missing: " + "; ".join(d["missing"]) + ". Ask the buyer first.")
             terms = self.build_terms(d, rate, deposit_pct, attrition_pct, rooms_per_night, room_type)
+            self._vendor_ready(d, terms)
             pricing = calc.price(terms, self.hotel, self.rms)
             check = hotel_check(terms, pricing, self.scenario)
             if not check["ok"]:
@@ -909,6 +1031,7 @@ class Engine:
             return res
 
     def _send_version(self, d: dict, v: dict, actor: str) -> dict:
+        self._vendor_ready(d, v['terms'])
         hold = self.s["holds"].get(d.get("hold_id") or "")
         if v["kind"] == "offer":
             if hold and hold["status"] == "active":
@@ -1068,7 +1191,7 @@ class Engine:
             hold = self.s["holds"].get(d.get("hold_id") or "")
             if not hold or hold["status"] != "active" or _dt(hold["expires_at"]) <= _dt(self.now()):
                 raise Refused("this offer has expired; the hotel must re-check availability and renew it")
-        mandate = self.scenario["buyers"].get(d.get("buyer_profile") or "")
+        mandate = self.buyer_brief(d)
         reasons = buyer_check(v["terms"], v["pricing"], mandate) if mandate and v["kind"] == "offer" else []
         if reasons and not self._approval_valid(d, "acceptance", v["n"], v["hash"], approver="organizer"):
             pending = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]
@@ -1087,6 +1210,7 @@ class Engine:
         return {"accepted": True, "version": v["n"]}
 
     def _record_acceptance(self, d, v, who):
+        self._vendor_ready(d, v['terms'])
         if v["status"] != "sent" or v is not d["versions"][-1]:
             raise Refused(f"v{v['n']} is no longer the current offer")
         v["status"] = "accepted"
@@ -1201,6 +1325,8 @@ class Engine:
 
     def _commit_booking(self, d, v) -> bool:
         """Convert the hold to a booking in one inventory operation. False if it can't be done."""
+        if vendors.readiness(d, self.now(), v['terms']):
+            return False
         if self.s["sim"].get("fail_next_commit"):
             self.s["sim"]["fail_next_commit"] = False
             return False
@@ -1290,6 +1416,7 @@ class Engine:
             if not d.get("accepted_version"):
                 raise Refused("no accepted agreement")
             v = self._version(d, d["accepted_version"])
+            self._vendor_ready(d, v['terms'])
             if v is not d["versions"][-1] or v["status"] != "accepted":
                 raise Refused("the accepted version is not current")
             hold = self.s["holds"].get(d.get("hold_id") or "")
@@ -1508,6 +1635,17 @@ class Engine:
                 f"{gbp(ev['revised_deposit'])}" + (f"; we will refund {gbp(ev['refund_due'])} to your original card "
                                                     "once you accept." if ev["refund_due"] else "."))
 
+    @staticmethod
+    def _manual_amendment_flag(n: int, ev: dict) -> str:
+        """Why an accepted reduction got no automatic refund, from calc.evaluate_reduction's own result."""
+        reasons = list(ev.get("review_reasons") or [])            # over the allowance, after the release deadline
+        if not ev.get("before_first_installment", True):
+            reasons.append("after the first installment date")
+        if not reasons:
+            reasons.append("outside the automatic refund terms")
+        return (f"amendment v{n} accepted with no automatic refund ({'; '.join(reasons)}): payments to be "
+                "reconciled manually by the manager")
+
     def _apply_amendment(self, d, v):
         """Accepted reduction: update booking, release inventory exactly once, record refund owed."""
         b = d["booking"]
@@ -1533,8 +1671,7 @@ class Engine:
             d["status"] = "refund_due"
         elif ev["refund_mode"] != "automatic":
             d["status"] = "confirmed"
-            d["flags"].append(f"amendment v{v['n']} accepted after the first installment date: payments to be "
-                              "reconciled manually by the manager")
+            d["flags"].append(self._manual_amendment_flag(v["n"], ev))
         else:
             d["status"] = "confirmed"
         self.log(d["id"], "buyer", "amendment_accepted",
@@ -2237,6 +2374,7 @@ class Engine:
             for d in self.s["deals"].values():
                 x = copy.deepcopy(d)
                 x['payer_fx'] = self.payer_view(d)
+                x['vendor_workflow'] = self.vendor_workspace(d['id']) if vendors.workspace(d)['enabled'] else None
                 x["waiting_on"] = self.waiting_on(d)
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
