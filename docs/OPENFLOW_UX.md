@@ -104,9 +104,12 @@ omitted.
 | --- | --- |
 | ![Original Harbour dashboard](screenshots/openflow/before.png) | ![OpenFlow overview](screenshots/openflow/overview.png) |
 
-![Inbound simulator](screenshots/openflow/simulator.png)
-![Unavailable dates and alternative calendar](screenshots/openflow/unavailable.png)
-![Editable proposal](screenshots/openflow/proposal.png)
+![New inquiry: the phone sample, asking for more rooms than are free](screenshots/openflow/simulator.png)
+
+Inquiries saved by the earlier browser-only simulator still open in their own views:
+
+![Saved simulator inquiry: unavailable dates and alternative calendar](screenshots/openflow/unavailable.png)
+![Saved simulator inquiry: editable proposal](screenshots/openflow/proposal.png)
 
 Mobile: [overview](screenshots/openflow/mobile.png) ·
-[simulator](screenshots/openflow/mobile-simulator.png).
+[new inquiry](screenshots/openflow/mobile-simulator.png).
