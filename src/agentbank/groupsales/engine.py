@@ -765,7 +765,10 @@ class Engine:
             d = self.deal(deal_id)
             d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
                                 "text": message, "questions": questions})
-            d["status"] = "needs_info"
+            # A question about a booked stay (say, which reduction the buyer means) is a message: the deal stays
+            # confirmed. Setting needs_info here used to block amendments and loop the buyer's intake answers.
+            if not d.get("booking"):
+                d["status"] = "needs_info"
             self._seller_acted(d)
             self.log(d["id"], actor, "clarification", f"Asked {d['company']}: {'; '.join(questions)}")
             self._save()

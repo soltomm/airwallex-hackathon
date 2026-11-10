@@ -1346,6 +1346,78 @@ def test_rules_seller_reads_the_inquiry_if_questions_went_out_first(eng):
     assert n["requirements"]["rooms"] == 12 and n["versions"] and n["versions"][-1]["pricing"]["total"] == 960000
 
 
+def test_question_about_a_booked_stay_keeps_it_confirmed_and_drafts_no_intake_answers(eng):
+    """A seller question after booking (which reduction do you mean?) set the deal to needs_info, so the buyer's
+    draft re-sent the intake answers (layout, payer, taxes) every time the seller asked again."""
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce our block by 4 rooms per night.",
+                   {"rooms_per_night": 4})
+    e.ask_buyer(n["id"], ["Reduce to 6 rooms a night, or release 4 room-nights in total?"],
+                "Before we prepare the amendment, please confirm which reduction you mean.")
+    assert n["status"] == "confirmed"                                 # still booked: amendments stay possible
+    sug = suggest(e, n["id"])                                         # restates the request, not the intake answers
+    assert sug["action"] == "change_request" and "Classroom" not in sug["text"]
+    _reduce(e, n, 1)                                                  # the amendment still goes through
+
+
+def test_intake_answers_are_drafted_once(eng):
+    e = eng
+    n = deal_by(e, "Northstar")
+    e.ask_buyer(n["id"], ["payer?"], "Who is the legal payer, and which meeting layout do you need?")
+    first = suggest(e, n["id"])
+    assert first and first["payload"]["answers"]
+    act(e, n["id"], first)
+    e.ask_buyer(n["id"], ["anything else?"], "Thanks. One more question before we quote.")
+    assert suggest(e, n["id"]) is None                                # never the same answers twice
+
+
+def test_buyer_clarifies_its_own_change_request_once_and_the_seller_applies_it(eng):
+    """The hotel asks which reduction the buyer means: the draft restates the request from the booking it can see."""
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce our block by 1 room per night.",
+                   {"rooms_per_night": 1})
+    n["unread"] = False                                               # as if a seller had read it and asked back
+    e.ask_buyer(n["id"], ["Release 1 room on each night, or 1 room-night in total?"], "Which reduction do you mean?")
+    sug = suggest(e, n["id"])
+    assert sug["action"] == "change_request" and sug["payload"]["rooms_per_night"] == 1
+    assert "from 12 to 11 twin rooms per night on 10, 11 and 12 March 2027" in sug["text"]
+    assert "Classroom" not in sug["text"]
+    act(e, n["id"], sug)
+    e.ask_buyer(n["id"], ["Anything else?"], "One more question.")
+    assert suggest(e, n["id"]) is None                                # restated once; further questions are a person's
+    s.run()                                                           # the rules seller acts on the clarification
+    v = n["versions"][-1]
+    assert v["kind"] == "amendment" and v["terms"]["released"] == {x: 1 for x in MARCH}
+
+
+def test_buyer_takes_the_first_dates_offered(eng):
+    from agentbank.groupsales.buyer import _span
+    e = eng
+    RulesSeller(e).run()
+    n = deal_by(e, "Northstar")
+    act(e, n["id"], suggest(e, n["id"]))                              # intake answers -> requirements recorded
+    n["versions"].clear()
+    # Offer dates the calendar actually has free (the seeded availability changes which ones those are).
+    free = [o for o in e.suggest_dates(n["id"])["options"] if o["fits_rooms"]][:2]
+    assert len(free) == 2
+    e.offer_dates(n["id"], [{"arrival": o["arrival"], "departure": o["departure"]} for o in free], "These dates are free.")
+    first = {"arrival": free[0]["arrival"], "departure": free[0]["departure"]}
+    sug = suggest(e, n["id"])
+    assert sug["action"] == "reply" and sug["payload"]["dates"] == first
+    assert sug["text"].startswith(f"{_span(first['arrival'], first['departure'])} works for us")
+
+
+def test_buyer_agent_takes_a_turn_for_questions_its_drafts_cannot_answer(eng):
+    from agentbank.groupsales.buyer import wants_reply
+    e = eng
+    s, n = run_to_confirmed(e)                                        # before the organizer's change event is due
+    assert not wants_reply(e, n["id"])
+    e.ask_buyer(n["id"], ["Will anyone need an accessible room?"], "A quick question about your stay.")
+    assert suggest(e, n["id"]) is None and wants_reply(e, n["id"])
+
+
 def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng):
     """Found by the randomized scenarios: approving after the offer lapsed left a half-made decision in memory."""
     e = eng
