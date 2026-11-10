@@ -2129,8 +2129,8 @@ def test_per_room_night_counts_breakfast_up_to_the_room_occupancy():
     assert calc.price(terms, hotel, rms)["per_room_night_incl_breakfast"] == 19000 + 1500
 
 
-# The inquiry from a real session that looped: the seller asked twice for details the buyer had given.
-GROUPIE_RFP = ("Hello Group Sales, please quote 40 rooms for40 colleagues arriving 12th of September and departing "
+# The inquiry from a real session that looped (40 rooms there; 6 here so the block fits the September calendar): the seller asked twice for details the buyer had given.
+GROUPIE_RFP = ("Hello Group Sales, please quote {r} rooms for{r} colleagues arriving 12th of September and departing "
                "15th September 2027, with breakfast each morning. We need a meeting room for {n} people. Our total "
                "budget is $20,000 inclusive of taxes. The package is billed to Groupie LLC; guests cover incidentals. "
                "Please reply by 22 January at noon London time. Best regards, Owen")
@@ -2139,13 +2139,13 @@ GROUPIE_REPLY = ("any room type is fine, i've already said the number of rooms a
 
 
 def test_inquiry_with_untyped_rooms_and_ordinal_dates_is_read():
-    r = extract("Group inquiry", GROUPIE_RFP.format(n=50))
+    r = extract("Group inquiry", GROUPIE_RFP.format(r=40, n=50))
     assert (r["rooms"], r["guests"], r["arrival"], r["departure"]) == (40, 40, "2027-09-12", "2027-09-15")
     assert r["meeting"]["attendees"] == 50 and r["payer"] == "Groupie LLC" and r["contact"] == "Owen"
 
 
 def _groupie(e, n):
-    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(n=n), wake=False)
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=n), wake=False)
     RulesSeller(e).run()
     d = deal_by(e, "groupie.example")
     first = d["thread"][-1]
@@ -2175,7 +2175,7 @@ def test_a_meeting_room_too_small_goes_to_a_person_instead_of_asking_again(eng):
 
 def test_a_reply_that_answers_nothing_is_not_met_with_the_same_questions(eng):
     e = eng
-    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(n=30), wake=False)
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
     RulesSeller(e).run()
     d = deal_by(e, "groupie.example")
     e.buyer_action(d["id"], d["buyer_token"], "message", "I already told you everything.")
