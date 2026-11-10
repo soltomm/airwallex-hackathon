@@ -51,7 +51,7 @@ STATUSES = {"new", "intake", "needs_info", "dates_proposed", "pending_approval",
             "amendment_review", "amendment_approved", "refund_due", "refund_awaiting_approval", "refund_pending",
             "refund_failed", "expired", "handoff", "declined", "lost", "payment_received_booking_exception"}
 SENT_STATES = {"sent", "accepted", "superseded_by_amendment"}
-HOTEL_ONLY_KEYS = {"margin_all_rooms", "margin_full_release", "hotel_check", "records", "records_consulted", "hold",
+HOTEL_ONLY_KEYS = {"margin_all_rooms", "margin_full_release", "displacement", "hotel_check", "records", "records_consulted", "hold",
                    "approvals", "flags", "costs", "contribution", "margin_pct", "next_step", "key_dates"}
 GOOD_CARD, BAD_CARD = "4035 5010 0000 0008", "4000 0000 0000 0002"
 

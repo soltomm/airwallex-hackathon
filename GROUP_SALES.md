@@ -169,7 +169,12 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   to 10% are the seller's own call. A rate below the floor (down to £195/£170), attrition up to 20% or
   a deposit of 20-29% needs the manager. A below-floor rate or attrition above 10% forces a 40%
   deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
-  release allowance used. Only the named approver can decide. Every approval names each rule it
+  release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
+  displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
+  demand times the forecast demand for that night (by month, scaled by weekday; `rms.displacement`).
+  Rooms released before the cutoff are counted 50% resold. On the busy demo dates (80% / 80% / 64%)
+  the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
+  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide. Every approval names each rule it
   crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
   rejecting each do, and the card shows exactly that.
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals

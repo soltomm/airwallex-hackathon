@@ -78,11 +78,15 @@ def test_spec_figures():
     assert (p["total"], p["deposit"]) == (960000, 288000)
     p = calc.price(northstar_terms(), H, RMS)
     assert (p["total"], p["deposit"], p["attrition_allowance"]) == (960000, 384000, 7)
-    assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 313200, "contribution": 646800, "margin_pct": 67.4}
-    assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 264200
+    # Displacement: 12 rooms x (£64 + £64 + £51.20) for demand 80% / 80% / 64% on Wed-Fri in March.
+    assert p["displacement"]["blocked"] == 215040
+    assert [x["demand_pct"] for x in p["displacement"]["nights"]] == [80, 80, 64]
+    assert p["margin_all_rooms"] == {"revenue": 960000, "costs": 528240, "contribution": 431760, "margin_pct": 45.0}
+    assert p["margin_full_release"]["revenue"] == 806000 and p["margin_full_release"]["costs"] == 458334
+    assert p["margin_full_release"]["margin_pct"] == 43.1
     r = calc.evaluate_reduction(northstar_terms(), {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     assert (r["new_pricing"]["total"], r["revised_deposit"], r["refund_due"], r["remaining_after"]) == (828000, 331200, 52800, 1)
-    assert r["new_pricing"]["margin_all_rooms"]["costs"] == 271200
+    assert r["new_pricing"]["margin_all_rooms"]["costs"] == 468320          # released rooms: half the displacement back
     sched = calc.schedule(828000, 40, 331200, "2027-03-10", POL, "2027-01-11")
     assert [x["amount"] for x in sched] == [0, 82800, 414000]
 
@@ -305,7 +309,7 @@ def test_stale_approval_and_hard_limits(eng):
     old = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     with pytest.raises(Refused):
         e.decide_approval(old["id"], "approve", "organizer")          # wrong approver
-    e.propose_offer(n["id"], 21000, 40, 20, "revised")                # materially changed offer
+    e.propose_offer(n["id"], 22000, 40, 15, "revised")                # materially changed offer
     assert e.s["approvals"][old["id"]]["status"] == "stale"
     with pytest.raises(Refused):
         e.decide_approval(old["id"], "approve", "hotel_manager")
@@ -711,7 +715,7 @@ def test_buyer_never_sees_hotel_internals(eng):
     n = deal_by(e, "Northstar")
     manager = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     rates, costs = RMS["rates"]["twin"], RMS["delivery_costs"]
-    hotel_only = {"margin_all_rooms", "margin_full_release", "hotel_check", "records", "records_consulted", "hold",
+    hotel_only = {"margin_all_rooms", "margin_full_release", "displacement", "hotel_check", "records", "records_consulted", "hold",
                   "approvals", "flags", "costs", "contribution", "margin_pct", "next_step", "key_dates"}
 
     def check(view, extra=()):
@@ -892,6 +896,8 @@ def test_below_floor_rate_needs_approval_and_40_percent(eng):
     s, n = _quoted(e)
     with pytest.raises(Refused, match="40% deposit"):
         e.propose_offer(n["id"], 20500, 30, 10, "below floor at 30%")
+    with pytest.raises(Refused, match="contribution margin"):        # busy March dates: £200 costs too much displacement
+        e.propose_offer(n["id"], 20000, 40, 10, "too far below floor")
     r = e.propose_offer(n["id"], 20500, 40, 10, "below floor at 40%")
     assert r["status"] == "pending_approval"
     appr = e.s["approvals"][r["approval_id"]]
@@ -900,6 +906,91 @@ def test_below_floor_rate_needs_approval_and_40_percent(eng):
         e.send_offer(n["id"], r["version"])
     e.decide_approval(r["approval_id"], "approve", "hotel_manager")
     assert e.send_offer(n["id"], r["version"])["status"] == "sent"
+
+
+def test_margin_moves_with_concessions():
+    """Rate cuts and free release cost the hotel margin once displacement is counted."""
+    def m(**kw):
+        p = calc.price(northstar_terms(**kw), H, RMS)
+        return p["margin_all_rooms"]["margin_pct"], p["margin_full_release"]["margin_pct"]
+    assert m(att=10, rate=22000) == (45.0, 44.3)
+    assert m(att=20, rate=22000) == (45.0, 43.1)          # more free release: lower worst case
+    assert m(att=10, rate=21000) == (42.8, 42.1)          # rate cut: lower in both cases
+    assert m(att=20, rate=20500)[1] < 40 < m(att=10, rate=20500)[1]
+    assert m(att=10, rate=19500)[0] < 40
+
+
+def test_displacement_follows_the_dates():
+    """Busy midweek dates carry more displacement than a quiet January weekend, so the same discount
+    that is refused in March is fine in January."""
+    quiet = ["2027-01-15", "2027-01-16", "2027-01-17"]                # Fri, Sat, Sun in January
+    t = {**northstar_terms(att=20, rate=19500), "rooms": {n: 12 for n in quiet}, "released": {n: 0 for n in quiet},
+         "breakfast": {m: 24 for m in ("2027-01-16", "2027-01-17", "2027-01-18")},
+         "meeting": {"room": "thames", "date": "2027-01-15", "layout": "classroom", "attendees": 24}}
+    assert [calc.demand_pct(n, RMS) for n in quiet] == [28, 24, 15]
+    assert [calc.demand_pct(n, RMS) for n in MARCH] == [80, 80, 64]
+    q = calc.price(t, H_ALL, RMS)
+    busy = calc.price(northstar_terms(att=20, rate=19500), H, RMS)
+    assert q["displacement"]["blocked"] < busy["displacement"]["blocked"]
+    assert q["margin_full_release"]["margin_pct"] >= 40 > busy["margin_full_release"]["margin_pct"]
+    # Without a displacement table the margin is delivery costs only.
+    flat = calc.price(northstar_terms(), H, {k: v for k, v in RMS.items() if k != "displacement"})
+    assert flat["margin_all_rooms"]["margin_pct"] == 67.4 and flat["displacement"]["blocked"] == 0
+
+
+def test_margin_floor_bites_on_the_default_rules(eng):
+    """On the busy demo dates the 40% floor refuses a below-floor rate combined with 20% attrition."""
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    n = deal_by(e, "Northstar")
+    buyer_turn(e, "Northstar")
+    s.run()
+    assert e.price_terms(n["id"], 20500, 40, 10)["hotel_check"]["ok"]
+    p = e.price_terms(n["id"], 20500, 40, 20)
+    assert any("contribution margin" in x and "full allowance released" in x for x in p["hotel_check"]["hard"])
+    p = e.price_terms(n["id"], 19500, 40, 10)
+    assert any("contribution margin" in x and "all rooms used" in x for x in p["hotel_check"]["hard"])
+    with pytest.raises(Refused, match="contribution margin"):
+        e.propose_offer(n["id"], 20500, 40, 20, "rate cut and wide release")
+    assert "displacement" not in json.dumps(e.deal_view(n["id"], for_="buyer"))
+
+
+def _busier(tmp_path, **disp):
+    sc = json.loads(SCENARIO.read_text())
+    sc["rms"]["displacement"].update(disp)
+    path = tmp_path / "scenario.json"
+    path.write_text(json.dumps(sc))
+    return Engine(tmp_path / "var", SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0), scenario_path=path)
+
+
+def test_rules_seller_keeps_standard_release_when_margin_cannot_carry_more(tmp_path):
+    """Northstar asks for 20% attrition; on dates this busy only 10% keeps the margin, so the seller
+    offers 10% at the same rate instead of drafting a version the backend refuses."""
+    e = _busier(tmp_path, full_demand={"twin": 9000, "king": 6000}, resale_pct=0)
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    assert n["versions"][0]["terms"]["attrition_pct"] == 10
+    buyer_turn(e, "Northstar")                                       # counter: 20% attrition
+    s.run()
+    v = n["versions"][-1]
+    assert len(n["versions"]) == 2 and v["terms"]["attrition_pct"] == 10 and v["terms"]["rate"] == 22000
+    assert "demand on your dates is high" in v["message"].lower()
+    assert not any("Engine refused" in a["text"] for a in e.s["activity"])
+
+
+def test_rules_seller_hands_off_when_even_the_target_rate_misses_the_margin(tmp_path):
+    e = _busier(tmp_path, full_demand={"twin": 15000, "king": 15000})
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    assert n["status"] == "handoff" and "margin" in n["handoff"]["reason"] and not n["versions"]
+    assert e.inventory_at("2027-03-10")["twin"]["held"] == 0
 
 
 def test_package_below_margin_floor_is_refused(tmp_path):

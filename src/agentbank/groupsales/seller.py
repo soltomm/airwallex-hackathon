@@ -53,6 +53,11 @@ def _latest_buyer_msg(d: dict) -> dict | None:
 
 
 # =============================================================================== rules seller
+def _margin_short(p: dict) -> list[str]:
+    """The margin-floor refusals in a price_terms result (empty when the margin is fine)."""
+    return [x for x in p["hotel_check"]["hard"] if "contribution margin" in x]
+
+
 class RulesSeller:
     name = "rules"
 
@@ -341,8 +346,9 @@ class RulesSeller:
         dep, att = e.policy["deposit"]["standard_pct"], e.policy["attrition"]["standard_pct"]
         p = e.price_terms(deal_id, rate, dep, att)
         if req.get("budget_total") and p["pricing"]["total"] > req["budget_total"]:
-            rate = bands["autonomous_floor"]
-            p = e.price_terms(deal_id, rate, dep, att)
+            floor = e.price_terms(deal_id, bands["autonomous_floor"], dep, att)
+            if not _margin_short(floor):        # on busy dates the floor can cost too much displacement
+                rate, p = bands["autonomous_floor"], floor
         unmet = []
         rooms = None
         if not p["fits_inventory"]:
@@ -352,6 +358,11 @@ class RulesSeller:
             rooms = avail
             unmet.append(f"only {avail} {req['room_type']} rooms per night are available (requested {req['rooms']})")
             p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
+        short = _margin_short(p)
+        if short:
+            e.escalate(deal_id, "even the target rate is below the margin floor on these dates (" + "; ".join(short)
+                       + "): a revenue manager should decide whether to quote above target or decline")
+            return f"{d['ref']}: handed off (margin on these dates)"
         pr = p["pricing"]
         target = req.get("target_per_room_night")
         if req.get("budget_total") and pr["total"] > req["budget_total"]:
@@ -385,6 +396,13 @@ class RulesSeller:
             dep = e.policy["deposit"]["standard_pct"]
             why.append(f"our standard deposit is {dep}% for new accounts")
         p = e.price_terms(deal_id, rate, dep, att)
+        if _margin_short(p) and (rate != t["rate"] or att > e.policy["attrition"]["standard_pct"]):
+            # Busy dates: displacement leaves no room for this concession. Keep the current rate and offer
+            # the standard release instead of asking for something the backend would refuse.
+            rate, att = t["rate"], e.policy["attrition"]["standard_pct"]
+            dep = max(e.policy["deposit"]["standard_pct"], min(dep, e.policy["deposit"]["max_pct"]))
+            why = [f"demand on your dates is high, so the most we can release free is {att}%, at the {gbp(rate)} rate"]
+            p = e.price_terms(deal_id, rate, dep, att)
         pr = p["pricing"]
         msg = (f"Thank you. We can offer {att}% attrition (up to {pr['attrition_allowance']} room-nights released without "
                f"penalty until {e.policy['attrition']['release_days_before_arrival']} days before arrival) in exchange for "
@@ -645,6 +663,8 @@ class ClaudeSeller:
                     "per_room_night_incl_breakfast": gbp(p["per_room_night_incl_breakfast"]),
                     "margin_all_rooms_pct": p["margin_all_rooms"]["margin_pct"],
                     "margin_full_release_pct": p["margin_full_release"]["margin_pct"],
+                    "displacement": {"total": gbp(p["displacement"]["blocked"]),
+                                     "demand_by_night_pct": {n["night"]: n["demand_pct"] for n in p["displacement"]["nights"]}},
                     "hard_violations": r["hotel_check"]["hard"], "needs_manager_approval": r["hotel_check"]["approvals"],
                     "fits_inventory": r["fits_inventory"]}
         if name == "propose_offer":

@@ -103,9 +103,16 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     deposit = pct_of(total, int(terms["deposit_pct"]))
 
     costs = rms["delivery_costs"]
+    disp = displacement(terms, rms)
     def contribution(room_nights: int) -> dict:
+        # Delivery costs follow the rooms used. Displacement is carried on every contracted room-night;
+        # released rooms get the resale share back (actual releases night by night, the rest of the
+        # allowance at the average for the stay).
         revenue = room_nights * rate + charges_net + bf_count * bf_unit + meeting_price
-        cost = room_nights * costs[rt] + bf_count * costs["breakfast"] + (costs["meeting_day"] if meeting else 0)
+        more = used_rn - room_nights
+        resold = disp["resold_released"] + (disp["blocked"] * more * disp["resale_pct"]) // (contracted * 100 or 1)
+        cost = (room_nights * costs[rt] + disp["blocked"] - resold + bf_count * costs["breakfast"]
+                + (costs["meeting_day"] if meeting else 0))
         contrib = revenue - cost
         return {"revenue": revenue, "costs": cost, "contribution": contrib,
                 "margin_pct": round(100 * contrib / revenue, 1) if revenue else 0.0}
@@ -132,9 +139,42 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
         "attrition_allowance": allowance,
         "allowance_remaining": remaining_allowance,
         "per_room_night_incl_breakfast": rate + (bf_unit * bf_count // used_rn if used_rn else 0),
+        "displacement": disp,
         "margin_all_rooms": contribution(used_rn),
         "margin_full_release": contribution(used_rn - remaining_allowance),
     }
+
+
+def demand_pct(night: str, rms: dict) -> int:
+    """Forecast transient demand for a night (0-100): the chance a room blocked for a group would
+    otherwise have sold. Month figure scaled by the weekday pattern."""
+    cfg = rms.get("displacement")
+    if not cfg:
+        return 0
+    day = d(night)
+    return min(100, cfg["demand_by_month_pct"][day.month - 1] * cfg["demand_by_weekday_pct"][day.weekday()] // 100)
+
+
+def displacement(terms: dict, rms: dict) -> dict:
+    """Opportunity cost of the rooms a group blocks, night by night (integer pence).
+
+    blocked: displacement on every contracted room-night; resold_released: what comes back on rooms
+    already released (they are released before the cutoff and the hotel resells resale_pct of that).
+    """
+    cfg = rms.get("displacement") or {}
+    rt = terms["room_type"]
+    full = (cfg.get("full_demand") or {}).get(rt, 0)
+    resale = int(cfg.get("resale_pct", 0))
+    released = terms.get("released") or {}
+    nights, blocked, back = [], 0, 0
+    for night in sorted(terms.get("rooms", {})):
+        pct = demand_pct(night, rms)
+        per_room = full * pct // 100
+        rooms, rel = int(terms["rooms"][night]), int(released.get(night, 0))
+        blocked += rooms * per_room
+        back += rel * per_room * resale // 100
+        nights.append({"night": night, "demand_pct": pct, "per_room": per_room, "rooms": rooms})
+    return {"nights": nights, "blocked": blocked, "resold_released": back, "resale_pct": resale}
 
 
 # ---- dates ---------------------------------------------------------------------------------
