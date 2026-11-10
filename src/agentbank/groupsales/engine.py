@@ -376,7 +376,7 @@ class Engine:
                     self.log(e["deal_id"], "system", "duplicate",
                              f"Duplicate email ignored ({subject!r}); already filed under {self.s['deals'][e['deal_id']]['ref']}.")
                     self._save()
-                    return {"deal_id": e["deal_id"], "duplicate": True}
+                    return {"deal_id": e["deal_id"], "duplicate": True, "ref": self.s["deals"][e["deal_id"]]["ref"]}
             domain = sender.split("@")[-1].strip(" >").lower()
             deal = None
             if in_reply_to:

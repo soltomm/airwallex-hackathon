@@ -162,7 +162,15 @@
       const from=$('wbInquiryFrom').value.trim(), subject=$('wbInquirySubject').value.trim(), body=$('wbInquiryText').value.trim();
       if(!from||!body){notify('Add who it is from and the inquiry text.');return;}
       $('wbSend').disabled=true;
-      try { const id=await window.Harbour.inbound(from,subject||'Group inquiry',body); $('wbDrawer').close(); refresh(); window.Harbour.open(id); }
+      try {
+        const r=await window.Harbour.inbound(from,subject||'Group inquiry',body);
+        if(r.duplicate){
+          const msg=`Harbour House already received this exact email from ${from} (${r.ref||'an earlier inquiry'}), so it wasn't sent again. To start a new inquiry, change the text or the sender.`;
+          $('wbSend').disabled=false; notify(msg);
+          setTimeout(()=>{ $('wbDrawer').close(); refresh(); window.Harbour.open(r.deal_id); notify(msg); }, 2500); return;
+        }
+        $('wbDrawer').close(); refresh(); window.Harbour.open(r.deal_id);
+      }
       catch(err){ notify(err.message); $('wbSend').disabled=false; }
     };
   }
