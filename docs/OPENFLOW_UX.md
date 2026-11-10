@@ -78,12 +78,17 @@ never point it at a deployed dashboard. The default target is port 8011;
 `OPENFLOW_TEST_URL` overrides it. `CHROMIUM_PATH` can select a system browser;
 otherwise the test uses `/usr/bin/chromium` if present, then Playwright's browser.
 
-The browser test exercises connected detail/rules, both deterministic simulator
-paths, changed-terms reapproval, decline reasons, customer acceptance, deposits,
-handoff, filters, search through polling, payment-source labels, local persistence,
-manager links, drawer keyboard focus and mobile layout. It also verifies that
-simulator actions make no API writes. Screenshots are saved below; the before
-image is rendered from `origin/main` on the same isolated backend.
+The browser test exercises connected detail/rules; **＋ New inquiry** sending both
+samples to Harbour House (one `POST /api/inbox` each, tagged per run so a repeat run
+isn't filed as a duplicate email); inquiries saved by the earlier browser-only
+simulator, which it seeds into localStorage as an old browser would have them
+(changed-terms reapproval, decline reasons, customer acceptance, deposits, handoff,
+alternative dates); filters, search through polling, payment-source labels, local
+persistence, manager links, drawer keyboard focus and mobile layout. It verifies
+that nothing but New inquiry writes to Harbour. It adds two real inquiries to the
+server each run. Screenshots are saved below; restore them with
+`git checkout docs/screenshots` unless you mean to update them. The before image
+is from before the OpenFlow change and is no longer regenerated.
 
 ## Screenshots and reference limits
 
