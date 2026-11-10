@@ -6,6 +6,7 @@ Everything runs against the simulated provider; no network, no API keys.
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
 import pytest
 
@@ -369,8 +370,10 @@ def test_no_overselling(eng):
                    "January at noon.", wake=False)
     s.run()
     other = deal_by(e, "other.example")
-    v = other["versions"][-1]
-    assert v["terms"]["rooms"]["2027-03-10"] == 2 and v["unmet"]     # alternative: only 2 left
+    # Only 2 twins left on 10 March: no short offer, but dates with the full block and the 2 on these dates.
+    assert other["status"] == "dates_proposed" and not other["versions"]
+    assert {"arrival": "2027-03-10", "departure": "2027-03-13", "room_type": "twin",
+            "rooms_per_night": 2} in other["thread"][-1]["date_options"]
     for night in MARCH:
         inv = e.inventory_at(night)["twin"]
         assert inv["held"] + inv["booked"] <= inv["capacity"]
@@ -1981,9 +1984,8 @@ def test_new_inquiry_samples_are_quoted_without_approval(eng):
     bennett = e.ingest_email(*_BENNETT)["deal_id"]
     s.run()
     b = e.deal(bennett)
-    assert b["status"] in ("offer_sent", "handoff", "declined")
-    if b["status"] == "offer_sent":
-        assert max(b["versions"][-1]["terms"]["rooms"].values()) < 20 and b["versions"][-1]["unmet"]
+    # The full block isn't free, so the seller offers dates (never a quietly smaller block).
+    assert b["status"] in ("dates_proposed", "handoff", "declined") and not b["versions"]
 
 
 # ------------------------------------------------------------------------------ short rooms, then a counter
@@ -2001,9 +2003,15 @@ def _short_rooms(tmp_path):
     d = e.deal(a["deal_id"])
     s = RulesSeller(e)
     s.run()
+    assert d["status"] == "dates_proposed" and not d["versions"]
+    smaller = d["thread"][-1]["date_options"][-1]
+    assert (smaller["arrival"], smaller["rooms_per_night"]) == ("2027-03-07", 14)
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "The smaller block on our dates works.",
+                   {"dates": {"arrival": "2027-03-07", "departure": "2027-03-11"}})
+    s.run()
     v1 = d["versions"][-1]
     assert d["status"] == "offer_sent" and set(v1["terms"]["rooms"].values()) == {14}
-    assert any("only 14 twin rooms" in u for u in v1["unmet"])
+    assert any("14 twin rooms sleep up to 28 of your 34 guests" in u for u in v1["unmet"])
     return e, s, d
 
 
@@ -2029,7 +2037,6 @@ def test_rules_seller_counters_on_the_rooms_it_offered_not_the_rooms_first_asked
     _counter_and_run(e, s, d)
     v = d["versions"][-1]
     assert len(d["versions"]) == 2 and set(v["terms"]["rooms"].values()) == {14}
-    assert any("only 14 twin rooms" in u for u in v["unmet"])
     assert e.inventory_at("2027-03-10")["twin"]["held"] == 14       # the same hold, not a second one
 
 
@@ -2065,3 +2072,69 @@ def test_rules_seller_never_goes_quiet_when_the_engine_refuses_its_reply(tmp_pat
     s.run()
     assert d["status"] == "handoff" and "did not anticipate" in d["handoff"]["reason"]
     assert d["thread"][-1]["from"] == "seller" and "reply to you directly" in d["thread"][-1]["text"]
+
+
+# ------------------------------------------------------------------------- full block not free on the dates
+_FIELDNOTE = ("Sam Whitaker <sam@fieldnote-labs.example>", "RFP | Leadership Retreat | 12 guests | 23-25 May 2027",
+              "Hello Group Sales, please quote 6 king rooms for 12 colleagues arriving 23 May and departing 25 May 2027, "
+              "with breakfast each morning. We need a private meeting room for 12 people on 24 May, 09:00-17:00 in "
+              "classroom layout, with projector and Wi-Fi. Our target is £210 per room/night including breakfast, and our "
+              "total budget is £3,200 inclusive of taxes. The package is billed to Fieldnote Labs Demo Pte Ltd, from our "
+              "office in Singapore; guests cover incidentals. Please reply by 22 January at noon London time.")
+
+
+def _fieldnote(e):
+    assert e.inventory_at("2027-05-24")["king"]["capacity"] == 5     # 6 kings asked for; 5 free on 24 May
+    d = e.deal(e.ingest_email(*_FIELDNOTE)["deal_id"])
+    RulesSeller(e).run()
+    return d
+
+
+def test_short_block_offers_dates_instead_of_a_smaller_offer(eng):
+    d = _fieldnote(eng)
+    assert d["status"] == "dates_proposed" and not d["versions"]
+    m = d["thread"][-1]
+    assert "only 5 are free on 24 May 2027" in m["text"]
+    *full, smaller = m["date_options"]
+    assert full and all(o["rooms_per_night"] == 6 for o in full)
+    assert smaller == {"arrival": "2027-05-23", "departure": "2027-05-25", "room_type": "king", "rooms_per_night": 5}
+    for o in full:                                                   # the meeting (2nd day) moves to a weekday
+        day = (date.fromisoformat(o["arrival"]) + timedelta(days=1)).isoformat()
+        assert eng._slot(day) and eng._slot(day)["status"] == "free"
+
+
+def _pick(e, d, o):
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "Those dates work.",
+                   {"dates": {"arrival": o["arrival"], "departure": o["departure"]}})
+    RulesSeller(e).run()
+    assert d["status"] == "offer_sent"
+    return d["versions"][-1]
+
+
+def test_full_block_dates_quote_the_whole_group(eng):
+    d = _fieldnote(eng)
+    v = _pick(eng, d, d["thread"][-1]["date_options"][0])
+    pr = v["pricing"]
+    assert set(v["terms"]["rooms"].values()) == {6} and not v["unmet"]
+    assert pr["total"] <= 320000 and pr["per_room_night_incl_breakfast"] == 21000
+
+
+def test_smaller_block_is_priced_on_that_block_and_says_who_it_sleeps(eng):
+    d = _fieldnote(eng)
+    v = _pick(eng, d, d["thread"][-1]["date_options"][-1])
+    rate = eng.rms["rates"]["king"]
+    # 5 kings at the target rate fit the budget, so there is no reason to drop to the floor.
+    assert set(v["terms"]["rooms"].values()) == {5} and v["terms"]["rate"] == rate["target"]
+    assert "5 king rooms sleep up to 10 of your 12 guests" in v["unmet"]
+    # Breakfast for guests without a room doesn't make the room dearer: £190 + 2 x £15.
+    assert v["pricing"]["per_room_night_incl_breakfast"] == rate["target"] + 3000
+
+
+def test_per_room_night_counts_breakfast_up_to_the_room_occupancy():
+    hotel, rms = S["hotel"], S["rms"]
+    terms = {"room_type": "king", "rate": 19000, "rooms": {"2027-05-23": 5, "2027-05-24": 5},
+             "released": {"2027-05-23": 0, "2027-05-24": 0}, "breakfast": {"2027-05-24": 12, "2027-05-25": 12},
+             "meeting": None, "attrition_pct": 10, "deposit_pct": 30, "currency": "GBP"}
+    assert calc.price(terms, hotel, rms)["per_room_night_incl_breakfast"] == 19000 + 2 * 1500
+    terms["breakfast"] = {"2027-05-24": 5, "2027-05-25": 5}         # one guest a room: one breakfast
+    assert calc.price(terms, hotel, rms)["per_room_night_incl_breakfast"] == 19000 + 1500
