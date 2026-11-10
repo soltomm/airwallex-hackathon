@@ -172,11 +172,12 @@ class ChaosSeller:
                  "room_type": r.choice([None, "twin", "king"]), "rooms_per_night": r.choice([None, 0, 2, 12, 40])}
                 for _ in range(r.randint(0, 2))]}
         if name == "prepare_reduction":
-            return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": ""}
+            return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": "",
+                    "waive_gbp": r.choice([0, 0, 0, 50, 220, 440, 100000, -10]), "justification_for_manager": "client"}
         if name == "refund_excess":
             return {**a, "justification": "owed"}
         if name == "escalate":
-            return {**a, "reason": "chaos", "message_to_buyer": ""}
+            return {**a, "reason": "chaos", "message_to_buyer": "", "why_a_person": "", "what_a_person_should_do": ""}
         if name == "log_reasoning":
             return {"deal_id": None, "note": "thinking"}
         return a
@@ -495,11 +496,47 @@ def check(e: Engine, provider: SimulatedProvider):
         if h["status"] == "active" and h["expires_at"] <= now:
             _fail(f"hold {h['id']} still active after it expired")
 
+    # The hotel manager is only ever asked when a seller rule is crossed, and the card names that rule.
+    for a in s["approvals"].values():
+        if a["approver"] != "hotel_manager":
+            continue
+        d = s["deals"][a["deal_id"]]
+        if not a.get("rules") or not a.get("if_approved") or not a.get("if_rejected"):
+            _fail(f"{d['ref']} approval {a['id']} ({a['subject']}) doesn't name the rule it crosses or its outcomes")
+        if a["subject"] == "offer":
+            v = next(x for x in d["versions"] if x["n"] == a["version"])
+            if a["rules"] != hotel_check(v["terms"], v["pricing"], scen)["rules"]:
+                _fail(f"{d['ref']} v{v['n']}: approval rules {a['rules']} are not the rules its terms cross")
+        elif a["subject"] == "refund":
+            if not a["cumulative"] > a["limit"]:
+                _fail(f"{d['ref']} refund approval {a['id']} requested within the seller's {gbp(a['limit'])} limit")
+        elif a["subject"] == "reduction":
+            v = next(x for x in d["versions"] if x["n"] == a["version"])
+            if not v["reduction"]["waived"] or a["amount"] != v["reduction"]["waived"]:
+                _fail(f"{d['ref']} v{v['n']}: change sent for approval without a waiver")
+        else:
+            _fail(f"{d['ref']} approval {a['id']}: unexpected hotel-manager subject {a['subject']}")
+
     for d in s["deals"].values():
         if d["status"] not in STATUSES:
             _fail(f"{d['ref']} has unknown status {d['status']}")
         mandate = scen["buyers"].get(d.get("buyer_profile") or "")
         for v in d["versions"]:
+            if v["kind"] == "amendment":
+                # A change is priced by its contract; the only concession, a waiver of the attrition charge,
+                # never reaches the buyer without the manager's approval of that exact version.
+                if calc.price(v["terms"], hotel, e.rms) != v["pricing"]:
+                    _fail(f"{d['ref']} v{v['n']}: pricing does not match its terms")
+                base = next(x for x in d["versions"] if x["n"] == v["base_version"])
+                waived = int(v["terms"].get("waived") or 0) - int(base["terms"].get("waived") or 0)
+                if waived > v["reduction"]["attrition_charge"] or waived < 0:
+                    _fail(f"{d['ref']} v{v['n']}: waiver {waived} outside its charge")
+                if waived and (v.get("sent_at") or v["status"] in SENT_STATES) and not any(
+                        a["deal_id"] == d["id"] and a["subject"] == "reduction" and a["approver"] == "hotel_manager"
+                        and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
+                        for a in s["approvals"].values()):
+                    _fail(f"{d['ref']} v{v['n']} waived {gbp(waived)} without the manager's approval")
+                continue
             if v["kind"] != "offer":
                 continue
             # The price on a version is what the calculator says for its terms (nothing edited in between).

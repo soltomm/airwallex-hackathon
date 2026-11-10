@@ -185,6 +185,10 @@ details.ag[open] > summary::after { transform: rotate(90deg); }
 @media (max-width: 760px) { .rule { grid-template-columns: minmax(0, 1fr); } }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 90vw; }
 dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg); width: min(620px, 92vw); }
+table.why { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size: 13px; }
+table.why th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+table.why td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+dl.outcomes { margin-top: 8px; }
 </style>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/assets/openflow.css">
@@ -196,11 +200,11 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <nav class="wb-nav">
     <button data-wb-view="overview" aria-current="page"><span class="wb-icon" aria-hidden="true">▦</span>Overview</button>
     <button data-wb-view="payments"><span class="wb-icon" aria-hidden="true">▱</span>Payments</button>
+    <button id="vendorDirectoryNav"><span class="wb-icon" aria-hidden="true">▤</span>Directory</button>
   </nav>
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
     <button id="wbAccount">Hotel payout account ↗</button>
-    <button id="wbReset">↻ Reset simulator</button>
   </details>
 </aside>
 <div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
@@ -210,7 +214,7 @@ dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--p
   <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
 </main>
-<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">INBOUND SIMULATOR</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
+<dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">NEW INQUIRY</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
 <dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
 <dialog id="fxDirectory" class="wb-drawer" aria-labelledby="fxDirectoryTitle"><div class="wb-drawer-head"><span>SELLER RULES · CURRENCY POLICY</span><button class="wb-close" aria-label="Close currency directory" data-wb-close>×</button></div><div class="wb-drawer-body" id="fxDirectoryBody"></div></dialog>
 <dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
@@ -284,6 +288,18 @@ const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : 
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
 const ROLE = {hotel_manager: 'Hotel manager', organizer: "Buyer's organizer"};
 const cap = t => { t = String(t || '').trim(); return t ? t[0].toUpperCase() + t.slice(1) : t; };
+// Why an approval exists: each limit crossed (rule, what's allowed alone, what's asked) and what each
+// decision does. Older stored approvals without rules fall back to their reasons.
+function whyCard(a, alone = 'Seller alone') {
+  const rules = a.rules || [];
+  let h = rules.length
+    ? `<div class="small muted" style="margin-top:6px">Why this needs you: ${rules.length > 1 ? 'these requests go' : 'this request goes'} beyond what the ${alone.split(' ')[0].toLowerCase()} can agree alone.</div>
+       <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>This request</th></tr>${rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`
+    : `<p>${esc(sentences(a.reasons))}</p>`;
+  if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}</dl>`;
+  return h;
+}
+const handoffWhy = ho => (ho.why || ho.todo) ? `<dl class="kv small outcomes">${ho.why ? `<dt>Why a person</dt><dd>${esc(ho.why)}</dd>` : ''}${ho.todo ? `<dt>What to do</dt><dd>${esc(ho.todo)}</dd>` : ''}</dl>` : '';
 const sentences = list => (list || []).map(x => cap(x).replace(/[.;]+$/, '')).filter(Boolean).map(x => x + '.').join(' ');
 const typing = () => { const a = document.activeElement; return a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.closest('#deal'); };
 
@@ -340,8 +356,8 @@ function nextOf(d) {
     title: `${co}'s organizer is signing off v${ap.version}`,
     text: "The buyer accepted, but outside what its contact can agree alone. The seller opens checkout once the organizer authorizes it."};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
-    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
-      staff: st === 'handoff' && !d.booking};
+    return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
+      staff: st === 'handoff' && !d.booking, handoff: d.handoff};
   if (st === 'dates_proposed') return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
     title: `The seller offered ${co} other dates`, text: 'The requested dates are not available. The seller quotes as soon as the buyer picks one of the dates offered.'};
   if (st === 'awaiting_payment') return {cls: 'buyer', short: 'Buyer to pay', who: 'Waiting for the buyer', mail: true, chkPay: true,
@@ -349,6 +365,10 @@ function nextOf(d) {
     text: "They pay on Airwallex's hosted page from the link the seller sent. The booking confirms once the payment is verified with Airwallex."};
   if (st === 'refund_pending') return {cls: 'wait', short: 'Refund confirming', who: 'Airwallex', refund: true};
   if (SELLER_TURN.includes(st) || d.unread) return {cls: 'wait', short: busy ? 'Seller working' : 'Seller up next', who: 'Seller agent', seller: true};
+  // A booked deal stays confirmed when the seller hands something to a person (e.g. a change it can't
+  // apply): show that hand-off until the buyer writes again.
+  if (st === 'confirmed' && d.handoff && !d.thread.some(m => m.from === 'buyer' && m.at > d.handoff.at))
+    return {cls: 'bad', short: 'With hotel staff', who: 'Booked · handed to a person · not an approval', confirmed: true, handoff: d.handoff};
   if (st === 'confirmed') return {cls: 'done', short: 'Booked', who: 'Booking confirmed', confirmed: true};
   if (['needs_info', 'offer_sent', 'amendment_sent', 'expired'].includes(st)) return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
     title: st === 'needs_info' ? `The seller asked ${co} some questions` : st === 'expired' ? 'The offer lapsed'
@@ -375,9 +395,10 @@ function nextCard(d) {
   let h = `<div class="next ${n.cls}"><div class="who">${esc(n.who)}</div>`;
   if (n.ap) {
     const a = n.ap;
-    const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: `Approve change v${a.version}?`}[a.subject] || 'Approve?';
-    h += `<h3>${what}</h3><p>${esc(sentences(a.reasons))}</p><details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
-      <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">Approve</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">Reject</button></div>`;
+    const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
+    const [yes, no] = a.subject === 'reduction' && a.amount ? ['Approve waiver', 'Keep the charge'] : ['Approve', 'Reject'];
+    h += `<h3>${what}</h3>${whyCard(a)}<details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
+      <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">${yes}</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">${no}</button></div>`;
   } else if (n.paused) {
     h += `<h3>Stopped: ${esc(n.paused.what)} failed at the payment provider</h3><p class="small" style="overflow-wrap:anywhere">${esc(tidy(n.paused.error).slice(0, 300))}</p>
       <p class="small">The seller doesn't retry this on its own, so a provider problem can't pile up failed attempts. Fix the cause (for example the API key or its IP whitelist), then retry.</p>
@@ -389,10 +410,13 @@ function nextCard(d) {
   } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
     h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
+    if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
     if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
     h += mailLink(d);
   } else {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
+    // A hand-off isn't a request to approve something: say what stops the seller and what's needed.
+    if (n.handoff) h += handoffWhy(n.handoff);
     if (n.chkPay) h += `<div class="row"><button data-act="chkPay">Check the payment with Airwallex</button></div>`;
     if (n.mail) h += mailLink(d);
     if (n.staff) h += `<label class="small" for="instr" style="display:block;margin-top:10px">Instruction for the seller (optional)</label>
@@ -401,7 +425,7 @@ function nextCard(d) {
       <p class="small muted" style="margin:6px 0 0">The seller replies to the buyer. Closing sends nothing.</p>`;
   }
   // A hand-off card already says what the seller's last action said: don't repeat it underneath.
-  const ls = lastStep(d), dup = n.staff !== undefined && d.handoff && ls && ls.tool === 'escalate';
+  const ls = lastStep(d), dup = (n.staff !== undefined || n.handoff) && d.handoff && ls && ls.tool === 'escalate';
   return h + (dup ? '' : lastLine(d)) + '</div>';
 }
 
@@ -426,7 +450,7 @@ function offerCard(d) {
   const v = curVersion(d);
   if (!v) return '';
   const p = v.pricing, t = v.terms, f = d.finance_view;
-  const lines = p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.qty} × ${gbp(l.unit)}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('');
+  const lines = p.lines.map(l => `<tr><td>${esc(l.item.replace(/ \(.*\)/, ''))}<div class="small muted">${l.unit == null ? `Bundled service · ${l.qty} units` : `${l.qty} × ${gbp(l.unit)}`}${l.note ? ' · ' + esc(l.note) : ''}</div></td><td class="r">${gbp(l.amount)}</td></tr>`).join('');
   const head = v.kind === 'amendment' ? 'Agreement as amended' : d.booking ? 'Agreement' : 'Current offer';
   let h = `<div class="card offer"><div class="label"><span>${head} · v${v.n}</span><span class="chip">${esc(v.status.replaceAll('_', ' '))}</span></div>
     <table>${lines}<tr class="tot"><td>Total</td><td class="r">${gbp(p.total)}</td></tr></table>
@@ -485,7 +509,7 @@ function tabBody(d) {
   if (tab === 'rec') return d.records.length ? d.records.map(x => `<details><summary><b>${esc(x.system)}</b> <span class="small muted">· ${when(x.checked_at)}</span><div class="small">${esc(x.summary)}</div></summary><pre>${esc(JSON.stringify(x.data, null, 1))}</pre></details>`).join('') : '<p class="muted">No records checked yet.</p>';
   if (tab === 'hist') return d.versions.slice().reverse().map(v => `<details><summary><b>v${v.n}</b> ${v.kind} · ${esc(v.status.replaceAll('_', ' '))} · ${gbp(v.pricing.total)} · deposit ${v.terms.deposit_pct}% · attrition ${v.terms.attrition_pct}%</summary>
       <dl class="kv small" style="margin-top:6px"><dt>Rate</dt><dd>${gbp(v.terms.rate)} ${v.terms.room_type}</dd><dt>Created</dt><dd>${when(v.created_at)}${v.sent_at ? ' · sent ' + when(v.sent_at) : ''}</dd><dt>Terms hash</dt><dd><code>${v.hash}</code></dd>
-      ${v.reduction ? `<dt>Reduction</dt><dd>${v.reduction.requested_room_nights} room-nights released of ${v.reduction.allowance} · refund ${gbp(v.reduction.refund_due)} (${esc(v.reduction.refund_mode)})</dd>` : ''}
+      ${v.reduction ? `<dt>Reduction</dt><dd>${v.reduction.requested_room_nights} room-nights released (allowance ${v.reduction.allowance})${v.reduction.charged_room_nights ? ` · ${v.reduction.charged_room_nights} charged, attrition charge ${gbp(v.reduction.attrition_charge)}${v.reduction.waived ? `, ${gbp(v.reduction.waived)} waived` : ''}` : ''} · refund ${gbp(v.reduction.refund_due)} (${esc(v.reduction.refund_mode)})</dd>` : ''}
       ${v.explanation ? `<dt>Seller's note</dt><dd>${esc(v.explanation)}</dd>` : ''}</dl></details>`).join('') || '<p class="muted">No versions yet.</p>';
   if (tab === 'money') {
     const ops = S.operations.filter(o => o.deal_id === d.id), led = S.ledger.filter(x => x.deal_id === d.id), f = d.finance_view;
@@ -509,6 +533,7 @@ function renderDeal(d) {
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.FX) window.FX.mount(d);
+  if (window.Vendors) window.Vendors.mount(d);
 }
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
@@ -737,6 +762,7 @@ function decisions() {
   return [r('twin'), r('king'),
     ['Deposit', `${dstd}% to ${dmax}%`, dmin < dstd ? `${dmin}% to ${dstd - 1}%, for high-value repeat customers or large spend` : '–', `below ${dmin}% or above ${dmax}%`],
     ['Free release (attrition)', `up to ${astd}%`, amax > astd ? `${astd + 1}% to ${amax}%, with a ${rv('policy.deposit.required_pct_for_exceptions')}% deposit` : '–', `above ${amax}%`],
+    ['Releases beyond the free release or after the deadline', 'charged at the contracted rate', 'waiving any of that charge', '–'],
     ['Margin', `at least ${rv('rms.min_contribution_margin_pct')}%`, '–', `below ${rv('rms.min_contribution_margin_pct')}%`],
     ['Refunds after a reduction', `up to ${gbp(lim)} in total`, `above ${gbp(lim)}, the exact amount`, 'more than the buyer paid']];
 }
@@ -811,6 +837,10 @@ window.Harbour = {
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
   inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r.deal_id; },
+  // Generated inquiries (generator.py): the RFP plus its buyer's private brief; the agents do the rest.
+  presets: () => api('/api/simulate/presets'),
+  generate: async body => { const r = await api('/api/simulate/rfp', body); lastJSON = ''; await load(); return r; },
+  setBuyerMode: async mode => { await api('/api/settings', {buyer_mode: mode}); lastJSON = ''; await load(); },
 };
 // ---- the hotel's Airwallex connected account (Payments for Platforms) -------------------------------
 const ONBOARD = {starting: 'Starting', account_created: 'Account created', submitted: 'Submitted for verification',
@@ -843,8 +873,8 @@ $('wbAccount').onclick = () => { $('acctDrawer').showModal(); renderAccount(true
 $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
-<script src="/assets/openflow-demo.js"></script>
 <script src="/assets/fx.js"></script>
+<script src="/assets/vendors.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>
 </html>

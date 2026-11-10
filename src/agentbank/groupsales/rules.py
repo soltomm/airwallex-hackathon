@@ -150,12 +150,12 @@ def _displacement_text(rms: dict) -> str:
     cfg = rms.get("displacement")
     if not cfg:
         return "none"
-    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
-    days = "Mon Tue Wed Thu Fri Sat Sun".split()
+    stated = cfg.get("demand_by_night_pct") or {}
     return (", ".join(f"{k} {gbp(v)}" for k, v in cfg["full_demand"].items()) + " per room-night at full demand, "
-            "times forecast demand (by month: " + ", ".join(f"{m} {p}%" for m, p in zip(months, cfg["demand_by_month_pct"]))
-            + "; scaled by weekday: " + ", ".join(f"{w} {p}%" for w, p in zip(days, cfg["demand_by_weekday_pct"]))
-            + f"). Rooms released before the cutoff are {cfg['resale_pct']}% resold")
+            "times that night's demand: the share of the group allocation other business has already taken, as on "
+            "the availability calendar" + (" (stated by the RMS for " + ", ".join(f"{n} {p}%" for n, p in sorted(stated.items()))
+                                           + ")" if stated else "")
+            + f". Rooms released before the cutoff are {cfg['resale_pct']}% resold")
 
 
 def _service_prices(h: dict) -> list[dict]:

@@ -1,5 +1,10 @@
 # Harbour House group sales agent
 
+Third-party sourcing, partner capacity and bundled master proposals are documented
+in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
+workflows; provider delivery/confirmation is simulated and vendor payouts are
+tracked without transferring money.
+
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex
 sandbox payments. This is the build for product spec v2 (Airwallex hackathon).
@@ -171,10 +176,17 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
   release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
   displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
-  demand times the forecast demand for that night (by month, scaled by weekday; `rms.displacement`).
-  Rooms released before the cutoff are counted 50% resold. On the busy demo dates (80% / 80% / 64%)
+  demand times that night's demand: the share of the group allocation other business has already
+  taken, read from the same calendar the availability page shows (`hotel.background_demand`), so
+  sold-out nights count 100% and quiet ones little. The demo stay's allocation is set by hand, so
+  `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
+  sold out). Rooms released before the cutoff are counted 50% resold. On the demo dates (80% / 80% / 64%)
   the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
-  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide.
+  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide. Every approval names each rule it
+  crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
+  rejecting each do, and the card shows exactly that. The engine refuses a manager request that names no
+  crossed rule, so the manager is only asked when a seller rule is broken. A hand-off to a person is not
+  an approval: it says what stops the seller (`why`) and what a person should do (`todo`).
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
 - **Buyer mandate.** Accepting above the budget or the deposit limits creates an organizer approval
@@ -194,10 +206,15 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   authorization covers one exact amount, payment and amendment. Ledger entries have unique keys, and
   refund statuses only move forward (RECEIVED → ACCEPTED → SETTLED), so repeated or out-of-order
   events change nothing.
-- **Reductions.** Within the allowance (counted cumulatively), before the release deadline and
-  before 8 Feb, the deposit is recalculated and the excess refunded. From 8 Feb on, the amendment is
-  recorded and the manager reconciles payments. Going over the allowance or past the deadline goes to
-  manager review, and the existing agreement stays in effect until a change is accepted.
+- **Reductions.** The contract prices every release, so none is escalated for judgement. Room-nights
+  within the allowance (counted cumulatively) and before the release deadline come off the total;
+  any beyond the allowance, or released after the deadline, go back to inventory but stay payable at
+  the contracted rate as an attrition charge, itemised on the change. Before 8 Feb the deposit is
+  recalculated on the new total and the excess refunded; from 8 Feb on, the amendment is recorded and
+  the manager reconciles payments if the total changed. The only concession is a waiver of the
+  attrition charge: it gives away hotel money, so it needs the hotel manager's approval of that exact
+  version and amount, and a declined waiver leaves the change to be offered with the full charge. The
+  existing agreement stays in effect until the buyer accepts a change.
 - **Other dates.** The seller can only offer dates inside the group calendar (11 January to 31 December
   2027), arriving at least 31 days after the scenario clock, with the rooms free at that moment
   (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
@@ -332,6 +349,30 @@ ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review.
 5,000 new cases passed (seeds 1000-3499 per seller, 100 steps each, about 70 minutes), ending with
 4,156 confirmed bookings, 470 refunds, 17 refunds failed and handled, and 43 payments received with
 a booking exception, plus deals handed to a person or declined.
+
+### Generated inquiries
+
+`src/agentbank/groupsales/generator.py` writes new inquiries for automated runs and demos. Each one is an
+RFP email plus a private brief for the buyer agent (its answers, goals, limits and a later change). The
+generator only writes the inbound: the seller agent, the buyer agent and the engine handle everything after
+it, and the seller never sees the brief.
+
+An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
+(`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
+(`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
+
+| Preset | Path with the rules seller |
+|---|---|
+| `straight_booking` | quote, accept, deposit paid |
+| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, organizer sign-off, paid |
+| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), organizer sign-off, paid, fewer rooms, partial refund, hotel payout reversed |
+| `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
+| `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
+
+The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the
+seed, so replaying a seed in the same run is refused rather than merged. From the server:
+`GET /api/simulate/presets`, `POST /api/simulate/rfp {"preset": ..., "traits": {...}, "seed": ...}`.
+`tests/test_generator.py` runs every preset end to end.
 
 ### Browser check of the demo script
 
