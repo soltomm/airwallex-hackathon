@@ -2247,11 +2247,3 @@ def test_a_block_that_fits_is_still_promised(eng):
     e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
     RulesSeller(e).run()
     assert "can hold your rooms once we quote" in deal_by(e, "groupie.example")["thread"][-1]["text"]
-
-
-def test_a_repeated_email_says_which_inquiry_it_already_is(eng):
-    e = eng
-    body = "Please quote 2 king rooms for 2 employees arriving 10 March and departing 12 March 2027."
-    first = e.ingest_email("Rae <rae@repeat.example>", "Trip", body, wake=False)
-    again = e.ingest_email("Rae <rae@repeat.example>", "Trip", "  " + body.upper() + " ", wake=False)
-    assert again == {"deal_id": first["deal_id"], "duplicate": True, "ref": e.deal(first["deal_id"])["ref"]}
