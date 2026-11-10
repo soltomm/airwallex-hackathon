@@ -27,7 +27,7 @@ Offline, with no keys (simulated Airwallex twin, rules seller):
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[agent]' pytest
 PAYMENTS=simulated SELLER_MODE=rules PYTHONPATH=src .venv/bin/python scripts/group_sales.py
-# open http://localhost:8010, then Demo controls → Reset scenario → Yes, reset; the seller starts on its own
+# open http://localhost:8010, then Demo controls (sidebar) → Reset scenario → Yes, reset; the seller starts on its own
 ```
 
 With the Airwallex sandbox and the Claude seller, copy `.env.example` to `.env` and fill in

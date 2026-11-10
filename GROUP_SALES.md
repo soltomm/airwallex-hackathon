@@ -56,6 +56,7 @@ hotel manager. There is no button to run it. The buyer answers by email, in its 
 outside the dashboard (`/inbox/<ref>`): open it from the deal's card or from **Demo controls → Buyer
 mailboxes**. Replies, acceptances, the buyer's organizer sign-off and the payment link are all there.
 
+Inquiries are rows in the overview table; clicking one opens its deal page in a side drawer.
 Each deal page has a coloured **next step** card:
 - amber: your decision, as hotel manager
 - purple: waiting for the buyer, with a link to the buyer's mailbox
@@ -67,8 +68,10 @@ actions it took, one line each; click an action for its inputs, result and what 
 action is marked in red). The **Activity** tab lists what each agent and person did, newest first. The
 **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
 Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo
-controls**. Under the inquiries list, **Availability** opens rooms, the Thames Room and breakfast by
-night, and **Seller rules** opens the rules the seller works within (see below).
+controls**, in the sidebar's property tools (on a phone, expand **Property tools** first). Next to it,
+**Room availability** opens rooms, the Thames Room and breakfast by night, and **Seller rules** opens
+the rules the seller works within (see below). **↻ Reset simulator** only clears browser-only practice
+inquiries; use **Demo controls → Reset scenario** to start the demo over.
 
 1. **Demo controls → Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
