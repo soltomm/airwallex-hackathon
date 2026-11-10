@@ -164,3 +164,22 @@ def test_reader_client_sends_the_workspace_for_user_level_keys(monkeypatch):
     client = understand._default_client()
     assert client.default_headers.get("anthropic-workspace-id") == "wrkspc_test"
     monkeypatch.setattr(understand, "_client", None)
+
+
+def test_schema_is_in_the_form_the_api_accepts():
+    """Structured outputs take one type name per node; nullable fields are anyOf [type, null]. A type list such as
+    ["integer", "null"] made every live call a 400, and the seller silently read with patterns. The SDK's own
+    transform_schema must leave the schema exactly as it is."""
+    import copy
+    from anthropic.lib._parse._transform import transform_schema
+
+    def walk(n):
+        if isinstance(n, dict):
+            assert not isinstance(n.get("type"), list) and None not in (n.get("enum") or [])
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(understand.SCHEMA)
+    assert transform_schema(copy.deepcopy(understand.SCHEMA)) == understand.SCHEMA
