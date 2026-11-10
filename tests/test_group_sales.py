@@ -422,6 +422,37 @@ def test_reduction_after_installment_and_beyond_allowance(eng):
     assert n["booking"]["rooms"]["2027-03-10"] == 12                 # existing agreement still in effect
 
 
+def _accept_amendment(e, n, version):
+    e.buyer_action(n["id"], n["buyer_token"], "accept", payload={"version": version})
+    return n["flags"][-1]
+
+
+def test_manual_reconciliation_flag_names_the_real_reason(eng):
+    # Over the allowance, weeks before the first installment (8 Feb): the flag must not blame the installment date.
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    r = e.prepare_reduction(n["id"], rooms_per_night=3)              # 9 room-nights > 7
+    assert r["status"] == "pending_approval" and r["evaluation"]["before_first_installment"]
+    e.decide_approval(r["approval_id"], "approve", "hotel_manager")
+    e.send_amendment(n["id"], r["version"])
+    flag = _accept_amendment(e, n, r["version"])
+    assert "first installment" not in flag
+    assert "releases 9 room-nights in total, above the 7 allowed" in flag and "reconciled manually" in flag
+    assert n["status"] == "confirmed" and n["finance"]["refund_owed"] == 0      # money unchanged: no refund
+
+
+def test_manual_reconciliation_flag_after_the_first_installment(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-02-10T09:00:00+00:00")
+    r = e.prepare_reduction(n["id"], rooms_per_night=2)              # within allowance, after 8 Feb
+    assert r["evaluation"]["refund_mode"] == "manager reconciliation"
+    flag = _accept_amendment(e, n, r["version"])
+    assert "after the first installment date" in flag and "allowed" not in flag
+    assert n["finance"]["refund_owed"] == 0
+
+
 def test_timeout_on_refund_creation_recovers_without_duplicate(eng):
     e = eng
     s, n = run_to_confirmed(e)
