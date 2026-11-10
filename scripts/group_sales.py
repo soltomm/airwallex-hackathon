@@ -217,7 +217,6 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
             assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
-                      "/assets/openflow-demo.js": ("openflow-demo.js", "text/javascript"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
@@ -246,8 +245,9 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
             if p == "/api/simulate/presets":
-                return self._send(200, {"presets": generator.PRESETS, "traits": generator.TRAITS,
-                                        "defaults": generator.DEFAULTS})
+                return self._send(200, {"presets": generator.PRESETS, "info": generator.PRESET_INFO,
+                                        "traits": generator.TRAITS, "defaults": generator.DEFAULTS,
+                                        "buyer_mode": runner.settings["buyer_mode"]})
             if p == "/api/fx/countries":
                 return self._send(200, fx.directory())
             if p.startswith("/pay/"):

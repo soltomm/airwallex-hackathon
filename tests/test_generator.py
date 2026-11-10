@@ -161,6 +161,22 @@ def test_the_seller_never_sees_the_generated_brief(eng):
     assert str(b["deposit_limit"]) not in seller_view
 
 
+def test_generated_deals_are_marked_for_the_presenter_only(eng):
+    d, _ = new(eng, "payer_abroad", 21)
+    assert d["generated"] == {"preset": "payer_abroad", "seed": 21}
+    snap = next(x for x in eng.snapshot()["deals"] if x["id"] == d["id"])
+    assert snap["generated"] == {"preset": "payer_abroad", "seed": 21}
+    assert "generated" not in eng.deal_view(d["id"], for_="seller")
+    assert "generated" not in eng.deal_view(d["id"], for_="buyer")
+    custom, _ = new(eng, None, 22, availability="fits")
+    assert custom["generated"] == {"preset": None, "seed": 22}
+
+
+def test_every_preset_has_a_title_and_description():
+    assert set(generator.PRESET_INFO) == set(generator.PRESETS)
+    assert all(i["title"] and i["shows"] for i in generator.PRESET_INFO.values())
+
+
 def test_traits_are_checked(eng):
     with pytest.raises(Refused, match="unknown preset"):
         generator.generate(eng, preset="nope")

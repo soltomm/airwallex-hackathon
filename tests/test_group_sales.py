@@ -1259,10 +1259,10 @@ def test_access_token_gate(server, monkeypatch):
                              {"Content-Type": "application/json"})
         assert code == 400 and "buyer" in body, path
     for path in ("/", "/api/state", "/api/hotel_account", "/api/buyer/GS-1001/suggest", "/assets/openflow.css",
-                 "/assets/openflow.js", "/assets/openflow-demo.js"):
+                 "/assets/openflow.js", "/api/simulate/presets"):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
-    for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/approvals/ap1001",
+    for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/simulate/rfp", "/api/approvals/ap1001",
                  "/api/buyer/GS-1001/agent", "/api/deals/GS-1001/retry_payout",
                  "/api/hotel_account/onboard"):
         code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
@@ -1589,7 +1589,9 @@ def test_buyer_mailbox_and_organizer_sign_off(server):
 
 def test_generated_inquiry_endpoint(server):
     st, _, body = _req(server, "/api/simulate/presets")
-    assert st == 200 and "full_lifecycle" in json.loads(body)["presets"]
+    cat = json.loads(body)
+    assert st == 200 and "full_lifecycle" in cat["presets"] and cat["info"]["full_lifecycle"]["title"]
+    assert cat["buyer_mode"] in ("presenter", "agent")
     st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
     r = json.loads(body)
     assert st == 200 and r["seed"] == 4242 and r["rfp"]["from"].endswith("4242.example>")
@@ -1620,12 +1622,12 @@ def test_workbench_assets_are_explicit_and_authenticated(server, monkeypatch):
     for path, mime, marker in (
         ("/assets/openflow.css", "text/css", ".wb-sidebar"),
         ("/assets/openflow.js", "text/javascript", "window.OpenFlow="),
-        ("/assets/openflow-demo.js", "text/javascript", "OpenFlowDemo"),
     ):
         code, response_headers, body = _req(server, path, headers=headers)
         assert code == 200 and mime in response_headers["Content-Type"]
         assert marker in body
-    for path in ("/assets/scenario.json", "/assets/../.env", "/assets/group_sales.html"):
+    # The browser-only simulator is gone: generated inquiries go through the real engine.
+    for path in ("/assets/scenario.json", "/assets/../.env", "/assets/group_sales.html", "/assets/openflow-demo.js"):
         assert _req(server, path, headers=headers)[0] == 404
 
 

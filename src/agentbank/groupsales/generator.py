@@ -37,6 +37,24 @@ PRESETS: dict[str, dict] = {
     "missing_details": {"missing": ["payer", "taxes"]},
 }
 
+# What each preset shows, for the dashboard's New inquiry drawer.
+PRESET_INFO: dict[str, dict] = {
+    "straight_booking": {"title": "Straight booking",
+                         "shows": "Rooms free and the quote fits the budget: accepted, deposit paid on Airwallex, the "
+                                  "hotel's share paid out."},
+    "dates_short_haggle": {"title": "Dates unavailable, then a haggle",
+                           "shows": "Asks for dates too soon to sell; the seller offers others. The buyer counters below "
+                                    "the seller's floor, the floor holds, and the buyer's organizer signs off."},
+    "full_lifecycle": {"title": "Full lifecycle with a refund",
+                       "shows": "Attrition traded for a bigger deposit (manager approval), organizer sign-off, deposit "
+                                "paid, then fewer rooms: partial refund and the hotel's payout share reversed."},
+    "payer_abroad": {"title": "Payer abroad",
+                     "shows": "A company in Germany paying from EUR, then a smaller block and a refund."},
+    "missing_details": {"title": "Missing details",
+                        "shows": "The RFP leaves out who pays and whether the budget includes taxes: the seller asks, "
+                                 "the buyer answers from its brief."},
+}
+
 TRAITS: dict[str, tuple] = {
     "room_type": ("twin", "king"),
     # fits: rooms free on the dates. short_rooms: fewer rooms free than asked on some night (the seller quotes
@@ -215,7 +233,7 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
             "text": f"{_word(lost).capitalize()} colleague{'s' if lost != 1 else ''} can no longer attend. Please reduce "
                     f"our block by {_word(n)} {rt} room{'s' if n != 1 else ''} for all {_word(nights_n)} nights and "
                     "return any excess deposit under our agreement."}
-    return {"seed": seed, "traits": t, "from": sender, "subject": subject, "body": body, "domain": domain,
+    return {"seed": seed, "preset": preset, "traits": t, "from": sender, "subject": subject, "body": body, "domain": domain,
             "brief": brief,
             "payer": {"country": country, "currency": t["payer_currency"]} if t["payer_country"] else None}
 
@@ -226,7 +244,8 @@ def send(engine: Engine, gen: dict) -> dict:
     r = engine.ingest_email(gen["from"], gen["subject"], gen["body"])
     if gen.get("payer"):
         engine.update_payer(r["deal_id"], gen["payer"]["country"], gen["payer"]["currency"], actor="generator")
-    return {**r, "seed": gen["seed"], "traits": gen["traits"],
+    engine.mark_generated(r["deal_id"], gen.get("preset"), gen["seed"])
+    return {**r, "seed": gen["seed"], "preset": gen.get("preset"), "traits": gen["traits"],
             "rfp": {"from": gen["from"], "subject": gen["subject"], "body": gen["body"]}}
 
 
