@@ -49,7 +49,7 @@ OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
 # token instead, so a buyer can use the link without the hotel's access token. Presenter tools
 # (/api/buyer/<id>/suggest and /agent) still need the dashboard token.
-BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view|/organizer)?)$")
+BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view)?)$")
 WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
@@ -143,7 +143,7 @@ def inbox_path(d) -> str:
 
 def buyer_view(deal_id: str, token: str) -> dict:
     """What the buyer's mailbox shows: the buyer's own view of the deal (no floors, costs, margins or
-    hotel approvals), its organizer's pending sign-offs, the payment link and the brief's next move."""
+    hotel approvals), the payment link and the brief's next move."""
     import secrets as _s
     d = engine.deal(deal_id)
     if not _s.compare_digest(token or "", d["buyer_token"]):
@@ -152,11 +152,6 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["contact"] = (d.get("sender") or "").split("<")[0].strip() or d["company"]
     v["hotel"] = engine.hotel["name"]
     v["clock"] = engine.now()
-    v["organizer"] = [{"id": a["id"], "version": a["version"], "reasons": a.get("reasons") or [],
-                       "summary": a.get("summary", ""), "rules": a.get("rules") or [],
-                       "if_approved": a.get("if_approved", ""), "if_rejected": a.get("if_rejected", "")}
-                      for a in engine.s["approvals"].values()
-                      if a["deal_id"] == d["id"] and a["approver"] == "organizer" and a["status"] == "pending"]
     v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None
     v["suggestion"] = suggest(engine, d["id"])
     v["buyer_mode"] = runner.settings["buyer_mode"]
@@ -305,13 +300,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.onboard_hotel_account(actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/retry_payout"):
                 return self._send(200, engine.retry_payout(p.split("/")[3], actor="hotel staff"))
-            if p.startswith("/api/buyer/") and p.endswith("/organizer"):
-                did = p.split("/")[3]
-                buyer_view(did, b.get("token", ""))          # checks the buyer token
-                a = engine.s["approvals"].get(b.get("approval_id", ""))
-                if not a or a["deal_id"] != engine.deal(did)["id"] or a["approver"] != "organizer":
-                    return self._send(400, {"error": "no such organizer sign-off on this booking"})
-                return self._send(200, engine.decide_approval(a["id"], b.get("decision"), "organizer", b.get("note", "")))
             if p == "/api/seller/run":
                 threading.Thread(target=runner.run_once, args=("presenter asked the seller to run", True),
                                  daemon=True).start()

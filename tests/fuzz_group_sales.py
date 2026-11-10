@@ -41,13 +41,13 @@ from agentbank.groupsales import calc  # noqa: E402
 from agentbank.groupsales.buyer import suggest  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
-from agentbank.groupsales.policy import buyer_check, hotel_check  # noqa: E402
+from agentbank.groupsales.policy import hotel_check  # noqa: E402
 from agentbank.groupsales.provider import SimulatedProvider  # noqa: E402
 from agentbank.groupsales.seller import TOOLS, ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.groupsales.trace import TOOLS as TRACE_TOOLS  # noqa: E402
 
 STATUSES = {"new", "intake", "needs_info", "dates_proposed", "pending_approval", "approved_to_send", "revise", "offer_sent",
-            "acceptance_pending_organizer", "accepted", "awaiting_payment", "confirmed", "amendment_sent",
+            "accepted", "awaiting_payment", "confirmed", "amendment_sent",
             "amendment_review", "amendment_approved", "refund_due", "refund_awaiting_approval", "refund_pending",
             "refund_failed", "expired", "handoff", "declined", "lost", "payment_received_booking_exception"}
 SENT_STATES = {"sent", "accepted", "superseded_by_amendment"}
@@ -286,7 +286,7 @@ class Case:
         if not pend:
             return
         a = self.rng.choice(pend)
-        actor = a["approver"] if self.rng.random() > 0.1 else self.rng.choice(["seller", "buyer", "hotel_manager", "organizer"])
+        actor = a["approver"] if self.rng.random() > 0.1 else self.rng.choice(["seller", "buyer", "hotel_manager"])
         decision = "approve" if self.rng.random() < 0.8 else "reject"
         try:
             self.e.decide_approval(a["id"], decision, actor)
@@ -552,12 +552,6 @@ def check(e: Engine, provider: SimulatedProvider):
                     and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
                     for a in s["approvals"].values()):
                 _fail(f"{d['ref']} v{v['n']} was sent without the manager approval it needs: {chk['approvals']}")
-            if v["status"] in ("accepted", "superseded_by_amendment") and mandate:
-                if buyer_check(v["terms"], v["pricing"], mandate) and not any(
-                        a["deal_id"] == d["id"] and a["subject"] == "acceptance" and a["approver"] == "organizer"
-                        and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
-                        for a in s["approvals"].values()):
-                    _fail(f"{d['ref']} v{v['n']} accepted beyond the buyer's mandate without the organizer")
 
         # A booking needs a verified payment of the accepted deposit.
         b = d.get("booking")
@@ -601,9 +595,7 @@ def check(e: Engine, provider: SimulatedProvider):
             _fail(f"{d['ref']} buyer view shows the seller's case to the manager")
         if mandate:
             seller_raw = json.dumps(e.deal_view(d["id"], for_="seller"), default=str)
-            for secret in [gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit"] + [
-                    r for a in s["approvals"].values() if a["deal_id"] == d["id"] and a["approver"] == "organizer"
-                    for r in a["reasons"]]:
+            for secret in [gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit"]:
                 if secret in seller_raw and secret not in d["thread"][0]["text"]:
                     _fail(f"{d['ref']} seller view shows the buyer's mandate: {secret!r}")
 
@@ -645,7 +637,7 @@ def check(e: Engine, provider: SimulatedProvider):
     for x in s["activity"]:
         if x["kind"] in ("approval_approved", "approval_rejected"):
             a_actor = x["actor"]
-            if a_actor not in ("hotel_manager", "organizer"):
+            if a_actor != "hotel_manager":
                 _fail(f"approval decided by {a_actor}")
 
     # The AI Agent record is well formed.

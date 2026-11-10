@@ -69,10 +69,10 @@ def test_straight_booking_is_accepted_and_paid_without_approvals(eng, seed):
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
-def test_dates_short_haggle_offers_dates_then_holds_the_floor_and_needs_the_organizer(eng, seed):
+def test_dates_short_haggle_offers_dates_then_holds_the_floor(eng, seed):
     d, _ = new(eng, "dates_short_haggle", seed)
     path = drive(eng, d["id"])
-    assert path == ["buyer reply", "buyer counter", "buyer accept", "approve organizer acceptance", "paid"]
+    assert path == ["buyer reply", "buyer counter", "buyer accept", "paid"]
     assert any(m.get("date_options") for m in d["thread"])               # the seller offered other dates
     counter = next(m for m in d["thread"] if m.get("action") == "counter")
     floor = eng.rms["rates"][d["versions"][-1]["terms"]["room_type"]]["autonomous_floor"]
@@ -85,9 +85,8 @@ def test_dates_short_haggle_offers_dates_then_holds_the_floor_and_needs_the_orga
 def test_full_lifecycle_ends_in_a_partial_refund_with_the_payout_reversed(eng, seed):
     d, _ = new(eng, "full_lifecycle", seed)
     path = drive(eng, d["id"])
-    assert path[:5] == ["buyer counter", "approve hotel_manager offer", "buyer accept",
-                        "approve organizer acceptance", "paid"]
-    assert path[5:8] == ["jump", "buyer change_request", "buyer accept"]
+    assert path[:4] == ["buyer counter", "approve hotel_manager offer", "buyer accept", "paid"]
+    assert path[4:7] == ["jump", "buyer change_request", "buyer accept"]
     fin = eng.finance(d)
     assert d["status"] == "confirmed" and d["finance"]["refund_owed"] == 0
     assert fin["refunded"] > 0 and fin["net_received"] == fin["received"] - fin["refunded"]

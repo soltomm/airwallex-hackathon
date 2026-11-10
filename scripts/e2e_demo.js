@@ -121,17 +121,12 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await click('#deal [data-ap][data-d=approve]');                  // hotel manager, on the dashboard
     n = await settle('Northstar', ['offer_sent']);
 
-    // 4. Accept v2 in the mailbox: over Northstar's limits, so its organizer signs off there too.
+    // 4. Accept v2 in the mailbox; the seller opens checkout.
     await mb.waitForSelector('button:has-text("Accept v2")', { timeout: 10000 });
     await mclick(mb, 'button:has-text("Accept v2")');
-    n = await settle('Northstar', ['acceptance_pending_organizer']);
+    n = await settle('Northstar', ['awaiting_payment']);
     const accMsg = n.thread.filter(m => m.from === 'buyer').pop().text;
     check('the accept message states no limits', !/£3,000|30% limit|budget/.test(accMsg), accMsg);
-    check('the dashboard only says the buyer is signing off', /organizer is signing off/.test(await page.innerText('#deal .next'))
-          && (await page.$$('#deal [data-ap]')).length === 0);
-    await mb.waitForSelector('[data-org][data-d=approve]', { timeout: 10000 });
-    await mclick(mb, '[data-org][data-d=approve]');                  // organizer, in the mailbox
-    n = await settle('Northstar', ['awaiting_payment']);
 
     // 5. Pay from the mailbox on the (simulated) hosted page; returning confirms the booking.
     await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });

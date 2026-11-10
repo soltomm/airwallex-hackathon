@@ -58,7 +58,7 @@ through the seller's `check_payment`/`check_refund`, and when a hold expires.
 The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
 hotel manager. There is no button to run it. The buyer answers by email, in its own **mailbox** page
-outside the dashboard (`/inbox/<ref>`): open it from the deal's card. Replies, acceptances, the buyer's organizer sign-off and the payment link are all there.
+outside the dashboard (`/inbox/<ref>`): open it from the deal's card. Replies, acceptances and the payment link are all there.
 
 Inquiries are rows in the overview table; clicking one opens its deal page in a side drawer.
 Each deal page has a coloured **next step** card:
@@ -83,8 +83,7 @@ hand-written RFP and sets who answers for the buyer.
    **£9,600**, 30% deposit, 10% attrition. It arrives in the mailbox with the offer attached.
 3. In the mailbox, **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a
    **40% deposit (£3,840)** in return. On the dashboard, click **Approve** as the hotel manager.
-4. In the mailbox, **Accept v2.** The deposit is over Northstar's own limits, so its organizer signs off:
-   **Approve as organizer**, still in the mailbox. The dashboard only shows that the buyer is signing off.
+4. In the mailbox, **Accept v2.**
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
    When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
    shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
@@ -191,8 +190,9 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   an approval: it says what stops the seller (`why`) and what a person should do (`todo`).
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
-- **Buyer mandate.** Accepting above the budget or the deposit limits creates an organizer approval
-  bound to that version. Buyer actions need the deal's buyer token.
+- **Buyer actions** need the deal's buyer token. The buyer's mandate (budget, deposit limits) only
+  steers the buyer's own moves: the engine enforces the hotel's rules, not the buyer's, so accepting a
+  sent offer needs no approval from the buyer's side.
 - **Inventory.** available = capacity − held − booked, per night and room type, plus the Thames Room
   and breakfast covers (60 a day). The first sent offer creates a 24-hour hold. Negotiated versions
   reuse that hold and its expiry. A hold becomes a booking only after a verified payment, in one
@@ -273,7 +273,7 @@ approved refund.
 - cumulative attrition (including releasing nine room-nights, releases after the deadline and after
   the first installment);
 - privacy in both directions: the seller's tools and the shared thread never show the buyer's
-  mandate, deposit limits or organizer reasons (only that buyer-side authorization is pending), and
+  mandate or deposit limits, and
   the buyer view never shows floors, costs, margins, hotel checks, records, flags, unsent versions or
   manager approval summaries;
 - authority: stale approvals and wrong approvers, hard limits, a 20-29% deposit needing the manager
@@ -323,7 +323,6 @@ After every step it checks:
 
 - inventory adds up to the holds and bookings on file, and is never oversold;
 - every sent offer is within the hard limits and carries the manager approval it needs;
-- an acceptance beyond a buyer's mandate has the organizer's approval;
 - every booking has a verified payment and a ledger receipt;
 - there is one payment intent per checkout, and refunds never exceed receipts or the capture;
 - refunds above £500 are authorized, and at most one refund is unresolved at a time;
@@ -343,8 +342,6 @@ bugs, now fixed with regression tests:
 
 - a change request for more rooms than were booked crashed the seller, and blocked it for every deal;
 - the rules seller crashed if questions had gone out before the inquiry was read;
-- an organizer approving after the offer had lapsed left the approval marked approved in memory but
-  not on disk, with no acceptance recorded; it is now refused as stale before anything changes.
 
 Last full runs: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about 8 minutes),
 ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review. Then 5,000 of
@@ -366,8 +363,8 @@ An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_s
 | Preset | Path with the rules seller |
 |---|---|
 | `straight_booking` | quote, accept, deposit paid |
-| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, organizer sign-off, paid |
-| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), organizer sign-off, paid, fewer rooms, partial refund, hotel payout reversed |
+| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, paid |
+| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
 | `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
 

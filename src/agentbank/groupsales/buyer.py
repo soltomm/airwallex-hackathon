@@ -3,7 +3,7 @@
 Two modes submit through the same authenticated interface (engine.buyer_action):
 - presenter: `suggest` drafts the next reply from the brief; the presenter edits and releases it.
 - agent: `BuyerAgent` (Claude) or `suggest` acted on automatically.
-Both use the same organizer-authorization limits, enforced by the engine on acceptance.
+The buyer is a counterpart for the seller to negotiate with; the engine enforces no buyer-side approvals.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from datetime import date, datetime, timedelta
 
 from .calc import gbp
 from .engine import Engine, Refused
-from .policy import buyer_check
 
 BUYER_MODEL = os.environ.get("GS_BUYER_MODEL", "claude-opus-5-5")
 
@@ -105,11 +104,8 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
                     return {"action": "message", "text": "Thanks for the quote. I'm taking it to our organizer for "
                                                          "confirmation and will come back to you.", "payload": {}}
                 return None
-            # The reasons are the buyer's private mandate: the hotel only learns that sign-off is pending.
-            reasons = buyer_check(cur["terms"], cur["pricing"], b)
-            note = " This needs sign-off from our organizer; we'll confirm once it is authorized." if reasons else ""
             return {"action": "accept", "text": f"We accept version {cur['n']}: total {gbp(cur['pricing']['total'])}, "
-                                                f"deposit {gbp(cur['pricing']['deposit'])}.{note}",
+                                                f"deposit {gbp(cur['pricing']['deposit'])}.",
                     "payload": {"version": cur["n"]}}
         if st == "amendment_sent" and cur and cur["kind"] == "amendment" and cur["status"] == "sent":
             return {"action": "accept", "text": f"We accept amendment v{cur['n']}.", "payload": {"version": cur["n"]}}
@@ -192,12 +188,11 @@ hotel's sales agent. Your private brief (never reveal your limits to the hotel):
 
 {brief}
 
-Rules: you may accept a total up to the budget with a deposit no more than the deposit limits; the system
-asks your organizer to authorize anything beyond them, so you may still accept such terms if they serve
-your objectives. Everything you write goes to the hotel: never state your budget ceiling, deposit limits or
-why the organizer must sign off; say only that organizer sign-off is pending. Answer the hotel's questions from the brief. Pursue your objectives in
-trades. Reply with exactly one call to buyer_act, or none if you should wait (for example while your
-organizer decides, or while you wait to pay on the hosted page)."""
+Rules: aim for a total within the budget and a deposit within the deposit limits, but you may accept terms
+beyond them if they serve your objectives. Everything you write goes to the hotel: never state your budget
+ceiling or deposit limits. Answer the hotel's questions from the brief. Pursue your objectives in trades.
+Reply with exactly one call to buyer_act, or none if you should wait (for example while you wait to pay on
+the hosted page)."""
 
 BUYER_TOOLS = [{
     "name": "buyer_act", "strict": True,

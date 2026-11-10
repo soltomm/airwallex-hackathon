@@ -124,7 +124,7 @@ class RulesSeller:
         d = self.e.deal(deal_id)
         return (bool(d["thread"]) and d["thread"][-1]["from"] == "buyer" and not d.get("seller_paused")
                 and d["status"] in ("intake", "needs_info", "dates_proposed", "offer_sent",
-                                    "acceptance_pending_organizer", "expired"))
+                                    "expired"))
 
     def _holdable(self, d: dict, room_type: str, nights) -> int:
         """Rooms of this type the deal could hold on every one of these nights now, counting its own active hold."""
@@ -222,7 +222,7 @@ class RulesSeller:
                 return f"{ref}: still missing info"
             e.check_systems(deal_id)
             return self._quote(deal_id)
-        if st in ("offer_sent", "acceptance_pending_organizer") and d["unread"]:
+        if st == "offer_sent" and d["unread"]:
             m = _latest_buyer_msg(d)
             e.deal_view(deal_id, mark_read=True)
             if m and m.get("action") == "counter":
