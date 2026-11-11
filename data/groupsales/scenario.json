@@ -51,7 +51,18 @@
       "demand_by_night_pct": {"2027-03-10": 80, "2027-03-11": 80, "2027-03-12": 64},
       "resale_pct": 50
     },
-    "min_contribution_margin_pct": 40
+    "min_contribution_margin_pct": 40,
+    "negotiation": {
+      "_note": "How the seller weighs a counteroffer (negotiate.py). Packages are scored in pence: expected contribution, plus deposit_cover_pct of the deposit, minus the gap to the buyer's ask (rate gap on every room-night; missing free release at the rate times release_need_pct; extra deposit times buyer_cash_cost_pct), minus approval_cost per rule that needs the hotel manager; the buyer's side is weighted gap_weight_pct (a pound closer to the ask raises the chance of winning the group). The deposit only rises where the policy requires it. The rate never moves more than rate_split_pct of the way to the buyer's rate. Strategy only: the engine still enforces every limit.",
+      "rate_step": 500,
+      "rate_split_pct": 50,
+      "expected_release_pct": 50,
+      "deposit_cover_pct": 15,
+      "buyer_cash_cost_pct": 5,
+      "release_need_pct": 50,
+      "approval_cost": 5000,
+      "gap_weight_pct": 125
+    }
   },
   "policy": {
     "deposit": {"standard_pct": 30, "max_pct": 40, "min_pct_with_approval": 20, "required_pct_for_exceptions": 40},

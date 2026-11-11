@@ -21,7 +21,7 @@ from .calc import gbp
 from .bookable import window_text
 from .engine import Engine, Refused
 from .extract import PAYER, extract, stay_nights
-from . import understand
+from . import negotiate, understand
 from .trace import Traced
 
 SELLER_MODEL = os.environ.get("GS_SELLER_MODEL", "claude-opus-5-5")
@@ -97,6 +97,10 @@ def _latest_buyer_msg(d: dict) -> dict | None:
 
 
 # =============================================================================== rules seller
+def _last_sent_offer(d: dict) -> dict | None:
+    return next((v for v in reversed(d["versions"]) if v["kind"] == "offer" and v.get("sent_at")), None)
+
+
 def _margin_short(p: dict) -> list[str]:
     """The margin-floor refusals in a price_terms result (empty when the margin is fine)."""
     return [x for x in p["hotel_check"]["hard"] if "contribution margin" in x]
@@ -366,9 +370,7 @@ class RulesSeller:
                 return self._counter(deal_id, m.get("payload") or {})
             return f"{ref}: read buyer message"
         if st == "revise":
-            e.deal_view(deal_id, mark_read=True)
-            e.note(deal_id, "Manager rejected the exception; re-offering standard terms.")
-            return self._quote(deal_id, standard=True)
+            return self._revise(deal_id)
         if st == "approved_to_send":
             v = d["versions"][-1]
             e.send_offer(deal_id, v["n"])
@@ -619,61 +621,122 @@ class RulesSeller:
         r = e.propose_offer(deal_id, rate, dep, att, msg, explanation=explanation, unmet=unmet, rooms_per_night=rooms)
         return f"{d['ref']}: offer v{r['version']} {r['status']}"
 
-    def _counter(self, deal_id: str, ask: dict) -> str:
+    def _counter(self, deal_id: str, ask: dict, authority_only: bool = False) -> str:
+        """Answer a counteroffer with the package the negotiation planner scores best (negotiate.plan).
+
+        The planner prices every candidate with the engine's dry run, so margin, displacement, inventory and
+        authority come from the backend. A package that crosses a seller rule pauses for the hotel manager,
+        with the options weighed on the card. `authority_only` (after the manager declined an exception)
+        keeps to what the seller may agree alone."""
         e = self.e
         d = e.deal(deal_id)
-        cur = d["versions"][-1]
+        cur = _last_sent_offer(d) or d["versions"][-1]
         t = cur["terms"]
-        att = min(int(ask.get("attrition_pct") or t["attrition_pct"]), e.policy["attrition"]["max_pct_with_approval"])
-        dep = int(ask.get("deposit_pct") or t["deposit_pct"])
-        rate = t["rate"]
-        bands = e.rms["rates"][t["room_type"]]
-        if ask.get("rate"):
-            rate = max(int(ask["rate"]), bands["autonomous_floor"])
-        why = []
-        if att > e.policy["attrition"]["standard_pct"]:
-            dep = e.policy["deposit"]["required_pct_for_exceptions"]
-            why.append(f"{att}% attrition is above our standard, so it needs our manager's approval and a "
-                       f"{dep}% deposit; we keep the {gbp(rate)} room rate")
-        elif dep < e.policy["deposit"]["standard_pct"]:
-            dep = e.policy["deposit"]["standard_pct"]
-            why.append(f"our standard deposit is {dep}% for new accounts")
-        fit = self._fit(deal_id, cur, rate, dep, att)
+        rooms = min(t["rooms"].values())
+        fit = self._fit(deal_id, cur, t["rate"], t["deposit_pct"], t["attrition_pct"])
         if not fit:
             return self._cannot_requote(deal_id, "the offered package can no longer be held (rooms, meeting space "
                                                  "or breakfast capacity)", AVAILABILITY_CHANGED)
-        rooms, unmet, p = fit
-        withdrawn = False
-        if _margin_short(p) and (rate != t["rate"] or att > e.policy["attrition"]["standard_pct"]):
-            # Busy dates: displacement leaves no room for this concession. Keep the current rate and offer
-            # the standard release instead of asking for something the backend would refuse. The deposit goes
-            # back to what the buyer asked, within what the seller may agree alone: the 40% exception deposit
-            # only pays for the concession, so keeping it would leave the buyer worse off than before asking.
-            withdrawn = True
-            rate, att = t["rate"], e.policy["attrition"]["standard_pct"]
-            asked = int(ask.get("deposit_pct") or t["deposit_pct"])
-            dep = max(e.policy["deposit"]["standard_pct"], min(asked, e.policy["deposit"]["max_pct"]))
-            why = [f"demand on your dates is high, so the most we can release free is {att}%, at the {gbp(rate)} rate"]
-            if asked < dep:
-                why.append(f"our standard deposit is {dep}% for new accounts")
-            p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
-        pr = p["pricing"]
-        release = (f"{att}% attrition (up to {pr['attrition_allowance']} room-nights released without penalty until "
-                   f"{e.policy['attrition']['release_days_before_arrival']} days before arrival)")
-        head = (f"Thank you for asking. We can't extend the free release on your dates; our offer stays at {release} "
-                f"and a {dep}% deposit. " if withdrawn else
-                f"Thank you. We can offer {release} in exchange for a {dep}% deposit. ")
-        msg = (head + " ".join(w[0].upper() + w[1:] + "." for w in why) + " "
-               + self._offer_message(d, p, unmet, short=True))
-        just = (f"Attendance uncertain; buyer asked for {ask.get('attrition_pct')}% attrition and a "
-                f"{ask.get('deposit_pct')}% deposit. Rate held at {gbp(rate)}; {dep}% deposit covers the extra flexibility; "
-                f"margin {pr['margin_full_release']['margin_pct']}% even if the full allowance is released.")
+        rooms, unmet, _ = fit
+        pl = negotiate.plan(e, deal_id, t, ask, rooms, authority_only=authority_only)
+        c = pl["choice"]
+        if not c:
+            return self._cannot_requote(deal_id, "no package within the hotel's limits answers the buyer's counter",
+                                        WAITING_FOR_PERSON)
+        p = e.price_terms(deal_id, c["rate"], c["deposit_pct"], c["attrition_pct"], rooms_per_night=rooms,
+                          room_type=t["room_type"])
+        msg = self._counter_message(d, p, pl, unmet)
+        why = self._lever_reasons(pl, p)
         try:
-            r = e.propose_offer(deal_id, rate, dep, att, msg, explanation="; ".join(why), justification=just,
-                                unmet=unmet, rooms_per_night=rooms)
+            r = e.propose_offer(deal_id, c["rate"], c["deposit_pct"], c["attrition_pct"], msg,
+                                explanation="; ".join(why) or negotiate.describe(c),
+                                justification=negotiate.justification(pl), unmet=unmet, rooms_per_night=rooms,
+                                options=negotiate.options_for_manager(pl, cur["n"]))
         except Refused as err:
             return self._cannot_requote(deal_id, str(err), WAITING_FOR_PERSON)
+        e.note(deal_id, f"Counter: weighed {len(pl['options'])} packages within the hotel's limits; chose "
+                        f"{negotiate.describe(c)}" + (f" (needs the manager: {', '.join(c['rules'])})" if c["rules"] else "")
+                        + ".")
         return f"{d['ref']}: counter v{r['version']} {r['status']}"
+
+    def _lever_reasons(self, pl: dict, p: dict) -> list[str]:
+        """Why each part of the buyer's counter is met, met in part, or not, in words for the buyer."""
+        e, c, lv = self.e, pl["choice"], pl["levers"]
+        out = []
+        att, rate = c["attrition_pct"], c["rate"]
+        if "rate" in lv:
+            x = lv["rate"]
+            if x["how"] != "met" and x["why"] in ("margin", "absolute_min"):
+                out.append((f"demand on your dates is high, so {gbp(rate)} is the lowest room rate we can offer"
+                           if x["why"] == "margin" else
+                            f"{gbp(rate)} is the lowest room rate we can offer for these dates"))
+        if "attrition" in lv:
+            x = lv["attrition"]
+            if x["why"] == "margin":
+                out.append(f"demand on your dates is high, so the most we can release free is {att}%")
+            elif x["why"] == "policy_max":
+                out.append(f"{att}% is the most free release we can offer")
+        if "deposit" in lv:
+            x = lv["deposit"]
+            if x["why"] == "exchange":
+                more = [f"{att}% free release" if att > e.policy["attrition"]["standard_pct"] else None,
+                        f"a {gbp(rate)} rate" if rate < e.rms["rates"][p["terms"]["room_type"]]["autonomous_floor"] else None]
+                out.append(f"{_and([m for m in more if m])} goes beyond our standard terms, so our manager has "
+                           "approved it on that basis")
+            elif x["why"] == "standard":
+                out.append(f"our standard deposit is {c['deposit_pct']}% for new accounts")
+        return out
+
+    def _counter_message(self, d: dict, p: dict, pl: dict, unmet: list[str]) -> str:
+        e, c, base, lv = self.e, pl["choice"], pl["current"], pl["levers"]
+        pr = p["pricing"]
+        release = (f"{c['attrition_pct']}% attrition (up to {pr['attrition_allowance']} room-nights released without "
+                   f"penalty until {e.policy['attrition']['release_days_before_arrival']} days before arrival)")
+        gives = []
+        if c["rate"] < base["rate"]:
+            gives.append(f"a room rate of {gbp(c['rate'])} per room-night")
+        if c["attrition_pct"] > base["attrition_pct"]:
+            gives.append(release)
+        if c["deposit_pct"] < base["deposit_pct"]:
+            gives.append(f"a {c['deposit_pct']}% deposit")
+        if gives:
+            head = "Thank you. We can offer " + _and(gives)
+            if c["deposit_pct"] > base["deposit_pct"]:
+                head += f" in exchange for a {c['deposit_pct']}% deposit"
+            head += ". "
+        else:
+            asked = ("extend the free release" if "attrition" in lv else "lower the rate" if "rate" in lv
+                     else "change the terms")
+            head = (f"Thank you for asking. We can't {asked} on your dates; our offer stays at {gbp(c['rate'])} per "
+                    f"room-night, {release} and a {c['deposit_pct']}% deposit. ")
+        why = " ".join(w[0].upper() + w[1:] + "." for w in self._lever_reasons(pl, p))
+        return " ".join(x for x in (head.strip(), why, self._offer_message(d, p, unmet, short=True)) if x)
+
+    def _revise(self, deal_id: str) -> str:
+        """After the hotel manager decided against a version: send the manager's own terms when they approved
+        with changes; otherwise re-plan the buyer's counter within the seller's own authority."""
+        e = self.e
+        d = e.deal(deal_id)
+        e.deal_view(deal_id, mark_read=True)
+        mt = e.manager_terms(deal_id)
+        if mt:
+            p = e.price_terms(deal_id, mt["rate"], mt["deposit_pct"], mt["attrition_pct"],
+                              rooms_per_night=mt["rooms_per_night"], room_type=mt["room_type"])
+            pr = p["pricing"]
+            msg = (f"Thank you for your patience. We have reviewed your request and can offer {gbp(mt['rate'])} per "
+                   f"room-night with {mt['attrition_pct']}% attrition (up to {pr['attrition_allowance']} room-nights "
+                   f"released without penalty until {e.policy['attrition']['release_days_before_arrival']} days before "
+                   f"arrival) and a {mt['deposit_pct']}% deposit. " + self._offer_message(d, p, [], short=True))
+            r = e.propose_offer(deal_id, mt["rate"], mt["deposit_pct"], mt["attrition_pct"], msg,
+                                explanation="Terms set by the hotel manager", rooms_per_night=mt["rooms_per_night"],
+                                room_type=mt["room_type"])
+            return f"{d['ref']}: manager's terms v{r['version']} {r['status']}"
+        m = next((x for x in reversed(d["thread"]) if x["from"] == "buyer" and x.get("action") == "counter"), None)
+        if not _last_sent_offer(d):
+            e.note(deal_id, "Manager rejected the exception; re-offering standard terms.")
+            return self._quote(deal_id, standard=True)
+        e.note(deal_id, "Manager rejected the exception; re-offering the best terms the seller can agree alone.")
+        return self._counter(deal_id, (m or {}).get("payload") or {}, authority_only=True)
 
     def _fit(self, deal_id: str, cur: dict, rate: int, dep: int, att: int):
         """Price a re-quote of version `cur` on what can be held now: (rooms_per_night, unmet, price_terms) or None.
@@ -860,6 +923,12 @@ How to work:
   a term crosses one of the rules above (it names the rule on the manager's card). Anything within
   your authority goes straight to the buyer. When a version does need approval, give a concise
   justification; the engine pauses until the manager decides. After approval, send_offer.
+- When the buyer counters, call counter_options with their ask before you decide: it prices every package the
+  rules allow between your last offer and the ask and scores it in money. Prefer its best package unless the
+  thread gives you a concrete reason not to, and say that reason in log_reasoning.
+- If the manager approved with changes (read_deal shows an approval with status "amended" and its
+  amended_terms), propose_offer with exactly those terms, rooms per night and room type: the engine sends
+  them without asking again. If the manager rejected a version, offer the best terms you can agree alone.
 - escalate hands a deal to a person when you can't take it further within the rules. Say which rule
   or fact stops you (why_a_person) and what decision you need (what_a_person_should_do).
 - When the buyer accepts, open_checkout (the buyer pays on Airwallex's hosted page; you never see card
@@ -1007,6 +1076,11 @@ TOOLS = [
     _tool("price_terms", "Dry run: itemized price, deposit, margin and whether you may offer it.", {
         **_DEAL, "rate_gbp": {"type": "number"}, "deposit_pct": _I, "attrition_pct": _I,
         "rooms_per_night": {"type": ["integer", "null"]}, "room_type": _RT}),
+    _tool("counter_options", "When a buyer counters: every package between your last sent offer and their ask that the "
+          "hotel's rules allow, best first, scored in money (expected contribution, the gap to their ask, and a cost per "
+          "rule that needs the manager). Advisory: you choose. Proposing one of these attaches the comparison to the "
+          "manager's card.", {**_DEAL, "rate_gbp": {"type": ["number", "null"]}, "deposit_pct": {"type": ["integer", "null"]},
+                              "attrition_pct": {"type": ["integer", "null"]}}),
     _tool("propose_offer", "Create and (if within your authority) send a new offer version; otherwise requests manager approval.", {
         **_DEAL, "rate_gbp": {"type": "number"}, "deposit_pct": _I, "attrition_pct": _I,
         "rooms_per_night": {"type": ["integer", "null"]}, "room_type": _RT,
@@ -1041,6 +1115,7 @@ class ClaudeSeller:
         self.e = engine
         self.model = model
         self._client = client
+        self._plans: dict[str, tuple[dict, int]] = {}
 
     @property
     def client(self):
@@ -1099,10 +1174,37 @@ class ClaudeSeller:
                                      "demand_by_night_pct": {n["night"]: n["demand_pct"] for n in p["displacement"]["nights"]}},
                     "hard_violations": r["hotel_check"]["hard"], "needs_manager_approval": r["hotel_check"]["approvals"],
                     "fits_inventory": r["fits_inventory"]}
+        if name == "counter_options":
+            d = e.deal(did)
+            cur = _last_sent_offer(d)
+            if not cur:
+                raise Refused("no offer has been sent on this deal yet: quote first")
+            ask = {"rate": int(round(a["rate_gbp"] * 100)) if a.get("rate_gbp") else None,
+                   "deposit_pct": a.get("deposit_pct"), "attrition_pct": a.get("attrition_pct")}
+            pl = negotiate.plan(e, d["id"], cur["terms"], ask, min(cur["terms"]["rooms"].values()))
+            self._plans[d["id"]] = (pl, cur["n"])
+            row = lambda o: {"rate": gbp(o["rate"]), "deposit_pct": o["deposit_pct"], "attrition_pct": o["attrition_pct"],
+                             "total": gbp(o["total"]), "expected_contribution": gbp(o["contribution"]),
+                             "margin_full_release_pct": o["margin_release_pct"], "gap_to_buyer_ask": gbp(o["buyer_cost"]),
+                             "score": gbp(o["score"]), "needs_manager": o["rules"]}
+            return {"best_first": [row(o) for o in pl["options"][:6]],
+                    "buyer_exact_ask": {**row(pl["ask"]), "not_possible": pl["ask"]["hard"]},
+                    "per_term": pl["levers"], "case_for_best": negotiate.justification(pl) if pl["choice"] else None,
+                    "note": "Rates in the list never go below the planner's split point (half way to the buyer's rate)."}
         if name == "propose_offer":
-            return e.propose_offer(did, int(round(a["rate_gbp"] * 100)), a["deposit_pct"], a["attrition_pct"],
+            rate = int(round(a["rate_gbp"] * 100))
+            options = None
+            d = e.deal(did) if did else None
+            if d and d["id"] in self._plans:
+                pl, last_n = self._plans[d["id"]]
+                pick = next((o for o in pl["options"] if (o["rate"], o["deposit_pct"], o["attrition_pct"])
+                             == (rate, a["deposit_pct"], a["attrition_pct"])), None)
+                if pick:
+                    options = negotiate.options_for_manager({**pl, "choice": pick}, last_n)
+            return e.propose_offer(did, rate, a["deposit_pct"], a["attrition_pct"],
                                    a["message_to_buyer"], a.get("explanation", ""), a.get("unmet") or [],
-                                   a.get("rooms_per_night"), a.get("room_type"), a.get("justification_for_manager", ""))
+                                   a.get("rooms_per_night"), a.get("room_type"), a.get("justification_for_manager", ""),
+                                   options=options)
         if name == "send_offer":
             return e.send_offer(did, a["version"])
         if name == "open_checkout":

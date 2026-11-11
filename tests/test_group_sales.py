@@ -1758,6 +1758,31 @@ def test_rules_api(server):
     assert mod.engine.policy["quote_validity_hours"] == 24
 
 
+def test_approve_with_changes_api(server):
+    """The dashboard's "Approve with changes": the manager's terms reach the engine, which refuses hard-limit breaks."""
+    mod = server
+    assert _req(mod, "/api/reset", {})[0] == 200
+    e = mod.engine
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")                                       # counter: 20% attrition, 25% deposit
+    s.run()
+    n = deal_by(e, "Northstar")
+    a = next(x for x in e.s["approvals"].values() if x["deal_id"] == n["id"] and x["status"] == "pending")
+    assert a["options"][0]["label"] == "Seller's choice" and a["if_amended"]
+    st, _, body = _req(mod, f"/api/approvals/{a['id']}", {"decision": "amend", "actor": "hotel_manager",
+                                                          "changes": {"attrition_pct": 25}})
+    assert st == 400 and "hard limit" in body and a["status"] == "pending"
+    st, _, body = _req(mod, f"/api/approvals/{a['id']}", {"decision": "amend", "actor": "hotel_manager", "note": "15% only",
+                                                          "changes": {"attrition_pct": 15, "deposit_pct": 40}})
+    assert st == 200 and json.loads(body)["status"] == "amended"
+    s.run()
+    v = n["versions"][-1]
+    assert n["status"] == "offer_sent" and v["terms"]["attrition_pct"] == 15
+
+
 def test_workbench_assets_are_explicit_and_authenticated(server, monkeypatch):
     monkeypatch.setattr(server, "ACCESS", "asset-demo-token")
     headers = {"Cookie": "gs_k=asset-demo-token"}
@@ -2017,7 +2042,9 @@ def _lose_hold_to_northstar(e, s, d):
 def _counter_and_run(e, s, d):
     e.buyer_action(d["id"], d["buyer_token"], "counter", "Could you do a lower rate?", {"rate": 15000})
     s.run()
-    assert d["thread"][-1]["from"] == "seller", "the buyer's counter was left unanswered"
+    # Answered: a reply to the buyer, or (a below-floor rate) a version waiting for the hotel manager.
+    assert d["thread"][-1]["from"] == "seller" or d["status"] == "pending_approval", \
+        "the buyer's counter was left unanswered"
     assert not any("Engine refused" in a["text"] for a in e.s["activity"] if a.get("deal_id") == d["id"])
 
 

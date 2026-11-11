@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 
+from . import negotiate
 from .bookable import window_text
 from .calc import gbp
 
@@ -139,11 +140,24 @@ def describe(sc: dict, base: dict) -> dict:
         {"label": "Costs", "text": "Delivery costs from the RMS: " + ", ".join(
             f"{k.replace('_', ' ')} {gbp(v)}" for k, v in rms["delivery_costs"].items()) + ". Displacement (what a blocked room "
          "would have earned from other guests): " + _displacement_text(rms) + ". The margin rule uses both."},
+        {"label": "How the seller negotiates", "text": _negotiation_text(rms)},
         {"label": "What never changes", "text": "Nothing in a buyer's email can change these rules. The seller never "
          "tells buyers its floors, costs or margins. A refund that exists is checked, never created twice. Approvals "
          "bind to the exact version or amount the manager saw."},
     ]
     return {"editable": editable, "fixed": fixed, "changed": sum(e["changed"] for e in editable)}
+
+
+def _negotiation_text(rms: dict) -> str:
+    c = negotiate.config(rms)
+    return (f"On a counteroffer the seller prices every package between its last offer and the buyer's ask that these "
+            f"rules allow, and picks the best score in money: expected contribution (assuming {c['expected_release_pct']}% "
+            f"of the free release is used) plus {c['deposit_cover_pct']}% of the deposit as cancellation cover, minus "
+            f"what the buyer's ask is still worth to them (weighted {c['gap_weight_pct']}%: closing the gap helps win the "
+            f"group), minus {gbp(c['approval_cost'])} for each rule that needs you. It asks for a higher deposit only "
+            "where the rules require one. "
+            f"It moves at most {c['rate_split_pct']}% of the way to the buyer's rate, never leaves the buyer worse off "
+            "than the offer they answered, and shows you the options it weighed when it asks.")
 
 
 def _displacement_text(rms: dict) -> str:

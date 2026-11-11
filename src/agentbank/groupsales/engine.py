@@ -1020,7 +1020,9 @@ class Engine:
 
     def propose_offer(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int, message: str,
                       explanation: str = "", unmet: list[str] | None = None, rooms_per_night: int | None = None,
-                      room_type: str | None = None, justification: str = "", actor: str = "seller") -> dict:
+                      room_type: str | None = None, justification: str = "", actor: str = "seller",
+                      options: list[dict] | None = None) -> dict:
+        """`options` (hotel-only) are the packages the seller weighed; they go on the manager's card."""
         with self.lock:
             self._sweep()
             d = self.deal(deal_id)
@@ -1053,6 +1055,27 @@ class Engine:
                      f"Drafted v{n}: {terms['room_type']} {gbp(terms['rate'])}, {terms['attrition_pct']}% attrition, "
                      f"{terms['deposit_pct']}% deposit; total {gbp(pricing['total'])}, deposit {gbp(pricing['deposit'])}, "
                      f"margin {pricing['margin_all_rooms']['margin_pct']}% / {pricing['margin_full_release']['margin_pct']}%.")
+            pre = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"] and a["subject"] == "offer"
+                        and a["status"] == "amended" and not a.get("used") and a.get("amended_hash") == v["hash"]), None)
+            if pre:
+                pre["used"] = True
+            if check["approvals"] and pre:
+                # The hotel manager set these exact terms ("approve with changes"): bind an approval to this
+                # version and its hash, and send it. Any other terms would need a fresh decision.
+                appr = self._request_approval(
+                    d, "hotel_manager", "offer", f"{d['company']} v{n}: the hotel manager's own terms (changes to "
+                    f"v{pre['version']}): {'; '.join(check['approvals'])}. Total {gbp(pricing['total'])}.",
+                    check["approvals"], version=n, obj_hash=v["hash"], rules=check["rules"],
+                    extra={"preauthorized_by": pre["id"]},
+                    if_approved=f"v{n} goes to the buyer on the manager's terms.",
+                    if_rejected=f"v{n} is not sent.")
+                appr.update(status="approved", decided_at=self.now(), note=f"set by the hotel manager on {pre['id']}")
+                v["status"] = "approved"
+                self.log(d["id"], "system", "approval_preauthorized", f"v{n} matches the terms the hotel manager set "
+                         f"on v{pre['version']} ({pre['id']}): bound to that decision, not asked again.")
+                res = self._send_version(d, v, actor)
+                self._save()
+                return res
             if check["approvals"]:
                 v["status"] = "pending_approval"
                 d["status"] = "pending_approval"
@@ -1063,10 +1086,12 @@ class Engine:
                            + (f" Seller's case: {justification}" if justification else ""))
                 appr = self._request_approval(
                     d, "hotel_manager", "offer", summary, check["approvals"], version=n, obj_hash=v["hash"],
-                    rules=check["rules"],
+                    rules=check["rules"], extra={"options": options} if options else None,
                     if_approved=f"The seller can send v{n} to the buyer on these terms ({gbp(pricing['total'])}, "
                                 f"{terms['deposit_pct']}% deposit).",
-                    if_rejected=f"v{n} is not sent. The seller revises the offer to terms it can agree alone.")
+                    if_rejected=f"v{n} is not sent. The seller revises the offer to terms it can agree alone.",
+                    if_amended="You set the rate, deposit and free release. The engine checks them against the hard "
+                               "limits; the seller sends them without asking you again.")
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": appr["id"], "pricing": pricing,
                         "note": "Paused: hotel manager approval required before this version can be sent."}
@@ -1132,7 +1157,8 @@ class Engine:
 
     # ================================================================ approvals
     def _request_approval(self, d, approver: str, subject: str, summary: str, reasons: list[str], version=None,
-                          obj_hash=None, amount=None, extra=None, rules=None, if_approved="", if_rejected="") -> dict:
+                          obj_hash=None, amount=None, extra=None, rules=None, if_approved="", if_rejected="",
+                          if_amended="") -> dict:
         """`rules` names each limit crossed (policy.rule); `if_approved` / `if_rejected` say what each
         decision does, so the approver sees why the request exists and what their click changes.
 
@@ -1143,7 +1169,7 @@ class Engine:
         aid = self._id("ap")
         a = {"id": aid, "deal_id": d["id"], "ref": d["ref"], "approver": approver, "subject": subject,
              "summary": summary, "reasons": reasons, "rules": rules or [], "if_approved": if_approved,
-             "if_rejected": if_rejected, "version": version, "hash": obj_hash, "amount": amount,
+             "if_rejected": if_rejected, **({"if_amended": if_amended} if if_amended else {}), "version": version, "hash": obj_hash, "amount": amount,
              "status": "pending", "requested_at": self.now(), "decided_at": None, "note": None, **(extra or {})}
         self.s["approvals"][aid] = a
         self.log(d["id"], "system", "approval_requested", f"Hotel manager approval requested: {summary}")
@@ -1154,8 +1180,13 @@ class Engine:
                    and a["version"] == version and a["hash"] == obj_hash and a["status"] == "approved"
                    for a in self.s["approvals"].values())
 
-    def decide_approval(self, approval_id: str, decision: str, actor: str, note: str = "") -> dict:
-        """Only the named approver can decide; the decision binds to the exact version/amount on file."""
+    def decide_approval(self, approval_id: str, decision: str, actor: str, note: str = "",
+                        changes: dict | None = None) -> dict:
+        """Only the named approver can decide; the decision binds to the exact version/amount on file.
+
+        "amend" (offers only) is approve-with-changes: `changes` sets any of rate (pence), deposit_pct and
+        attrition_pct. The engine checks the changed terms against the hard limits and inventory now; the
+        seller then proposes exactly those terms and they go to the buyer without a second request."""
         with self.lock:
             self._sweep()
             a = self.s["approvals"].get(approval_id)
@@ -1165,8 +1196,10 @@ class Engine:
                 raise Refused(f"only the {a['approver'].replace('_', ' ')} can decide this")
             if a["status"] != "pending":
                 raise Refused(f"approval is already {a['status']}")
-            if decision not in ("approve", "reject"):
-                raise Refused("decision must be approve or reject")
+            if decision not in ("approve", "reject", "amend"):
+                raise Refused("decision must be approve, reject or amend")
+            if decision == "amend" and a["subject"] != "offer":
+                raise Refused("only an offer can be approved with changes")
             d = self.deal(a["deal_id"])
             # A request whose object changed since it was raised is stale, whatever the decision.
             if a["version"] is not None:
@@ -1176,41 +1209,89 @@ class Engine:
                     self.log(d["id"], "system", "approval_stale", f"Approval {a['id']} is stale: v{a['version']} changed.")
                     self._save()
                     raise Refused("this request is stale: the version it names has changed")
-            a["status"] = "approved" if decision == "approve" else "rejected"
-            a["decided_at"] = self.now()
-            a["note"] = note
-            self.log(d["id"], actor, "approval_" + a["status"], f"Hotel manager {a['status']} {a['subject']}"
-                     + (f" v{a['version']}" if a["version"] else "") + (f" {gbp(a['amount'])}" if a["amount"] else "")
-                     + (f": {note}" if note else ""))
-            if a["subject"] == "offer":
-                v = self._version(d, a["version"])
-                v["status"] = "approved" if decision == "approve" else "rejected"
-                d["status"] = "approved_to_send" if decision == "approve" else "revise"
-            elif a["subject"] == "reduction":
-                v = self._version(d, a["version"])
-                v["status"] = "approved" if decision == "approve" else "rejected"
-                if decision == "approve":
-                    d["status"] = "amendment_approved"
-                else:
-                    # Only a waiver needs review, so a rejection withdraws the waiver, not the change: the
-                    # seller can offer the same release with the full attrition charge.
-                    d["status"] = "confirmed"
-                    d["flags"].append(f"waiver on change v{a['version']} declined by manager: the attrition charge "
-                                      "stands; the change can be offered without it")
-            elif a["subject"] == "refund":
-                if decision == "reject":
-                    d["flags"].append(f"refund {gbp(a['amount'])} not authorized: amount remains owed to the buyer; "
-                                      "discrepancy escalated for manager review")
-                    d["handoff"] = {"at": self.now(), "reason": "refund authorization withheld while the buyer is owed "
-                                    f"{gbp(d['finance']['refund_owed'])}",
-                                    "why": "The buyer is owed this money under the change they accepted, and the "
-                                           "seller can't override your decision or leave it unpaid.",
-                                    "todo": f"Settle the {gbp(d['finance']['refund_owed'])} with the buyer, for "
-                                            "example by refunding it outside the seller or agreeing a credit."}
-            d["unread"] = True
-            self._save()
+            if decision == "amend":
+                res = self._amend_offer(d, a, changes or {}, actor, note)
+            else:
+                res = self._decide(d, a, decision, actor, note)
         self._wake("approval")
+        return res
+
+    def _decide(self, d: dict, a: dict, decision: str, actor: str, note: str) -> dict:
+        a["status"] = "approved" if decision == "approve" else "rejected"
+        a["decided_at"] = self.now()
+        a["note"] = note
+        self.log(d["id"], actor, "approval_" + a["status"], f"Hotel manager {a['status']} {a['subject']}"
+                 + (f" v{a['version']}" if a["version"] else "") + (f" {gbp(a['amount'])}" if a["amount"] else "")
+                 + (f": {note}" if note else ""))
+        if a["subject"] == "offer":
+            v = self._version(d, a["version"])
+            v["status"] = "approved" if decision == "approve" else "rejected"
+            d["status"] = "approved_to_send" if decision == "approve" else "revise"
+        elif a["subject"] == "reduction":
+            v = self._version(d, a["version"])
+            v["status"] = "approved" if decision == "approve" else "rejected"
+            if decision == "approve":
+                d["status"] = "amendment_approved"
+            else:
+                # Only a waiver needs review, so a rejection withdraws the waiver, not the change: the
+                # seller can offer the same release with the full attrition charge.
+                d["status"] = "confirmed"
+                d["flags"].append(f"waiver on change v{a['version']} declined by manager: the attrition charge "
+                                  "stands; the change can be offered without it")
+        elif a["subject"] == "refund":
+            if decision == "reject":
+                d["flags"].append(f"refund {gbp(a['amount'])} not authorized: amount remains owed to the buyer; "
+                                  "discrepancy escalated for manager review")
+                d["handoff"] = {"at": self.now(), "reason": "refund authorization withheld while the buyer is owed "
+                                f"{gbp(d['finance']['refund_owed'])}",
+                                "why": "The buyer is owed this money under the change they accepted, and the "
+                                       "seller can't override your decision or leave it unpaid.",
+                                "todo": f"Settle the {gbp(d['finance']['refund_owed'])} with the buyer, for "
+                                        "example by refunding it outside the seller or agreeing a credit."}
+        d["unread"] = True
+        self._save()
         return {"id": a["id"], "status": a["status"]}
+
+    def _amend_offer(self, d: dict, a: dict, changes: dict, actor: str, note: str) -> dict:
+        v = self._version(d, a["version"])
+        try:
+            levers = {k: int(changes[k]) if changes.get(k) not in (None, "") else int(v["terms"][k])
+                      for k in ("rate", "deposit_pct", "attrition_pct")}
+        except (TypeError, ValueError):
+            raise Refused("rate, deposit and attrition must be whole numbers")
+        if all(levers[k] == v["terms"][k] for k in levers):
+            raise Refused("these are the terms already on the request: use Approve")
+        t = v["terms"]
+        terms = self.build_terms(d, levers["rate"], levers["deposit_pct"], levers["attrition_pct"],
+                                 rooms_per_night=min(t["rooms"].values()), room_type=t["room_type"])
+        pricing = calc.price(terms, self.hotel, self.rms)
+        check = hotel_check(terms, pricing, self.scenario)
+        if not check["ok"]:
+            raise Refused("those terms break a hard limit nobody can approve: " + "; ".join(check["hard"]))
+        if not self._can_hold(terms, d):
+            raise Refused("those terms can't be held (rooms, meeting space or breakfast)")
+        a.update(status="amended", decided_at=self.now(), note=note,
+                 amended_terms={**levers, "rooms_per_night": min(t["rooms"].values()), "room_type": t["room_type"]},
+                 amended_hash=_hash({"kind": "offer", "terms": terms}))
+        v["status"] = "rejected"
+        d["status"] = "revise"
+        d["unread"] = True
+        self.log(d["id"], actor, "approval_amended",
+                 f"Hotel manager approved v{a['version']} with changes: {gbp(levers['rate'])}, "
+                 f"{levers['attrition_pct']}% attrition, {levers['deposit_pct']}% deposit; total {gbp(pricing['total'])}, "
+                 f"margin {pricing['margin_full_release']['margin_pct']}% with the full release used"
+                 + (f": {note}" if note else ""))
+        self._save()
+        return {"id": a["id"], "status": "amended", "terms": a["amended_terms"], "total": pricing["total"],
+                "deposit": pricing["deposit"], "needs_approval": check["approvals"]}
+
+    def manager_terms(self, deal_id: str) -> dict | None:
+        """Terms the hotel manager set on this deal ("approve with changes") that no version has used yet."""
+        with self.lock:
+            d = self.deal(deal_id)
+            a = next((a for a in reversed(list(self.s["approvals"].values())) if a["deal_id"] == d["id"]
+                      and a["status"] == "amended" and not a.get("used")), None)
+            return copy.deepcopy(a["amended_terms"]) if a else None
 
     # ================================================================ buyer interface
     def buyer_action(self, deal_id: str, token: str, action: str, text: str = "", payload: dict | None = None,

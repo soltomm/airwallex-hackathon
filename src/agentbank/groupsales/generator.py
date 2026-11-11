@@ -26,7 +26,8 @@ PRESETS: dict[str, dict] = {
     # Rooms free, the quote fits the budget: accept and pay.
     "straight_booking": {"availability": "fits", "price": "comfortable"},
     # Asks for dates too soon to sell to a group; the seller offers other dates and the buyer takes one; the
-    # buyer haggles below the seller's floor, the floor holds, and the buyer takes it.
+    # buyer haggles below the seller's floor. The seller meets it part of the way: below its floor only when the
+    # gain is worth the hotel manager's time (then with the exception deposit and approval), else at the floor.
     "dates_short_haggle": {"availability": "too_soon", "price": "below_floor"},
     # The full money story: attrition traded for a bigger deposit (manager approval), payment, then fewer
     # rooms and a partial refund.
@@ -44,7 +45,8 @@ PRESET_INFO: dict[str, dict] = {
                                   "hotel's share paid out."},
     "dates_short_haggle": {"title": "Dates unavailable, then a haggle",
                            "shows": "Asks for dates too soon to sell; the seller offers others. The buyer counters below "
-                                    "the seller's floor, the floor holds, and the buyer accepts."},
+                                    "the seller's floor; the seller meets it part of the way (below its floor only "
+                                    "with a 40% deposit and manager approval), and the buyer accepts."},
     "full_lifecycle": {"title": "Full lifecycle with a refund",
                        "shows": "Attrition traded for a bigger deposit (manager approval), deposit "
                                 "paid, then fewer rooms: partial refund and the hotel's payout share reversed."},

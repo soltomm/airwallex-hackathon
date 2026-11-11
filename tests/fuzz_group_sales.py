@@ -287,9 +287,15 @@ class Case:
             return
         a = self.rng.choice(pend)
         actor = a["approver"] if self.rng.random() > 0.1 else self.rng.choice(["seller", "buyer", "hotel_manager"])
-        decision = "approve" if self.rng.random() < 0.8 else "reject"
+        roll = self.rng.random()
+        decision = "approve" if roll < 0.65 else "amend" if roll < 0.85 else "reject"
+        changes = None
+        if decision == "amend":     # random terms, often outside the limits: the engine must refuse those
+            changes = {"rate": self.rng.choice([17000, 19500, 20500, 21000, 22000]),
+                       "deposit_pct": self.rng.choice([20, 30, 40, 50]),
+                       "attrition_pct": self.rng.choice([5, 10, 15, 20, 25])}
         try:
-            self.e.decide_approval(a["id"], decision, actor)
+            self.e.decide_approval(a["id"], decision, actor, changes=changes)
             self.log(f"approval {a['id']} {a['subject']} {decision} by {actor}")
         except Refused as err:
             self.stats["refused:approval"] += 1
@@ -635,7 +641,7 @@ def check(e: Engine, provider: SimulatedProvider):
 
     # Approvals are decided only by the named approver.
     for x in s["activity"]:
-        if x["kind"] in ("approval_approved", "approval_rejected"):
+        if x["kind"] in ("approval_approved", "approval_rejected", "approval_amended"):
             a_actor = x["actor"]
             if a_actor != "hotel_manager":
                 _fail(f"approval decided by {a_actor}")

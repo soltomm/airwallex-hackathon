@@ -355,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if p.startswith("/api/approvals/"):
                 return self._send(200, engine.decide_approval(p.split("/")[3], b.get("decision"), b.get("actor"),
-                                                              b.get("note", "")))
+                                                              b.get("note", ""), b.get("changes")))
             if p.startswith("/api/buyer/") and p.endswith("/agent"):
                 did = p.split("/")[3]
                 if HAS_CLAUDE:

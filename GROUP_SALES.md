@@ -105,7 +105,11 @@ are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 Mar
 reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
 back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
-payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed). **＋ New inquiry → Buyer replies →
+payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed). At step 3, **Approve with changes**
+instead of Approve: set 15% free release (keep the 40% deposit) and **Send to seller**. Try 25% first: the
+engine refuses it with the reason, and the request stays open. The seller sends v3 on your terms without
+asking again. Then accepting and paying go as in steps 4-5, at the same £9,600 / £3,840. Or **Reject**: the
+seller re-offers the best terms it can agree alone (10% release, 30% deposit). **＋ New inquiry → Buyer replies →
 Automatically (buyer agent)**, to let the buyer side answer on its own.
 
 ### Seller rules
@@ -118,7 +122,33 @@ above the target is refused with the reason) and records the change in Activity.
 offers and changes made after saving; versions already made keep their terms. They are stored apart
 from the scenario, so they stay after a reset, and **Restore defaults** undoes them. The Claude seller's
 prompt is built from the same values, so it never quotes old limits. The fixed rules (services, prices,
-payment schedule, cancellation, capacity, costs) are listed underneath.
+payment schedule, cancellation, capacity, costs, and how the seller negotiates) are listed underneath.
+
+### How the seller negotiates
+
+A counteroffer is answered by a search, not by a rule per kind of request (`negotiate.py`). The seller
+builds every package between its last offer and the buyer's ask: rates in £5 steps, the attrition values
+the policy allows, and deposits between the offer and the ask (exception terms take the 40% the policy
+requires). It prices each package with the engine's own dry run, so margin, displacement, inventory and
+authority come from the backend, and it drops any package that breaks a hard limit or would leave the
+buyer worse off than the offer they answered. What's left is scored in pounds: expected contribution
+(half the free release assumed used) plus 15% of the deposit as cancellation cover, minus 1.25× what the
+buyer's ask is still worth to them, minus £50 for each rule that needs the manager. On the rate the seller
+moves at most half way to the buyer's figure. The weights are `rms.negotiation` in the scenario.
+
+So the seller concedes where it is cheap for the hotel and valuable for the buyer. Extra free release on
+quiet dates goes for the 40% deposit; on busy dates the displacement makes it too costly and the
+standard release stays. It goes below its own rate floor when the gain is worth the manager's time:
+on a 40 room-night group £5 below the floor is, on an 8 room-night group it isn't. When a package needs
+the manager, the card shows **what the seller weighed**: its choice, the last offer, the best it could
+agree alone and the buyer's exact ask, each with total, expected contribution (and margin), the gap to
+the ask and who may agree it. The Claude seller gets the same search as the `counter_options` tool.
+
+The manager can **Approve**, **Reject** (the seller re-plans within its own authority), or **Approve
+with changes**: they set the rate, free release and deposit. The engine checks those terms against the
+hard limits and inventory straight away and refuses anything outside them. It then pre-authorizes that
+exact package by its terms hash: when the seller proposes those terms, the version is bound to the
+manager's decision and sent without a second request. Any other terms need a fresh approval.
 
 ### Hotel payouts (Airwallex Payments for Platforms)
 
@@ -190,6 +220,7 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   an approval: it says what stops the seller (`why`) and what a person should do (`todo`).
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
+  Terms the manager sets with "approve with changes" authorize only the version whose hash matches them.
 - **Buyer actions** need the deal's buyer token. The engine enforces the hotel's rules only: buyer briefs
   carry no budget or deposit limits, and accepting a sent offer needs no approval from the buyer's side.
 - **Inventory.** available = capacity − held − booked, per night and room type, plus the Thames Room

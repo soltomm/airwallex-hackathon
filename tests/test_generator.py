@@ -69,16 +69,41 @@ def test_straight_booking_is_accepted_and_paid_without_approvals(eng, seed):
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
-def test_dates_short_haggle_offers_dates_then_holds_the_floor(eng, seed):
+def test_dates_short_haggle_offers_dates_then_meets_the_buyer_part_way(eng, seed):
+    """Below-floor haggles: the seller moves at most half way to the buyer's rate. It goes below its own floor
+    only when that is worth the manager's time, and then with the exception deposit and the manager's approval."""
     d, _ = new(eng, "dates_short_haggle", seed)
     path = drive(eng, d["id"])
-    assert path == ["buyer reply", "buyer counter", "buyer accept", "paid"]
     assert any(m.get("date_options") for m in d["thread"])               # the seller offered other dates
     counter = next(m for m in d["thread"] if m.get("action") == "counter")
-    floor = eng.rms["rates"][d["versions"][-1]["terms"]["room_type"]]["autonomous_floor"]
-    assert counter["payload"]["rate"] < floor                            # asked below the seller's floor
-    assert d["versions"][-1]["terms"]["rate"] == floor                   # the rule held, in code
+    v1, v = d["versions"][0], d["versions"][-1]
+    bands = eng.rms["rates"][v["terms"]["room_type"]]
+    asked = counter["payload"]["rate"]
+    assert asked < bands["autonomous_floor"]                             # asked below the seller's floor
+    assert v["terms"]["rate"] >= (v1["terms"]["rate"] + asked) // 2      # at most half way
+    assert bands["absolute_min"] <= v["terms"]["rate"] <= bands["autonomous_floor"]
+    if v["terms"]["rate"] < bands["autonomous_floor"]:
+        assert path == ["buyer reply", "buyer counter", "approve hotel_manager offer", "buyer accept", "paid"]
+        assert v["terms"]["deposit_pct"] == eng.policy["deposit"]["required_pct_for_exceptions"]
+    else:
+        assert path == ["buyer reply", "buyer counter", "buyer accept", "paid"]
     assert d["status"] == "confirmed"
+
+
+def test_a_below_floor_rate_goes_to_the_manager_with_the_options_weighed(eng):
+    """Seed 1 is a 40 room-night group: £5 below the floor is worth asking for. The manager's card lists the
+    seller's choice, the last offer, the best it could agree alone and the buyer's exact ask, in money."""
+    d, _ = new(eng, "dates_short_haggle", 1)
+    drive(eng, d["id"])
+    v = d["versions"][-1]
+    assert (v["terms"]["rate"], v["terms"]["deposit_pct"]) == (20500, 40)
+    a = next(a for a in eng.s["approvals"].values() if a["deal_id"] == d["id"])
+    assert [r["rule"] for r in a["rules"]] == ["Twin rate"]
+    labels = [o["label"] for o in a["options"]]
+    assert labels[0] == "Seller's choice" and "Buyer's ask" in labels and labels[1].startswith("Our last offer")
+    ask = next(o for o in a["options"] if o["label"] == "Buyer's ask")
+    assert ask["not_possible"]                                           # £200 at 30% breaks the deposit rule
+    assert "expected contribution" in a["summary"] and "scores" in a["summary"]
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

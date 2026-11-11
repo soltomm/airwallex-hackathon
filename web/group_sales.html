@@ -184,6 +184,10 @@ table.why { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size
 table.why th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
 table.why td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 dl.outcomes { margin-top: 8px; }
+table.why tr.chosen td { font-weight: 600; }
+.amend { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunk); }
+.amend label { display: inline-flex; gap: 6px; align-items: center; }
+.amend input[type=number] { width: 76px; }
 </style>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/assets/openflow.css">
@@ -237,7 +241,7 @@ const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) 
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
 const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
-let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false, agentOpen = new Set();
+let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false, agentOpen = new Set(), amendOpen = null;
 
 function toast(t) { document.querySelectorAll('.toast').forEach(x => x.remove()); const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
@@ -267,8 +271,31 @@ function whyCard(a, alone = 'Seller alone') {
     ? `<div class="small muted" style="margin-top:6px">Why this needs you: ${rules.length > 1 ? 'these requests go' : 'this request goes'} beyond what the ${alone.split(' ')[0].toLowerCase()} can agree alone.</div>
        <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>This request</th></tr>${rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`
     : `<p>${esc(sentences(a.reasons))}</p>`;
-  if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}</dl>`;
+  if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}${a.if_amended ? `<dt>If you change it</dt><dd>${esc(a.if_amended)}</dd>` : ''}</dl>`;
   return h;
+}
+// The packages the seller's planner weighed before choosing (hotel-only): terms, money, and who may agree each.
+function optionsTable(a) {
+  const opts = a.options || [];
+  if (!opts.length) return '';
+  const row = o => `<tr${o.label === "Seller's choice" ? ' class="chosen"' : ''}><td>${esc(o.label)}</td><td style="white-space:nowrap">${gbp(o.rate)} · ${o.attrition_pct}% · ${o.deposit_pct}%</td><td>${gbp(o.total)}</td>`
+    + `<td>${o.not_possible.length ? '–' : `${gbp(o.contribution)} <span class="muted">(${o.margin_release_pct}%)</span>`}</td><td>${gbp(o.buyer_cost)}</td>`
+    + `<td>${o.not_possible.length ? 'Not possible: ' + esc(sentences(o.not_possible)) : o.needs.length ? 'You: ' + esc(o.needs.join(', ')) : 'Seller alone'}</td></tr>`;
+  return `<div class="small muted" style="margin-top:8px">What the seller weighed. Expected contribution counts displacement and half the free release being used; the gap is what the buyer's ask is still worth to them.</div>
+    <div style="overflow-x:auto"><table class="why"><tr><th>Package</th><th>Rate · release · deposit</th><th>Total</th><th>Expected contribution</th><th>Gap to buyer's ask</th><th>Who can agree</th></tr>${opts.map(row).join('')}</table></div>`;
+}
+// Approve with changes: the manager sets the exact terms; the engine checks them before the seller sends them.
+function amendForm(a, d) {
+  const v = d.versions.find(x => x.n === a.version);
+  if (!v) return '';
+  const t = v.terms;
+  return `<div class="amend"><div class="small" style="margin-bottom:6px"><b>Your terms for v${a.version}</b></div>
+    <div class="row"><label class="small">Rate £ <input type="number" id="amRate" min="0" step="5" value="${t.rate / 100}"></label>
+    <label class="small">Free release % <input type="number" id="amAtt" min="0" max="100" step="1" value="${t.attrition_pct}"></label>
+    <label class="small">Deposit % <input type="number" id="amDep" min="1" max="100" step="1" value="${t.deposit_pct}"></label></div>
+    <div class="row" style="margin-top:6px"><input type="text" id="amNote" placeholder="Note for the record (optional)" style="flex:1;min-width:160px">
+    <button class="btn-p" data-amend="${a.id}" data-who="${a.approver}">Send to seller</button><button class="btn-ghost" data-amclose="1">Cancel</button></div>
+    <p class="small muted" style="margin:6px 0 0">The engine checks your terms against the hard limits and inventory first. The seller then writes to the buyer and sends them without asking you again.</p></div>`;
 }
 const handoffWhy = ho => (ho.why || ho.todo) ? `<dl class="kv small outcomes">${ho.why ? `<dt>Why a person</dt><dd>${esc(ho.why)}</dd>` : ''}${ho.todo ? `<dt>What to do</dt><dd>${esc(ho.todo)}</dd>` : ''}</dl>` : '';
 const sentences = list => (list || []).map(x => cap(x).replace(/[.;]+$/, '')).filter(Boolean).map(x => x + '.').join(' ');
@@ -358,8 +385,9 @@ function nextCard(d) {
     const a = n.ap;
     const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
     const [yes, no] = a.subject === 'reduction' && a.amount ? ['Approve waiver', 'Keep the charge'] : ['Approve', 'Reject'];
-    h += `<h3>${what}</h3>${whyCard(a)}<details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
-      <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">${yes}</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">${no}</button></div>`;
+    h += `<h3>${what}</h3>${whyCard(a)}${optionsTable(a)}<details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
+      <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">${yes}</button>${a.subject === 'offer' ? `<button data-amopen="${a.id}">Approve with changes</button>` : ''}<button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">${no}</button></div>`
+      + (a.subject === 'offer' && amendOpen === a.id ? amendForm(a, d) : '');
   } else if (n.paused) {
     h += `<h3>Stopped: ${esc(n.paused.what)} failed at the payment provider</h3><p class="small" style="overflow-wrap:anywhere">${esc(tidy(n.paused.error).slice(0, 300))}</p>
       <p class="small">The seller doesn't retry this on its own, so a provider problem can't pile up failed attempts. Fix the cause (for example the API key or its IP whitelist), then retry.</p>
@@ -503,6 +531,9 @@ function wire(d) {
   document.querySelectorAll('details.ag').forEach(x => x.ontoggle = () => { x.open ? agentOpen.add(x.dataset.k) : agentOpen.delete(x.dataset.k); });
   document.querySelectorAll('.msg.old .b').forEach(b => b.onclick = () => b.parentElement.classList.toggle('open'));
   document.querySelectorAll('#deal [data-ap]').forEach(b => b.onclick = () => decide(b));
+  document.querySelectorAll('#deal [data-amopen]').forEach(b => b.onclick = () => { amendOpen = b.dataset.amopen; renderDeal(d); });
+  document.querySelectorAll('#deal [data-amclose]').forEach(b => b.onclick = () => { amendOpen = null; renderDeal(d); });
+  document.querySelectorAll('#deal [data-amend]').forEach(b => b.onclick = () => amend(b));
   document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     const a = b.dataset.act;
@@ -522,6 +553,13 @@ async function decide(b) {
   try { await api(`/api/approvals/${b.dataset.ap}`, {decision: b.dataset.d, actor: b.dataset.who, note: ''}); toast(b.dataset.d === 'approve' ? 'Approved' : 'Rejected'); }
   catch (e) {} finally { lastJSON = ''; load(); }
 }
+async function amend(b) {
+  b.disabled = true;
+  const changes = {rate: Math.round(parseFloat($('amRate').value) * 100), attrition_pct: parseInt($('amAtt').value, 10),
+                   deposit_pct: parseInt($('amDep').value, 10)};
+  try { await api(`/api/approvals/${b.dataset.amend}`, {decision: 'amend', actor: b.dataset.who, note: $('amNote').value || '', changes}); amendOpen = null; toast('Sent to the seller with your terms'); }
+  catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
+}
 // ---- activity tab: what happened, in plain words, newest first ---------------------------------
 const EVENT = {
   intake: 'Inquiry received', email: 'Email received', duplicate: 'Duplicate email ignored', requirements: 'Requirements recorded',
@@ -529,7 +567,7 @@ const EVENT = {
   handed_back: 'Handed back to the seller', closed: 'Inquiry closed', reasoning: 'Seller note',
   offer_drafted: 'Offer drafted', offer_sent: 'Offer sent', hold: 'Rooms held', hold_released: 'Hold released', hold_expiry: 'Hold expired, payment unclear',
   expired: 'Offer expired', lapsed: 'Buyer told the offer lapsed', approval_requested: 'Approval requested', approval_approved: 'Approved',
-  approval_rejected: 'Rejected', approval_stale: 'Approval out of date', buyer_reply: 'Buyer answered', buyer_counter: 'Buyer countered',
+  approval_rejected: 'Rejected', approval_amended: 'Approved with changes', approval_preauthorized: "Sent on the manager's terms", approval_stale: 'Approval out of date', buyer_reply: 'Buyer answered', buyer_counter: 'Buyer countered',
   buyer_accept: 'Buyer accepted', buyer_message: 'Buyer message', buyer_change_request: 'Buyer asked for a change', buyer_decline: 'Buyer declined',
   accepted: 'Agreement accepted', checkout: 'Payment page opened', confirmed: 'Booking confirmed', booking_exception: 'Paid, but booking failed',
   payment_mismatch: 'Payment mismatch', recovered: 'Recovered from provider records', amendment_drafted: 'Change drafted', amendment_sent: 'Change sent',
