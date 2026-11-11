@@ -1,5 +1,8 @@
 # Harbour House group sales agent
 
+Internal pricing decisions and the revenue-manager demo are documented in
+[Revenue pricing review](docs/REVENUE_REVIEW.md).
+
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are

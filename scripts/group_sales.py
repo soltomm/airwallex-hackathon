@@ -225,13 +225,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
-            assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
+            assets = {"/assets/revenue.js": ("revenue.js", "text/javascript"),
+                      "/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                return self._send(200, engine.pricing_review(p.split('/')[3]))
             if p == "/api/state":
                 return self._send(200, state())
             if p == '/api/vendor_directory':
@@ -305,6 +308,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.update_payer(p.split("/")[3], b.get('country_code'), b.get('currency')))
             if p.startswith("/api/deals/") and p.endswith("/fx_simulate"):
                 return self._send(200, engine.simulate_fx_receipt(p.split("/")[3]))
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                did=p.split('/')[3]
+                if b.get('action') == 'request':
+                    return self._send(200, engine.request_pricing_review(did,b.get('reason') or 'Sales requested a revenue pricing decision.',b.get('requested_rate'),actor='hotel staff'))
+                return self._send(200, engine.pricing_review_action(did,b.get('action'),b.get('payload') or {},actor='hotel_manager'))
             if p.startswith("/api/deals/") and p.endswith("/hand_back"):
                 return self._send(200, engine.hand_back(p.split("/")[3], b.get("instruction", ""), actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/close"):

@@ -595,12 +595,8 @@ class RulesSeller:
             unmet.append(f"{n_rooms} {t['room_type']} rooms sleep up to {n_rooms * cap} of your {guests} guests")
         short = _margin_short(p)
         if short:
-            e.escalate(deal_id, "even the target rate is below the margin floor on these dates (" + "; ".join(short)
-                       + "): a revenue manager should decide whether to quote above target or decline",
-                       why="The margin floor is a hard limit nobody can approve, and quoting above the buyer's target "
-                           "is a commercial call, not the seller's.",
-                       todo="Quote above the target, change the dates, or decline.")
-            return f"{d['ref']}: handed off (margin on these dates)"
+            e.request_pricing_review(deal_id, 'Target pricing breaches the hard margin floor: ' + '; '.join(short))
+            return f"{d['ref']}: awaiting revenue pricing review (hard limit; choose a higher price or alternative scope)"
         pr = p["pricing"]
         target = req.get("target_per_room_night")
         if _gbp_budget(req) and pr["total"] > _gbp_budget(req):
@@ -628,7 +624,10 @@ class RulesSeller:
         rate = t["rate"]
         bands = e.rms["rates"][t["room_type"]]
         if ask.get("rate"):
-            rate = max(int(ask["rate"]), bands["autonomous_floor"])
+            if bands['absolute_min'] <= int(ask['rate']) < bands['autonomous_floor']:
+                e.request_pricing_review(deal_id, 'Buyer requested a rate below the agent’s negotiating authority.', requested_rate=int(ask['rate']))
+                return f"{d['ref']}: awaiting revenue pricing review"
+            rate = max(int(ask['rate']),bands['autonomous_floor'])
         why = []
         if att > e.policy["attrition"]["standard_pct"]:
             dep = e.policy["deposit"]["required_pct_for_exceptions"]
@@ -845,6 +844,7 @@ How to work:
 - Services the hotel does not offer (anything beyond twin/king rooms, breakfast and the Thames Room):
   escalate to a person with a clear reason. If hotel staff later hand the deal back telling you to
   quote without that service, record_requirements with unsupported set to [] and quote the rest.
+- For pricing deadlocks, use request_pricing_review instead of a generic escalation. Revenue staff must decide; do not call this to override hard price or margin limits.
 - If read_deal shows a staff_instruction, hotel staff handed the deal back to you: act on it with your
   tools, within the hotel's rules, and reply to the buyer.
 - Price with price_terms before you commit. Then propose_offer with an itemized, plain message to the
@@ -855,8 +855,8 @@ How to work:
   change them, and these are the current values):
 {RULES}
 - Negotiate in trades, not concessions: e.g. more attrition in exchange for a higher deposit. Keep the
-  rate where you can. You never ask the manager for approval yourself: the engine does, and only when
-  a term crosses one of the rules above (it names the rule on the manager's card). Anything within
+  rate where you can. Normal offer exceptions are requested by propose_offer when a term crosses
+  a rule above. Pricing deadlocks use request_pricing_review and wait for revenue staff. Anything within
   your authority goes straight to the buyer. When a version does need approval, give a concise
   justification; the engine pauses until the manager decides. After approval, send_offer.
 - escalate hands a deal to a person when you can't take it further within the rules. Say which rule
@@ -968,6 +968,7 @@ TOOLS = [
     _tool("refund_excess", "Refund what the buyer is owed after an accepted reduction (asks the hotel manager above the seller's refund limit).", {
         **_DEAL, "justification": _S}),
     _tool("check_refund", "Retrieve the status of refunds already created for this deal.", _DEAL),
+    _tool("request_pricing_review", "Pause pricing negotiation and route an internal revenue review when the buyer's requested rate/budget exceeds your authority or a price breaches margin limits. Never approve it yourself.", {**_DEAL, 'reason': _S, 'requested_rate': {'type':['integer','null'],'description':'Buyer-requested room rate in GBP pence; null if only a package budget is stated.'}}),
     _tool("escalate", "Hand the deal to a person when you can't take it further within the hotel's rules. Not a "
           "way to ask for approval: the engine asks the manager itself when a term needs it.", {
         **_DEAL, "reason": _S, "message_to_buyer": _S,
@@ -1023,6 +1024,8 @@ class ClaudeSeller:
             else:
                 r.pop("target_per_room_night_gbp", None)
             return e.record_requirements(did, r)
+        if name == 'request_pricing_review':
+            return e.request_pricing_review(did,a.get('reason',''),a.get('requested_rate'))
         if name == "check_systems":
             return e.check_systems(did)
         if name == "ask_buyer":
