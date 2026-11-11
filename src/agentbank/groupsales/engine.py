@@ -1015,8 +1015,67 @@ class Engine:
             terms = self.build_terms(d, rate, deposit_pct, attrition_pct, rooms_per_night, room_type)
             pricing = calc.price(terms, self.hotel, self.rms)
             check = hotel_check(terms, pricing, self.scenario)
-            return {"terms": terms, "pricing": pricing, "hotel_check": check,
-                    "fits_inventory": self._can_hold(terms, d)}
+            fits = self._can_hold(terms, d)
+            self._note_option(d, terms, pricing, check, fits)
+            return {"terms": terms, "pricing": pricing, "hotel_check": check, "fits_inventory": fits}
+
+    # ---- negotiation record: what the seller priced before it chose, for the hotel dashboard only ------------
+    # Each round starts with the buyer's latest message and collects every package the seller priced (a dry
+    # run or a proposal) with its margin and what the hotel's rules say about it; it closes when the seller
+    # proposes a version. It observes the engine's own checks and never changes what is allowed. Not part of
+    # the buyer's view (deal_view lists the buyer's fields explicitly).
+    MAX_NEGOTIATION_ROUNDS, MAX_OPTIONS_PER_ROUND = 12, 8
+
+    def _negotiation_ask(self, d) -> dict:
+        m = next((x for x in reversed(d["thread"]) if x.get("from") == "buyer"), None) or {}
+        p, req = m.get("payload") or {}, d.get("requirements") or {}
+        parts = []
+        if m.get("action") == "counter":
+            if p.get("rate"):
+                parts.append(f"{gbp(int(p['rate']))} a night")
+            if p.get("attrition_pct") is not None:
+                parts.append(f"{p['attrition_pct']}% attrition")
+            if p.get("deposit_pct") is not None:
+                parts.append(f"{p['deposit_pct']}% deposit")
+            head = "Counteroffer"
+        else:
+            if req.get("budget_total") and req.get("budget_currency", "GBP") == "GBP":
+                parts.append(f"budget {gbp(req['budget_total'])}")
+            if req.get("target_per_room_night"):
+                parts.append(f"target {gbp(req['target_per_room_night'])} a room-night")
+            head = "Buyer's message" if any(v.get("sent_at") for v in d["versions"]) else "Inquiry"
+        return {"summary": head + (": " + ", ".join(parts) if parts else ""), "text": (m.get("text") or "")[:300],
+                "at": m.get("at"), "message_id": m.get("id")}
+
+    def _note_option(self, d, terms, pricing, check, fits) -> dict:
+        rounds = d.setdefault("negotiation", [])
+        if not rounds or rounds[-1].get("chosen"):
+            rounds.append({"at": self.now(), "ask": self._negotiation_ask(d), "options": []})
+            del rounds[:-self.MAX_NEGOTIATION_ROUNDS]
+        opts = rounds[-1]["options"]
+        rooms = min(terms["rooms"].values()) if terms.get("rooms") else 0
+        key = f"{terms['room_type']}|{terms['rate']}|{terms['deposit_pct']}|{terms['attrition_pct']}|{rooms}"
+        if check["hard"]:
+            verdict, reasons = "not allowed", list(check["hard"])
+        elif not fits:
+            verdict, reasons = "rooms not free", ["the rooms, meeting space or breakfast can't be held"]
+        elif check["approvals"]:
+            verdict, reasons = "needs the manager", list(check["approvals"])
+        else:
+            verdict, reasons = "seller alone", []
+        opt = {"key": key, "room_type": terms["room_type"], "rate": terms["rate"], "deposit_pct": terms["deposit_pct"],
+               "attrition_pct": terms["attrition_pct"], "rooms_per_night": rooms, "total": pricing["total"],
+               "deposit": pricing["deposit"], "margin_pct": pricing["margin_all_rooms"]["margin_pct"],
+               "margin_release_pct": pricing["margin_full_release"]["margin_pct"], "verdict": verdict,
+               "reasons": reasons}
+        opts[:] = [o for o in opts if o["key"] != key] + [opt]
+        del opts[:-self.MAX_OPTIONS_PER_ROUND]
+        return rounds[-1]
+
+    @staticmethod
+    def _negotiation_chose(rnd: dict, key: str, version: int, status: str, explanation: str, justification: str):
+        rnd["chosen"] = {"key": key, "version": version, "status": status, "explanation": explanation[:400],
+                         "justification": justification[:400]}
 
     def propose_offer(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int, message: str,
                       explanation: str = "", unmet: list[str] | None = None, rooms_per_night: int | None = None,
@@ -1032,9 +1091,12 @@ class Engine:
             self._vendor_ready(d, terms)
             pricing = calc.price(terms, self.hotel, self.rms)
             check = hotel_check(terms, pricing, self.scenario)
+            fits = self._can_hold(terms, d)
+            rnd = self._note_option(d, terms, pricing, check, fits)
+            key = rnd["options"][-1]["key"]
             if not check["ok"]:
                 raise Refused("outside hotel limits: " + "; ".join(check["hard"]))
-            if not self._can_hold(terms, d):
+            if not fits:
                 raise Refused("inventory cannot be held for these terms (rooms, meeting space or breakfast capacity); "
                               "offer a feasible alternative or explain why you cannot quote")
             for v in d["versions"]:
@@ -1067,10 +1129,12 @@ class Engine:
                     if_approved=f"The seller can send v{n} to the buyer on these terms ({gbp(pricing['total'])}, "
                                 f"{terms['deposit_pct']}% deposit).",
                     if_rejected=f"v{n} is not sent. The seller revises the offer to terms it can agree alone.")
+                self._negotiation_chose(rnd, key, n, "pending_approval", explanation, justification)
                 self._save()
                 return {"version": n, "status": "pending_approval", "approval_id": appr["id"], "pricing": pricing,
                         "note": "Paused: hotel manager approval required before this version can be sent."}
             res = self._send_version(d, v, actor)
+            self._negotiation_chose(rnd, key, n, v["status"], explanation, justification)
             self._save()
             return res
 

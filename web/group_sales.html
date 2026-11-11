@@ -98,6 +98,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; } dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
 table.t { width: 100%; border-collapse: collapse; font-size: 13px; } table.t th { text-align: left; color: var(--muted); font-weight: 500; }
 table.t th, table.t td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; } table.t .r { text-align: right; font-variant-numeric: tabular-nums; }
+.neg .ask { margin: 2px 0 10px; } .neg .ask q { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; quotes: none; }
+.neg table.t tr.chosen td { background: var(--accent-soft); font-weight: 600; } .neg table.t tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
+.neg .why { margin: 10px 0 0; font-size: 13px; } .neg .reason { font-weight: 400; color: var(--muted); font-size: 12px; }
+.neg .scroll { overflow-x: auto; }
+@media (max-width: 560px) { .neg table.t .tot, .neg table.t .rel { display: none; } .neg table.t td:first-child { min-width: 120px; } }
 details { border-bottom: 1px solid var(--line); padding: 8px 0; } summary { cursor: pointer; }
 .next details { border: 0; padding: 0; }
 pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }
@@ -431,6 +436,33 @@ function offerCard(d) {
   h += payoutCard(d);
   return h;
 }
+// What the seller weighed before it answered: the buyer's ask, each package it priced (margin and what the
+// hotel's rules say about it) and the one it chose. Hotel only; the buyer's mailbox never gets this.
+const VERDICT = {'seller alone': ['ok', 'Seller alone'], 'needs the manager': ['warn', 'Needs the manager'],
+                 'not allowed': ['bad', 'Not allowed'], 'rooms not free': ['bad', 'Rooms not free']};
+function negRound(d, r) {
+  const ch = r.chosen || {};
+  const rows = r.options.map(o => {
+    const [cls, label] = VERDICT[o.verdict] || ['', o.verdict];
+    const chosen = o.key === ch.key;
+    const terms = `${gbp(o.rate)} ${esc(o.room_type)} · ${o.deposit_pct}% deposit · ${o.attrition_pct}% free release${o.rooms_per_night && d.requirements && d.requirements.rooms && o.rooms_per_night !== d.requirements.rooms ? ` · ${o.rooms_per_night} rooms` : ''}`;
+    return `<tr class="${chosen ? 'chosen' : ''}"><td>${chosen ? '→ ' : ''}${terms}</td><td class="r tot">${gbp(o.total)}</td><td class="r">${gbp(o.deposit)}</td>
+      <td class="r">${o.margin_pct}%<div class="reason rel">${o.margin_release_pct}% after releases</div></td>
+      <td><span class="chip ${cls}">${label}</span>${o.reasons.length ? `<div class="reason">${esc(sentences(o.reasons))}</div>` : ''}</td></tr>`;
+  }).join('');
+  const out = ch.version ? `Sent as v${ch.version}` + (ch.status === 'pending_approval' ? ', waiting for the manager' : '') : 'Still deciding';
+  return `<div class="ask"><b>${esc(r.ask.summary)}</b>${r.ask.text ? `<q>“${esc(r.ask.text.length > 220 ? r.ask.text.slice(0, 220) + '…' : r.ask.text)}”</q>` : ''}</div>
+    <div class="scroll"><table class="t"><tr><th>Package priced</th><th class="r tot">Total</th><th class="r">Deposit</th><th class="r">Margin</th><th>Hotel rules</th></tr>${rows}</table></div>
+    <p class="why"><b>${out}.</b>${ch.explanation ? ' ' + esc(ch.explanation) : ''}</p>`;
+}
+function negotiationCard(d) {
+  const rounds = (d.negotiation || []).filter(r => r.options && r.options.length);
+  if (!rounds.length || d.booking) return '';
+  const last = rounds[rounds.length - 1], older = rounds.slice(0, -1).reverse();
+  return `<div class="card neg"><div class="label"><span>Negotiation · what the seller weighed</span><span class="chip">round ${rounds.length}</span></div>
+    ${negRound(d, last)}
+    ${older.length ? `<details><summary class="small">Earlier rounds (${older.length})</summary>${older.map(r => `<div style="margin-top:10px">${negRound(d, r)}</div>`).join('')}</details>` : ''}</div>`;
+}
 function payoutCard(d) {
   const p = d.payout_view;
   if (!p || p.status === 'not_due') return '';
@@ -490,7 +522,7 @@ function renderDeal(d) {
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}</div>
-    ${nextCard(d)}${offerCard(d)}
+    ${nextCard(d)}${negotiationCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.FX) window.FX.mount(d);
