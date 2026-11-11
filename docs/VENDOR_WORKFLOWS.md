@@ -159,3 +159,42 @@ claimed from the local simulated checks.
 ![Accepted master contract and fulfillment tracking](screenshots/vendors/master-confirmed.png)
 
 [Mobile workspace](screenshots/vendors/mobile.png).
+
+## Provider history and hypothetical responses
+
+Click an external provider in **Directory** (or its name on a subcontract) to see
+supplier costs, quantities, service dates, inquiry references, quote revisions,
+workflow status and recorded payment status. Each subcontract also has **Past
+transactions with this provider**, excluding its own inquiry. Costs are GBP pence
+before hotel markup. A quote is not a paid charge: `paid` is staff tracking only,
+not verified evidence of a transfer. All current provider activity is simulated.
+There are no invented historical invoices; history starts with recorded quotes.
+
+History is upserted per run and subcontract, so revising a quote does not duplicate
+spend. It survives scenario resets/restarts in `groupsales_vendor_history.json`
+(using the normal Postgres document store when configured). Existing current and
+retained archived runs are imported when history is read; previously discarded
+runs cannot be recovered. Archived inquiries remain read-only history rows.
+
+In **New inquiry**, select **Needs third-party services**, choose a category, and
+optionally select **Include a hypothetical quote response**. This works for both
+generated inquiries and written inquiries. Once valid stay dates are recorded,
+the engine creates one preferred-provider request. Rooms replace one host room;
+meeting space replaces the hotel meeting room; other services supplement the
+package. Review the scope/quantity before proposing. Incomplete dates leave the
+simulation pending. Duplicate emails or repeated requirement extraction do not
+create duplicate subcontracts.
+
+**Generate hypothetical quote response** is also available on existing requests.
+It records a normal simulated quote revision with directional category rates,
+20% markup and two-day expiry. It invalidates earlier approvals and master offers.
+RevOps must approve the exact quote and simulate provider confirmation before the
+normal master proposal, hotel approval, buyer acceptance and checkout can proceed.
+No vendor is contacted or paid by these features. Accepted financial terms remain
+locked. Buyer-visible pricing continues to hide supplier costs and markup.
+
+Additional browser check (isolated local simulated server):
+
+```bash
+VENDOR_TEST_URL=http://127.0.0.1:8023 node ui/test/vendor-history.cjs
+```

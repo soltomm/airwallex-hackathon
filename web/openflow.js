@@ -118,12 +118,13 @@
   async function simulator() {
     showDrawer('Let the inquiry come to you.', '<p class="wb-lede">Loading inquiry types…</p>');
     try { catalog = await window.Harbour.presets(); }
-    catch (err) { $('wbDrawerBody').innerHTML='<h2 id="wbDrawerTitle" tabindex="-1">Let the inquiry come to you.</h2><p class="wb-lede">Couldn’t load the inquiry types. Write your own below instead.</p>' + ownForm(); wireOwn(); return; }
+    catch (err) { $('wbDrawerBody').innerHTML='<h2 id="wbDrawerTitle" tabindex="-1">Let the inquiry come to you.</h2><p class="wb-lede">Couldn’t load the inquiry types. Write your own below instead.</p>' + thirdPartyForm() + ownForm(); wireOwn(); return; }
     const S = actual(), b = S?.bookable;
     const cards = Object.keys(catalog.presets).map(k => { const i = catalog.info[k] || {title: k, shows: ''};
       return `<button class="wb-channel" data-preset="${html(k)}"><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry →</span></button>`; }).join('');
     showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Harbour House a generated group inquiry. Each one comes with a private brief for the buyer agent: its answers and goals, which the seller never sees. From the email on, the seller agent, the buyer agent and the backend’s rules take over${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
       ${buyerToggle(catalog.buyer_mode)}
+      ${thirdPartyForm()}
       <label class="wb-field wb-seed">Seed (optional)<input id="wbSeed" inputmode="numeric" pattern="[0-9]*" placeholder="Leave blank for a new inquiry each time"></label>
       <p class="wb-sub">The same seed sends the same inquiry against the same calendar. After a reset, reuse a seed to replay a run.</p>
       <div class="wb-channel-grid">${cards}</div>
@@ -133,6 +134,7 @@
     $('wbCustom').onclick = () => generate({traits: readTraits()});
   }
   async function generate(body) {
+    body.third_party = thirdPartyOptions();
     const seed = $('wbSeed')?.value.trim();
     if (seed && !/^\d+$/.test(seed)) { notify('The seed is a whole number, or leave it blank.'); return; }
     if (seed) body.seed = Number(seed);
@@ -146,6 +148,8 @@
       document.querySelectorAll('[data-preset],#wbCustom').forEach(x => x.disabled = false);
     }
   }
+  function thirdPartyForm(){return `<fieldset class="card"><legend>Third-party simulation</legend><label><input id="wbThirdParty" type="checkbox"> Needs third-party services</label><label class="wb-field">Service<select id="wbThirdPartyCategory">${['av','catering','meeting','rooms','technician','amenities'].map(c=>`<option value="${c}">${c}</option>`).join('')}</select></label><label><input id="wbThirdPartyQuote" type="checkbox" checked> Include a hypothetical quote response</label><p class="small muted">Creates a simulated preferred-provider request once stay dates are recorded. Review the quote, approve it and simulate confirmation in the inquiry’s third-party workspace. No provider is contacted.</p></fieldset>`;}
+  function thirdPartyOptions(){return $('wbThirdParty')?.checked?{category:$('wbThirdPartyCategory').value,quote_response:$('wbThirdPartyQuote').checked}:null;}
   function ownForm(b) {
     const scope = b ? `for nights from ${longDate(b.first_night)} to ${longDate(b.last_night)}, with at least ${b.min_days_before_arrival} days’ notice` : 'for its bookable nights';
     return `<form id="wbInbound"><h3>Or write your own</h3>
@@ -163,7 +167,7 @@
       if(!from||!body){notify('Add who it is from and the inquiry text.');return;}
       $('wbSend').disabled=true;
       try {
-        const r=await window.Harbour.inbound(from,subject||'Group inquiry',body);
+        const r=await window.Harbour.inbound(from,subject||'Group inquiry',body,thirdPartyOptions());
         if(r.duplicate){
           const msg=`Harbour House already received this exact email from ${from} (${r.ref||'an earlier inquiry'}), so it wasn't sent again. To start a new inquiry, change the text or the sender.`;
           $('wbSend').disabled=false; notify(msg);

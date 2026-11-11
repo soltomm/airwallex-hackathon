@@ -736,7 +736,7 @@ class RulesSeller:
 
     def _offer_message(self, d, p, unmet, short=False) -> str:
         pr, t = p["pricing"], p["terms"]
-        lines = "\n".join(f"- {l['item']}: {l['qty']} x {gbp(l['unit'])} = {gbp(l['amount'])}" for l in pr["lines"])
+        lines = "\n".join(f"- {l['item']}: " + (f"{l['qty']} x {gbp(l['unit'])} = " if l["unit"] is not None else "") + gbp(l["amount"]) for l in pr["lines"])
         kd = self.e.policy
         from .calc import arrival_of, key_dates
         dates = key_dates(arrival_of(t), kd)
