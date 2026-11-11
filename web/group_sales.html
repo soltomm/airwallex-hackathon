@@ -90,9 +90,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .msg .b { white-space: pre-wrap; padding: 8px 10px; border-radius: 10px; background: var(--sunk); }
 .msg.buyer .b { background: var(--buyer-soft); } .msg.seller .b { background: var(--accent-soft); }
 .msg .b, .quote, dl.kv dd, pre, code { overflow-wrap: anywhere; }
-.msg.old .b { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
-.msg.old.open .b { display: block; }
-.earlier { border: 0; padding: 0; margin: 0 0 12px; } .earlier > summary { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
 .confirm { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 10px; font-size: 13px; }
 .confirm .row { margin-top: 6px; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; } dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
@@ -237,7 +234,7 @@ const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) 
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
 const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
-let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false, agentOpen = new Set();
+let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, agentOpen = new Set();
 
 function toast(t) { document.querySelectorAll('.toast').forEach(x => x.remove()); const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
@@ -302,7 +299,7 @@ function render() {
       <div class="s">${d.ref}${v ? ' · ' + gbp(v.pricing.total) : ''}${hrs != null && hrs > 0 && !d.booking ? ` · reply in ${hrs}h` : ''}</div>
       <div class="w"><span class="chip ${({you: 'warn', buyer: 'buyer', done: 'ok', bad: 'bad'})[n.cls] || ''}">${esc(n.short)}</span></div></div>`;
   }).join('') || '<div class="muted small">No inquiries.</div>';
-  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; convOpen = false; render(); });
+  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; render(); });
   renderDeal(S.deals.find(d => d.id === sel));
   $('avail').innerHTML = availHtml();
   const changed = S.activity.filter(a => a.kind === 'rules_changed').length;
@@ -448,11 +445,11 @@ function payoutCard(d) {
 const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
   if (tab === 'conv') {
-    // Newest first. The latest two messages are shown in full; earlier ones are folded away.
-    const msg = (m, old) => `<div class="msg ${m.from}${old ? ' old' : ''}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
-    const all = d.thread.slice().reverse(), recent = all.slice(0, 2), older = all.slice(2);
-    return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>` + recent.map(m => msg(m)).join('')
-      + (older.length ? `<details class="earlier" id="earlier"${convOpen ? ' open' : ''}><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map(m => msg(m, true)).join('')}</details>` : '');
+    // Keep every message readable in full, newest first.
+    const msg = m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
+    const all = d.thread.slice().reverse();
+    return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>`
+      + all.map(msg).join('');
   }
   if (tab === 'act') return activityHtml(d);
   if (tab === 'agent') return agentHtml(d);
@@ -499,9 +496,7 @@ function renderDeal(d) {
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
   document.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => { scopeAll = b.dataset.scope === 'all'; renderDeal(d); });
-  if ($('earlier')) $('earlier').ontoggle = e => { convOpen = e.target.open; };
   document.querySelectorAll('details.ag').forEach(x => x.ontoggle = () => { x.open ? agentOpen.add(x.dataset.k) : agentOpen.delete(x.dataset.k); });
-  document.querySelectorAll('.msg.old .b').forEach(b => b.onclick = () => b.parentElement.classList.toggle('open'));
   document.querySelectorAll('#deal [data-ap]').forEach(b => b.onclick = () => decide(b));
   document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -778,13 +773,13 @@ $('reset').onclick = () => askReset(true);
 $('resetNo').onclick = () => askReset(false);
 $('resetYes').onclick = async () => {
   $('resetYes').disabled = true;
-  try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; convOpen = false; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
+  try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
   catch (e) {} finally { $('resetYes').disabled = false; }
 };
 $('liveDrawerBody').appendChild($('desk'));
 window.Harbour = {
   state: () => S,
-  open: id => { sel = id; form = null; convOpen = false; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
+  open: id => { sel = id; form = null; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
   next: d => nextOf(d),
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
