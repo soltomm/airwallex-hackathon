@@ -89,7 +89,7 @@ dl.outcomes { margin-top: 8px; }
   <div class="subject" id="subject"></div>
   <p class="lede" id="lede"></p>
   <div id="thread"></div>
-  <div id="act"></div>
+  <div id="act"></div><div id="finalFolio"></div>
 </main>
 <script>
 const CFG = __INBOX__;
@@ -155,6 +155,8 @@ function render() {
     + recent.map((m, i) => mail(m, older.length + i)).join('');
   document.querySelectorAll('.mail .hd').forEach(h => h.onclick = () => { const el = h.parentElement; el.classList.toggle('open'); el.classList.contains('open') ? opened.add(el.dataset.id) : opened.delete(el.dataset.id); });
   $('act').innerHTML = actions();
+  const f=V.final_folio;
+  $('finalFolio').innerHTML=f?`<section class="box"><h2>Final stay folio</h2><p>Reservation ${esc(f.reservation_ref)} · ${esc(f.status.replaceAll('_',' '))}</p><table>${f.snapshot.lines.map(l=>`<tr><td>${esc(l.description)}</td><td>${gbp(l.amount)}</td></tr>`).join('')}</table><p>Final master bill: ${gbp(f.master_total)} · Payments reconciled: ${gbp(f.paid)} · Balance due: ${gbp(f.balance_due)}</p>${f.payment_url?`<a class="btn-p" href="${esc(f.payment_url)}" target="_blank" rel="noopener">Pay final balance ↗</a>`:''}${f.document?`<p><a href="/folio/${encodeURIComponent(V.ref)}/document?t=${encodeURIComponent(CFG.t)}" target="_blank" rel="noopener">Open final folio / save PDF ↗</a></p>`:''}</section>`:'';
   wire();
 }
 const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 'T12:00:00Z'), m = d => d.toLocaleDateString('en-GB', {month: 'long', timeZone: 'UTC'});
@@ -170,7 +172,7 @@ function actions() {
   if (V.booking && V.booking.status === 'confirmed') {
     const f = V.finance_view, rooms = V.booking.rooms ? Math.max(...Object.values(V.booking.rooms)) : null;
     h += `<div class="box ok"><div class="who">Booked</div><h3>${rooms ? `${rooms} ${esc(V.booking.room_type)} rooms a night` : 'Confirmed'} · ${gbp(f.net_received)} paid</h3>
-      ${f.refund_owed ? `<p>${gbp(f.refund_owed)} is owed back to you.</p>` : ''}${f.still_due ? `<p class="small muted">${gbp(f.still_due)} still due on the payment schedule.</p>` : ''}</div>`;
+      ${f.refund_owed ? `<p>${gbp(f.refund_owed)} is owed back to you.</p>` : ''}${f.still_due ? `<p class="small muted">${gbp(f.still_due)} still due ${f.post_stay?'on the final folio':'on the payment schedule'}.</p>` : ''}</div>`;
   }
   if (V.hotel_busy) h += `<p class="small muted"><span class="dot pulse"></span>${esc(V.hotel)} is replying…</p>`;
   if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. Choose Buyer replies: "By you, in the buyer's mailbox" in the hotel's New inquiry drawer to reply here.</p></div>`;
