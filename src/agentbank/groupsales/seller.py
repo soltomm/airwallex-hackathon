@@ -84,9 +84,9 @@ def _span(a: str, b: str) -> str:
 
 AVAILABILITY_CHANGED = ("Thank you for your reply. Availability on your dates has changed since our last offer, so we "
                         "can't confirm revised terms right away. A member of our group sales team will contact you "
-                        "directly with what we can offer.\n\nGroup Sales, Harbour House")
+                        "directly with what we can offer.\n\nGroup Sales, Groupy")
 WAITING_FOR_PERSON = ("Thank you for your message. We can't answer it automatically, so a member of our group sales "
-                      "team will reply to you directly.\n\nGroup Sales, Harbour House")
+                      "team will reply to you directly.\n\nGroup Sales, Groupy")
 
 
 def _latest_buyer_msg(d: dict) -> dict | None:
@@ -296,7 +296,7 @@ class RulesSeller:
                            todo="Reply to the buyer about the other services, or hand it back to the seller without them.",
                            message="Thank you for your inquiry. Your request includes " + " and ".join(res["out_of_scope"])
                                    + ", which our group desk does not offer, so a member of our sales team will reply to "
-                                     "you directly.\n\nGroup Sales, Harbour House")
+                                     "you directly.\n\nGroup Sales, Groupy")
                 return f"{ref}: escalated (out of scope)"
             return f"{ref}: requirements recorded"
         if st == "intake" and (d["requirements"] or {}).get("out_of_scope"):
@@ -352,7 +352,7 @@ class RulesSeller:
                                todo="Read the thread, fill in the missing details and hand the deal back, or reply "
                                     "to the buyer directly.",
                                message="Thank you for your reply. A member of our group sales team will review the "
-                                       "details with you and come back to you shortly.\n\nGroup Sales, Harbour House")
+                                       "details with you and come back to you shortly.\n\nGroup Sales, Groupy")
                     return f"{ref}: escalated (reply not understood)"
                 e.ask_buyer(deal_id, d["missing"], "Thank you, that helps. To complete your offer we only need: "
                             + "; ".join(d["missing"]) + ".")
@@ -474,7 +474,7 @@ class RulesSeller:
             e.ask_buyer(deal_id, qs, f"{thanks} We are unable to offer {_span(req['arrival'], req['departure'])} "
                         f"for groups. Our group dates currently run from {_day(e.hotel['nights'][0])} to "
                         f"{_day(_next(e.hotel['nights'][-1]))}. So that we can suggest the best dates, could you tell us: "
-                        + "; ".join(qs) + "?\n\nGroup Sales, Harbour House")
+                        + "; ".join(qs) + "?\n\nGroup Sales, Groupy")
             return f"{ref}: dates unavailable, asked for room details"
         sug = e.suggest_dates(deal_id)
         rt, want = req["room_type"], int(req["rooms"])
@@ -515,7 +515,7 @@ class RulesSeller:
         else:
             head = f"{thanks} We are unable to offer {_span(req['arrival'], req['departure'])} for your group."
         e.offer_dates(deal_id, opts, f"{head} {body}{ask} Once you confirm the dates, we will send a full itemized offer."
-                      "\n\nGroup Sales, Harbour House")
+                      "\n\nGroup Sales, Groupy")
         return f"{ref}: offered other dates"
 
     def _dates_reply(self, deal_id: str) -> str:
@@ -828,7 +828,7 @@ class RulesSeller:
 
 
 # =============================================================================== Claude seller
-SYSTEM = """You are the group-sales agent for Harbour House, a London hotel. You handle group inquiries
+SYSTEM = """You are the group-sales agent for Groupy, a London hotel. You handle group inquiries
 (RFPs) from the first email through offer, negotiation, booking, payment and amendments. You work for
 the hotel: protect its revenue and margin while winning business that fits.
 
@@ -893,7 +893,7 @@ How to work:
 - If a deal's next_step says it is paused after a payment-provider error, leave it alone: hotel staff
   retry it once the cause is fixed.
 - Write to buyers as an experienced hotel group-sales manager: plain, specific, courteous, no filler,
-  no exclamation marks, no emoji, sign off as "Group Sales, Harbour House".
+  no exclamation marks, no emoji, sign off as "Group Sales, Groupy".
 - Be brief. Hotel staff read your notes in a narrow activity feed: log_reasoning notes are one or two
   plain sentences. When nothing is actionable, stop with a single sentence (no lists, no markdown),
   for example: Both deals are waiting on the buyers."""

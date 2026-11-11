@@ -1,4 +1,4 @@
-# Harbour House group sales agent
+# Groupy group sales agent
 
 Internal pricing decisions and the revenue-manager demo are documented in
 [Revenue pricing review](docs/REVENUE_REVIEW.md).
@@ -152,8 +152,8 @@ bookkeeping: no agent tool moves them, and the buyer's view never shows them. Wi
 (live Airwallex), deposits are collected untagged and the card shows "No hotel account connected".
 
 **Onboarding the hotel.** Property tools → **Hotel payout account** shows the hotel's connected account
-and offers **Onboard Harbour House**. On the server (so it works on Render, inside the key's IP
-whitelist) it creates a connected account named Harbour House under your Airwallex account
+and offers **Onboard Groupy**. On the server (so it works on Render, inside the key's IP
+whitelist) it creates a connected account named Groupy under your Airwallex account
 (`POST /accounts/create`), submits it, activates it in the sandbox and enables card payments (Visa and
 Mastercard capabilities), reusing the onboarding the Hotel Negotiation Desk verified live. It takes a
 minute or two and runs in the background; progress is saved after each step, and a retry resumes the
@@ -237,7 +237,7 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
 ### 2026-11-09: hotel payouts (Payments for Platforms), on staging
 
 The full demo story ran on the staging deploy (Render) against the Airwallex sandbox, with the hotel
-onboarded from the dashboard as a connected account named Harbour House under the platform account:
+onboarded from the dashboard as a connected account named Groupy under the platform account:
 
 | Step | Amount | Airwallex id | Status |
 |---|---|---|---|

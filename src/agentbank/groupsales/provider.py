@@ -75,7 +75,7 @@ class AirwallexProvider:
                       connected_account_id: str | None = None) -> dict:
         body = {"request_id": request_id, "amount": to_major(amount), "currency": currency,
                 "merchant_order_id": merchant_order_id, "metadata": metadata,
-                "descriptor": "Harbour House deposit"}
+                "descriptor": "Groupy deposit"}
         if return_url:
             body["return_url"] = return_url
         if connected_account_id:
@@ -264,7 +264,7 @@ class SimulatedProvider:
 
     def account_status(self, account):
         a = self.db.get("accounts", {}).get(account) or (
-            {"id": account, "name": "Harbour House", "status": "ACTIVE", "cards": True}
+            {"id": account, "name": "Groupy", "status": "ACTIVE", "cards": True}
             if account == self.default_account else None)
         if not a:
             raise AirwallexError(404, "resource_not_found", "no such connected account", {})
