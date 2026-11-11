@@ -160,7 +160,7 @@ def test_flat_markup_is_per_subitem_not_per_unit(eng):
 def test_vendor_routes_are_hotel_only(server,monkeypatch):
     monkeypatch.setattr(server,'ACCESS','vendor-demo-token')
     did=next(iter(server.engine.s['deals']))
-    for path in ['/api/vendor_directory',f'/api/deals/{did}/vendors','/assets/vendors.js']:
+    for path in ['/api/vendor_directory',f'/api/deals/{did}/vendors','/assets/vendors.js','/api/vendors/sound/history']:
         assert _req(server,path)[0]==401
     assert _req(server,f'/api/deals/{did}/vendors',{'command':'configure','payload':{'enabled':True}})[0]==401
     headers={'Cookie':'gs_k=vendor-demo-token','Content-Type':'application/json'}
@@ -229,3 +229,88 @@ def test_multiple_meeting_rooms_are_extracted_for_master_coverage():
     from agentbank.groupsales.extract import extract
     for count in ('3','three'):
         assert extract('Offsite',f'100 king rooms and {count} meeting rooms')['meeting_count']==3
+
+
+def test_provider_history_is_supplier_cost_upserted_and_survives_reset(eng):
+    d=deal(eng);configure(eng,d);rid=request(eng,d,category='rooms',quantity=2,vendor='riverside')
+    quote(eng,d,rid,cost=12000,markup=50)
+    rows=eng.vendor_history('riverside')['transactions']
+    assert len(rows)==1 and rows[0]['cost']==72000 and rows[0]['quantity']==6
+    assert rows[0]['status']=='quoted' and rows[0]['payment_status']=='unpaid'
+    assert eng.vendor_history('riverside',exclude_deal=d['id'])['transactions']==[]
+    quote(eng,d,rid,cost=13000)
+    assert len(eng.vendor_history('riverside')['transactions'])==1
+    assert eng.vendor_history('riverside')['transactions'][0]['cost']==78000
+    eng.reset()
+    restored=Engine(eng.var,eng.provider)
+    row=restored.vendor_history('riverside')['transactions'][0]
+    assert row['revision']==2 and not row['current_run']
+    with pytest.raises(Refused,match='Provider not found'):eng.vendor_history('unknown')
+
+
+def test_hypothetical_quote_requires_normal_review_and_resets_stale_approval(eng):
+    d=deal(eng);configure(eng,d);rid=request(eng,d)
+    eng.vendor_action(d['id'],'simulate_quote',{'request_id':rid})
+    r=d['third_party']['requests'][0]
+    assert r['status']=='quoted' and r['approval_hash'] is None
+    assert r['quote']['unit_cost']==25000
+    with pytest.raises(Refused,match='approval'):eng.vendor_action(d['id'],'confirm',{'request_id':rid,'quote_hash':r['quote']['hash']})
+    h=r['quote']['hash'];eng.vendor_action(d['id'],'approve',{'request_id':rid,'quote_hash':h})
+    eng.vendor_action(d['id'],'confirm',{'request_id':rid,'quote_hash':h})
+    eng.vendor_action(d['id'],'simulate_quote',{'request_id':rid})
+    r=d['third_party']['requests'][0]
+    assert r['status']=='quoted' and r['approval_hash'] is None and r['quote']['revision']==2
+
+
+@pytest.mark.parametrize('response',[True,False])
+def test_new_inquiry_simulation_waits_for_dates_and_creates_one_request(eng,response):
+    options={'category':'av','quote_response':response}
+    did=eng.ingest_email('new@demo.example','New third party','New simulation',wake=False,third_party=options)['deal_id']
+    assert eng.deal(did)['third_party']['simulation_pending']==options
+    eng.record_requirements(did,{'rooms':5})
+    assert not eng.deal(did)['third_party']['requests']
+    req={'arrival':'2027-03-10','departure':'2027-03-13','rooms':5,'room_type':'king','guests':5}
+    eng.record_requirements(did,req);eng.record_requirements(did,req)
+    d=eng.deal(did);assert len(d['third_party']['requests'])==1
+    r=d['third_party']['requests'][0]
+    assert r['status']==('quoted' if response else 'awaiting_quote')
+    assert not r['approval_hash']
+    duplicate=eng.ingest_email('new@demo.example','New third party','New simulation',wake=False,third_party=options)
+    assert duplicate['duplicate'] and len(d['third_party']['requests'])==1
+
+
+def test_invalid_simulation_does_not_create_inquiry(eng):
+    n=len(eng.s['deals'])
+    with pytest.raises(Refused):eng.ingest_email('x@example.com','Invalid','Invalid simulation',third_party={'category':'bad'})
+    assert len(eng.s['deals'])==n
+
+
+def test_generated_inquiry_can_include_vendor_quote(server):
+    from agentbank.groupsales import generator
+    preset=next(iter(generator.PRESETS))
+    code,_,body=_req(server,'/api/simulate/rfp',{'preset':preset,'seed':872,'third_party':{'category':'av','quote_response':True}})
+    assert code==200,body
+    did=json.loads(body)['deal_id']
+    d=server.engine.deal(did)
+    server.engine.record_requirements(did,{'arrival':'2027-03-10','departure':'2027-03-13','rooms':5,'room_type':'king'})
+    assert d['third_party']['requests'][0]['status']=='quoted'
+    code,_,body=_req(server,'/api/vendors/sound/history')
+    assert code==200 and json.loads(body)['transactions'][0]['unit_cost']==25000
+
+
+def test_rules_seller_can_format_bundled_vendor_quote_without_exposing_cost(eng):
+    from agentbank.groupsales.seller import RulesSeller
+    d=deal(eng);configure(eng,d);rid=request(eng,d);confirmed(eng,d,rid)
+    priced=eng.price_terms(d['id'],19000,30,10)
+    message=RulesSeller(eng)._offer_message(d,priced,[])
+    line=next(line for line in message.splitlines() if 'av package' in line)
+    assert '£200' in line and ' x ' not in line
+    assert '£100' not in line and 'markup' not in message
+
+
+def test_disabling_pending_simulation_prevents_later_auto_creation(eng):
+    did=eng.ingest_email('cancel@example.com','Cancelled simulation','Wait for dates',wake=False,third_party={'category':'av','quote_response':True})['deal_id']
+    eng.vendor_action(did,'configure',{'enabled':False})
+    eng.record_requirements(did,{'arrival':'2027-03-10','departure':'2027-03-13','rooms':5})
+    assert not eng.deal(did)['third_party']['requests']
+    assert 'simulation_pending' not in eng.deal(did)['third_party']
