@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harbour House group-sales demo server: hotel dashboard, agents, hosted payment page, webhooks.
+"""Groupy group-sales demo server: hotel dashboard, agents, hosted payment page, webhooks.
 
   PYTHONPATH=src python scripts/group_sales.py            # http://localhost:8010
 Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presenter|agent
@@ -214,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/healthz":
             return self._send(200, {"ok": True})
         if not self._authorized(p, q):
-            return self._send(401, "<h1>Harbour House group desk</h1><p>Open the link with its access token.</p>", "text/html")
+            return self._send(401, "<h1>Groupy group desk</h1><p>Open the link with its access token.</p>", "text/html")
         if q.get("k") and ACCESS:
             self.send_response(303)
             self.send_header("Set-Cookie", f"gs_k={ACCESS}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
@@ -465,7 +465,7 @@ def main():
             time.sleep(30)
     threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
-    print(f"Harbour House group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
+    print(f"Groupy group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
           f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']}, "
           f"rules seller reads emails with: {'the model' if understand.available() else 'patterns (no Anthropic key)'})",
           flush=True)

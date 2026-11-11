@@ -94,7 +94,7 @@ dl.outcomes { margin-top: 8px; }
 <script>
 const CFG = __INBOX__;
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const esc = s => String(s ?? '').replace(/\bHarbour\s+House\b/gi, 'Groupy').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) / 100).toLocaleString('en-GB', {minimumFractionDigits: Math.abs(p) % 100 ? 2 : 0, maximumFractionDigits: 2});
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 let V = null, form = null, lastJSON = '', opened = new Set(), draftDirty = false;
@@ -135,7 +135,7 @@ function asked(m) {
   return h;
 }
 function render() {
-  const me = V.contact, hotelAddr = 'groups@harbourhouse.example';
+  const me = V.contact, hotelAddr = 'groups@groupy.example';
   $('title').innerHTML = `${esc(me)} <span>· ${esc(V.company)}</span>`;
   document.title = `${V.company} Mailbox`;
   $('subject').textContent = V.subject || 'Group booking';

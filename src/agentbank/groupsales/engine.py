@@ -1996,7 +1996,7 @@ class Engine:
     def _run_onboarding(self, request_id: str, account: str | None):
         h = self.hotel
         try:
-            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@harbourhouse.example",
+            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@groupy.example",
                                                request_id, account, self._onboarding_step)
             final, error = ("ready", None) if ok else ("capabilities_pending",
                                                        "card payments not enabled yet; retry in a minute")

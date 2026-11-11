@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Groupy · Harbour House group sales</title>
+<title>Groupy · Group sales</title>
 <style>
 :root {
   --bg: #f4f2ee; --panel: #fff; --sunk: #f8f6f2; --fg: #1d1b18; --muted: #77716a; --line: #e5e0d7;
@@ -197,7 +197,7 @@ dl.outcomes { margin-top: 8px; }
     <button data-wb-view="payments"><span class="wb-icon" aria-hidden="true">▱</span>Payments</button>
     <button id="vendorDirectoryNav"><span class="wb-icon" aria-hidden="true">▤</span>Directory</button>
   </nav>
-  <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Harbour House <span class="muted">⌄</span></div>
+  <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Groupy <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
     <button id="wbAccount">Hotel payout account ↗</button>
     <button id="reset">↻ Reset scenario</button>
@@ -205,19 +205,19 @@ dl.outcomes { margin-top: 8px; }
       <div class="row"><button id="resetYes">Yes, reset</button><button id="resetNo">Cancel</button></div></div>
   </details>
 </aside>
-<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
+<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Groupy">G</span></div></div>
 <main class="wb-content" id="workbench">
   <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ New inquiry</button></div>
   <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
-  <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
-  <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
+  <div id="wbBody"><p class="wb-empty" role="status">Loading Groupy inquiries…</p></div>
+  <p class="wb-note" id="wbConnection" role="status">Connecting to Groupy…</p>
 </main>
 <dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">NEW INQUIRY</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
 <dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
 <dialog id="fxDirectory" class="wb-drawer" aria-labelledby="fxDirectoryTitle"><div class="wb-drawer-head"><span>SELLER RULES · CURRENCY POLICY</span><button class="wb-close" aria-label="Close currency directory" data-wb-close>×</button></div><div class="wb-drawer-body" id="fxDirectoryBody"></div></dialog>
-<dialog id="liveDrawer" class="wb-drawer" aria-label="Harbour House inquiry"><div class="wb-drawer-head"><span>HARBOUR HOUSE · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
+<dialog id="liveDrawer" class="wb-drawer" aria-label="Groupy inquiry"><div class="wb-drawer-head"><span>GROUPY · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
 <header hidden>
-  <h1>Harbour House <span>· Group sales</span></h1>
+  <h1>Groupy <span>· Group sales</span></h1>
   <span class="pill" id="clock"></span>
   <span class="pill" id="agent"></span>
   <span class="spacer"></span>
@@ -232,7 +232,7 @@ dl.outcomes { margin-top: 8px; }
 <section class="page" id="rules" hidden></section>
 <script>
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const esc = s => String(s ?? '').replace(/\bHarbour\s+House\b/gi, 'Groupy').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) / 100).toLocaleString('en-GB', {minimumFractionDigits: Math.abs(p) % 100 ? 2 : 0, maximumFractionDigits: 2});
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
@@ -449,7 +449,7 @@ const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity
 function tabBody(d) {
   if (tab === 'conv') {
     // Newest first. The latest two messages are shown in full; earlier ones are folded away.
-    const msg = (m, old) => `<div class="msg ${m.from}${old ? ' old' : ''}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
+    const msg = (m, old) => `<div class="msg ${m.from}${old ? ' old' : ''}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Groupy'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
     const all = d.thread.slice().reverse(), recent = all.slice(0, 2), older = all.slice(2);
     return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>` + recent.map(m => msg(m)).join('')
       + (older.length ? `<details class="earlier" id="earlier"${convOpen ? ' open' : ''}><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map(m => msg(m, true)).join('')}</details>` : '');
@@ -682,7 +682,7 @@ function availHtml() {
     const held = d.hold && ['active', 'expired_payment_pending'].includes(d.hold.status);
     return held ? [`<tr><td>${esc(d.company)}</td><td><span class="chip warn">${d.hold.status === 'active' ? 'Held' : 'Held, payment unclear'}</span></td><td>${go(d.hold.rooms)}</td><td>${perNight(d.hold.rooms)} ${esc(d.hold.room_type)} rooms a night</td><td>${d.hold.status === 'active' ? 'until ' + when(d.hold.expires_at) : 'manager review'}</td></tr>`] : [];
   }).join('');
-  return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Harbour House can still sell, ${day(S.bookable.first_night)} to ${day(S.bookable.last_night, {year: 'numeric'})}. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released. Pick a month, then a night.</p>
+  return `<button class="btn-ghost back" id="availBack">← Back to deals</button><h2>Availability</h2><p class="lede">What Groupy can still sell, ${day(S.bookable.first_night)} to ${day(S.bookable.last_night, {year: 'numeric'})}. The seller agent checks these numbers before it quotes, and the backend refuses any offer that would oversell them. They update as offers are held, booked and released. Pick a month, then a night.</p>
     <div class="months" id="availMonths">${strip}</div>
     <div class="key"><span><i class="l3"></i>Mostly taken</span><span><i class="ot"></i>Sold to other business</span><span><i class="l4"></i>Nearly full</span><span><i class="full"></i>Full</span><span><i class="bk"></i>Booked</span><span><i class="hd"></i>Held by an open offer</span><span><i class="mt"></i>Thames Room in use</span></div>
     <div class="cal-wrap"><div class="card"><div class="cal-head"><button class="btn-ghost" data-step="-1" ${idx <= 0 ? 'disabled' : ''} aria-label="Previous month">‹</button>
@@ -787,7 +787,7 @@ window.Harbour = {
   open: id => { sel = id; form = null; convOpen = false; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
   next: d => nextOf(d),
   reload: load,
-  // A new inquiry for the seller agent: the same intake as an email to Harbour House.
+  // A new inquiry for the seller agent: the same intake as an email to Groupy.
   // Resolves to {deal_id, duplicate, ref}: an email already received (same sender and text) opens its existing deal.
   inbound: async (from, subject, body) => { const r = await api('/api/inbox', {from, subject, body}); lastJSON = ''; await load(); return r; },
   // Generated inquiries (generator.py): the RFP plus its buyer's private brief; the agents do the rest.
@@ -805,7 +805,7 @@ async function renderAccount(check) {
   const o = a.onboarding || {}, rec = a.provider_record;
   const canOnboard = a.source !== 'GS_HOTEL_ACCOUNT' && a.source !== 'onboarded' && !a.running;
   const live = a.provider === 'airwallex';
-  $('acctBody').innerHTML = `<h2 style="margin:0 0 6px">Harbour House on Airwallex</h2>
+  $('acctBody').innerHTML = `<h2 style="margin:0 0 6px">Groupy on Airwallex</h2>
     <p class="wb-lede" style="margin-bottom:16px">${esc(a.platform || 'The platform')} owns the Airwallex account and collects each deposit for the hotel. The hotel is a <b>connected account</b> under it; a funds split pays it its share and Airwallex pays it out to its bank.</p>
     <dl class="kv"><dt>Platform</dt><dd>Your Airwallex account (the API key on this server)${live ? '' : ' · simulated'}</dd>
       <dt>Hotel account</dt><dd>${a.account ? `<code>${esc(a.account)}</code>` : '<b>None yet</b>: deposits stay with the platform'}</dd>
@@ -814,9 +814,9 @@ async function renderAccount(check) {
       ${a.provider_error ? `<dt>At Airwallex</dt><dd style="color:var(--bad)">${esc(a.provider_error)}</dd>` : ''}
       ${o.status ? `<dt>Onboarding</dt><dd>${esc(ONBOARD[o.status] || o.status)}${a.running ? '…' : ''}${o.error ? `<br><span style="color:var(--bad)">${esc(o.error)}</span>` : ''}</dd>` : ''}</dl>
     ${(o.steps || []).length ? `<p class="small muted">${o.steps.map(x => `${esc(ONBOARD[x.status] || x.status)} ${when(x.at)}`).join(' · ')}</p>` : ''}
-    <div class="row" style="margin-top:14px">${canOnboard ? `<button class="wb-primary" id="acctOnboard">${o.account ? 'Resume onboarding' : 'Onboard Harbour House'}</button>` : ''}
+    <div class="row" style="margin-top:14px">${canOnboard ? `<button class="wb-primary" id="acctOnboard">${o.account ? 'Resume onboarding' : 'Onboard Groupy'}</button>` : ''}
       ${a.account ? '<button id="acctCheck">Check with Airwallex</button>' : ''}</div>
-    ${canOnboard ? `<p class="small muted" style="margin-top:10px">Creates a connected account named Harbour House under your Airwallex account, activates it in the sandbox and enables card payments. Takes a minute or two; you can close this and come back.</p>` : ''}`;
+    ${canOnboard ? `<p class="small muted" style="margin-top:10px">Creates a connected account named Groupy under your Airwallex account, activates it in the sandbox and enables card payments. Takes a minute or two; you can close this and come back.</p>` : ''}`;
   if ($('acctOnboard')) $('acctOnboard').onclick = async () => { $('acctOnboard').disabled = true; try { await api('/api/hotel_account/onboard', {}); } catch (e) {} renderAccount(); };
   if ($('acctCheck')) $('acctCheck').onclick = () => renderAccount(true);
   clearTimeout(acctTimer);
