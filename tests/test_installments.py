@@ -52,7 +52,7 @@ def _intents(e, n):
             and o["status"] != "cancelled"]
 
 
-def test_the_demo_story_overdue_link_extension_on_busy_dates_then_paid_and_split(eng):
+def test_the_demo_story_overdue_link_the_seller_decides_the_date_then_paid_and_split(eng):
     e = eng
     s, n = _overdue(e)
     assert n["status"] == "installment_overdue"
@@ -71,19 +71,14 @@ def test_the_demo_story_overdue_link_extension_on_busy_dates_then_paid_and_split
 
     buyer_turn(e, "Northstar")                         # "could we pay by 15 February?"
     assert n["thread"][-1]["action"] == "payment_extension" and "£828" in n["thread"][-1]["text"]
-    s.run()                                            # 7 days > 3 on busy dates: the manager decides
-    assert n["status"] == "extension_review"
-    [a] = _pending(e)
-    assert a["subject"] == "installment_extension" and a["pay_by"] == "2027-02-15" and a["amount"] == 82800
-    assert a["rules"] == [{"rule": "Installment extension (busy dates)", "alone": "up to 3 days, to 11 Feb",
-                           "asked": "7 days, to 15 Feb"}]
-    assert "40%" in a["summary"] and "£4,140" in a["summary"] and "24 Feb" in a["summary"]
-
-    e.decide_approval(a["id"], "approve", "hotel_manager")
-    s.run()                                            # the seller applies it and tells the buyer
-    assert n["status"] == "installment_requested"
-    assert e.collection_view(n)["current"]["due"] == "2027-02-15"
-    assert "15 February" in n["thread"][-1]["text"]
+    s.run()                         # 7 days > its 3 on a busy week: the seller gives its own 3, and says why
+    assert not _pending(e) and n["status"] == "installment_requested"
+    assert e.collection_view(n)["current"]["due"] == "2027-02-11"
+    reply = n["thread"][-1]["text"]
+    assert "high demand" in reply and "11 February" in reply and "£828" in reply
+    assert n["extensions"]["50% paid"]["history"][0]["approval"] is None
+    assert any("Offering Thursday 11 February instead" in a["text"] and "75% (busy)" in a["text"]
+               for a in e.s["activity"] if a["kind"] == "reasoning")
     assert [o["id"] for o in _intents(e, n)] == [op["id"]]   # the same payment link: only the date moved
 
     e.provider.pay(op["payment_intent_id"], CARD)
@@ -113,6 +108,37 @@ def test_on_quiet_dates_the_seller_gives_the_same_week_alone(eng):
     assert hist == [{**hist[0], "from": "2027-02-08", "to": "2027-02-15", "approval": None}]
 
 
+def test_quiet_dates_beyond_a_week_get_the_sellers_week(eng):
+    e = eng
+    s, n = _overdue(e)
+    e.scenario["rms"]["displacement"]["demand_by_night_pct"] = {k: 40 for k in n["booking"]["rooms"]}
+    s.run()
+    e.buyer_action(n["id"], n["buyer_token"], "payment_extension", "By the 20th?", {"pay_by": "2027-02-20"})
+    s.run()
+    assert not _pending(e) and e.collection_view(n)["current"]["due"] == "2027-02-15"
+    assert "up to 7 days" in n["thread"][-1]["text"]
+
+
+def test_the_manager_decides_what_the_seller_cant_a_second_move(eng):
+    e = eng
+    s, n = _overdue(e)
+    s.run()
+    buyer_turn(e, "Northstar")                         # 15 Feb asked; the seller gives 11 Feb
+    s.run()
+    e.buyer_action(n["id"], n["buyer_token"], "payment_extension", "Could we have until the 13th?",
+                   {"pay_by": "2027-02-13"})
+    s.run()                                            # no date of its own left: the manager decides
+    assert n["status"] == "extension_review"
+    [a] = _pending(e)
+    assert a["subject"] == "installment_extension" and a["pay_by"] == "2027-02-13" and a["amount"] == 82800
+    assert {x["rule"] for x in a["rules"]} == {"Installment extension (busy dates)", "Extensions per installment"}
+    assert "40%" in a["summary"] and "£4,140" in a["summary"] and "24 Feb" in a["summary"]
+    e.decide_approval(a["id"], "approve", "hotel_manager")
+    s.run()
+    assert n["status"] == "installment_requested" and e.collection_view(n)["current"]["due"] == "2027-02-13"
+    assert "13 February" in n["thread"][-1]["text"]
+
+
 def test_a_date_past_the_release_deadline_is_refused_and_the_seller_offers_its_own(eng):
     e = eng
     s, n = _overdue(e)
@@ -132,8 +158,7 @@ def test_a_manager_refusal_leads_to_the_sellers_own_date(eng):
     e = eng
     s, n = _overdue(e)
     s.run()
-    buyer_turn(e, "Northstar")
-    s.run()
+    assert e.extend_installment(n["id"], "2027-02-15", "asked")["status"] == "pending_approval"   # e.g. the Claude seller
     [a] = _pending(e)
     e.decide_approval(a["id"], "reject", "hotel_manager")
     s.run()
@@ -147,11 +172,9 @@ def test_overdue_again_after_an_extension_goes_to_a_person_with_the_numbers(eng)
     e = eng
     s, n = _overdue(e)
     s.run()
-    buyer_turn(e, "Northstar")
+    buyer_turn(e, "Northstar")                         # moved to 11 Feb by the seller
     s.run()
-    e.decide_approval(_pending(e)[0]["id"], "approve", "hotel_manager")
-    s.run()
-    e.advance_clock(to="2027-02-16T09:00:00+00:00")   # 15 Feb passed, still unpaid
+    e.advance_clock(to="2027-02-12T09:00:00+00:00")   # 11 Feb passed, still unpaid
     assert n["status"] == "installment_overdue"
     s.run()
     assert n["status"] == "handoff"

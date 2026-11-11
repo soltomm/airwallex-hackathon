@@ -100,9 +100,10 @@ hand-written RFP and sets who answers for the buyer.
    link for exactly £828 (a new Airwallex payment intent). The **Payment schedule** card shows what the seller
    weighs: £3,312 (40%) paid, demand on the stay 75% (busy), 29 days to arrival, rooms resellable until 24 Feb,
    and a 50% (£4,140) charge if the booking were cancelled today.
-10. In the mailbox, **Ask for more time** (15 Feb). Seven days is more than the seller may give alone on busy
-    dates (3 days; 7 on quiet ones), so the manager's card names that rule: **Approve**. The seller tells Maya
-    the new date; the payment link stays the same.
+10. In the mailbox, **Ask for more time** (15 Feb). On a busy week the seller may give 3 days alone (7 on quiet
+    dates), so it decides itself: it moves the installment to **11 Feb** and tells Maya why ("your dates are in
+    high demand"). No manager is asked; the payment link stays the same. On quiet dates the same request gets
+    15 Feb.
 11. In the mailbox, **Open payment page ↗** and pay. Verified with Airwallex: **£4,140 net received**, £4,140
     still due by 3 Mar, and the hotel's share of the £828 (£745.20) paid out by funds split, £82.80 kept as
     the fee. If 15 Feb had passed unpaid, the seller would hand the deal to a person with what cancelling
@@ -244,8 +245,10 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   or 3 when the stay's average demand is 70% or more (`policy.collections`: those rooms are worth more resold
   than waited for), once per installment; longer, or a second move, needs the hotel manager, whose card shows
   the risk (paid so far, demand, the cancellation charge today, the release deadline); and no date can move
-  past the release deadline, after which the rooms could no longer be resold. Overdue again after an
-  extension, the seller hands the deal to a person. The buyer sees what it owes and when, never the demand,
+  past the release deadline, after which the rooms could no longer be resold. The seller uses its own
+  authority first: asked for more than it may give, it offers the latest date it may agree and says why. The
+  manager decides only what the seller can't (a second move), and overdue again after an extension, the seller
+  hands the deal to a person. The buyer sees what it owes and when, never the demand,
   the risk or the seller's limits. No collection is asked while a refund is unresolved.
 - **Hand-offs.** Only an inquiry handed to staff with no booking can be handed back or closed. A staff
   instruction stays in front of the seller until it next writes to the buyer.
@@ -328,10 +331,11 @@ approved refund.
   access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
 
 `tests/test_installments.py` covers the overdue installment: the demo story (overdue on 9 Feb, a £828 link,
-15 Feb needing the manager on busy dates, the same link paid, received once, £745.20 split to the hotel and
-hotel net + fee = £4,140 net received); the same week agreed by the seller alone on quiet dates; a date past
-the release deadline refused and the seller's own date offered instead; a manager refusal; overdue again after
-an extension handed to a person with no second link; a second extension needing the manager; a duplicate
+15 Feb asked and 11 Feb given by the seller on a busy week with the reason, the same link paid, received once,
+£745.20 split to the hotel and hotel net + fee = £4,140 net received); the same week agreed by the seller alone
+on quiet dates, and its week offered when asked for more; a date past the release deadline refused and the
+seller's own date offered instead; a second move decided by the manager; a manager refusal; overdue again
+after an extension handed to a person with no second link; a second extension needing the manager; a duplicate
 webhook recorded once; a declined card; the buyer's view without the hotel's risk; and the rule's table.
 
 ### Randomized scenarios
@@ -410,9 +414,9 @@ seed, so replaying a seed in the same run is refused rather than merged. From th
 ### Browser check of the demo script
 
 `scripts/e2e_demo.js` clicks through the demo script in a real browser against a running server with
-simulated payments, and checks 55 points: the seller starting on its own, every spec figure, the
-buyer's moves made from the buyer's mailbox (none on the dashboard), the overdue installment (link, extension
-approved by the manager, paid and split), the AI Agent tab, Seller rules
+simulated payments, and checks 56 points: the seller starting on its own, every spec figure, the
+buyer's moves made from the buyer's mailbox (none on the dashboard), the overdue installment (link, the seller
+choosing the date on a busy week, paid and split), the AI Agent tab, Seller rules
 (a refused change, a saved one and restoring the defaults), Availability, the late notification, 375 px
 width on every tab, the rules page and the mailbox, and no JavaScript errors or browser dialogs. It resets
 the scenario first. It needs Playwright for Node (`npm i playwright`).

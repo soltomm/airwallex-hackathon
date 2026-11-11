@@ -190,7 +190,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await shot('3-final');
 
     // 8b. Jump past 8 Feb: the £828 installment is overdue. The seller sends a payment link; the buyer asks for 15 Feb;
-    // on busy dates that is beyond the seller's own 3 days, so the manager decides; then the buyer pays it.
+    // on a busy week the seller may give 3 days, so it decides on 11 Feb itself and says why; then the buyer pays.
     await open('Northstar');
     check('the deal offers a jump past the next installment date', /Next installment: £828 due 8 Feb/.test(await card()));
     await click('#deal [data-act=jumpDue]');
@@ -207,15 +207,16 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     check('the mailbox asks for the £828 installment', /Pay the £828 installment/.test(await mb.innerText('#act')));
     check('the mailbox shows none of the hotel\'s risk', !/demand|resold|busy|cancelled today/i.test(await mb.innerText('body')));
     await mclick(mb, '[data-act=sendSug]');                         // Ask for more time: 15 Feb
-    n = await settle('Northstar', ['extension_review']);
-    await open('Northstar');
-    txt = await card();
-    check('the manager is asked: 7 days on busy dates is beyond the seller', /until 15 Feb to pay £828/.test(txt) && /up to 3 days/.test(txt), txt.slice(0, 600));
-    await shot('6-extension');
-    await click('#deal [data-ap][data-d=approve]');
     n = await settle('Northstar', ['installment_requested']);
-    check('the installment is now due 15 Feb', n.collection.current.due === '2027-02-15');
+    s = await state();
+    check('the seller decides alone: 11 Feb on a busy week, no manager', n.collection.current.due === '2027-02-11'
+          && !s.approvals.some(a => a.subject === 'installment_extension'));
     await mb.reload(); await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
+    check('the buyer is told why: the dates are in high demand', /high demand/.test(await mb.innerText('#thread')) && /11 February/.test(await mb.innerText('#thread')));
+    await open('Northstar');
+    check('the dashboard shows the moved date and the seller\'s reasoning', /11 Feb/.test(await card()) && /Offering Thursday 11 February/.test(
+          (await state()).activity.map(a => a.text).join(' ')));
+    await shot('6-extension');
     const [pay2] = await Promise.all([ctx.waitForEvent('page'), mb.click('button:has-text("Open payment page")')]);
     await pay2.waitForLoadState();
     await pay2.click('text=Pay installment'); await pay2.waitForLoadState();
