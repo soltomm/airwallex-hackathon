@@ -890,9 +890,25 @@ How to work:
 
 
 
+def meeting_room_facts(engine) -> str:
+    """What the hotel's meeting rooms are, from the hotel data, so the seller doesn't offer layouts or equipment the
+    hotel doesn't have (it suggested "boardroom, classroom or theatre" for a room set up for classroom only)."""
+    days = "Mon Tue Wed Thu Fri Sat Sun".split()
+    out = []
+    for room in engine.hotel["meeting_rooms"].values():
+        layouts = ", ".join(f"{lay} (up to {cap})" for lay, cap in room["capacity"].items())
+        open_days = "-".join(days[i] for i in (room["open_weekdays"][0], room["open_weekdays"][-1])) \
+            if room.get("open_weekdays") else "every day"
+        out.append(f"{room['label']}: {layouts}; {room.get('hours', '')} {open_days}; includes "
+                   f"{', '.join(room.get('includes') or []) or 'nothing extra'}; day hire {gbp(room['day_rate'])}.")
+    return ("\nMeeting rooms (the only layouts and equipment the hotel offers; never suggest others): "
+            + " ".join(out) + "\nWhen you ask the buyer questions, write them in the message; the questions list "
+            "repeats them in short form for the buyer's answer form.")
+
+
 def system_prompt(engine) -> str:
     """SYSTEM with the hotel's current rule values (rules.seller_brief), so the prompt matches the engine."""
-    return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario))
+    return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario) + meeting_room_facts(engine))
             .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
             .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
                                  f"{engine.policy['min_days_before_arrival']} days ahead") + "\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff to resolve them.")

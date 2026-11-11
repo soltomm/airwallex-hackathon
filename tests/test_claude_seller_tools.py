@@ -61,3 +61,11 @@ def test_a_malformed_tool_call_goes_back_to_the_model_and_never_reaches_the_engi
     assert first_results[0]["is_error"] and "input.deal_id is required" in first_results[0]["content"]
     second_results = client.requests[2]["messages"][-1]["content"]
     assert not second_results[0].get("is_error") and "GS-1001" in second_results[0]["content"]
+
+
+def test_the_seller_is_told_the_meeting_rooms_real_layouts(eng):
+    """It offered "boardroom, classroom or theatre" for a room set up for classroom only."""
+    from agentbank.groupsales.seller import system_prompt
+    p = system_prompt(eng)
+    assert "Thames Room: classroom (up to 32)" in p and "never suggest others" in p
+    assert "boardroom" not in p.split("Meeting rooms")[1].split("\n")[0]
