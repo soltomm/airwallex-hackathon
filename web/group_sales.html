@@ -67,6 +67,13 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .next.you { border-color: var(--warn); background: var(--warn-soft); } .next.buyer { border-color: var(--buyer); background: var(--buyer-soft); }
 .next.wait { background: var(--sunk); } .next.done { border-color: var(--ok); background: var(--ok-soft); } .next.bad { border-color: var(--bad); background: var(--bad-soft); }
 .next .who { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700; margin-bottom: 4px; }
+.buyer-mailbox-callout { margin-top:14px; padding:14px; border:1px solid var(--accent); border-radius:10px; background:var(--accent-soft); }
+.buyer-mailbox-callout h3 { margin:0 0 6px; font-size:16px; }
+.buyer-mailbox-callout p { margin:0 0 12px; }
+.buyer-mailbox-link { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:12px 18px; border-radius:8px; background:var(--accent); color:var(--on-accent); text-decoration:none; font-weight:700; text-align:center; }
+.buyer-mailbox-link:hover { filter:brightness(1.12); }
+.buyer-mailbox-link:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+@media(max-width:600px) { .buyer-mailbox-callout .buyer-mailbox-link { width:100%; } }
 .next.you .who { color: var(--warn); } .next.buyer .who { color: var(--buyer); } .next.done .who { color: var(--ok); } .next.bad .who { color: var(--bad); }
 .next h3 { margin: 0 0 4px; font-size: 16px; } .next p { margin: 4px 0 10px; }
 .quote { background: var(--panel); border-left: 3px solid var(--buyer); padding: 8px 10px; border-radius: 0 8px 8px 0; margin: 8px 0 10px; white-space: pre-wrap; }
@@ -348,9 +355,21 @@ function lastLine(d) {
   const s = lastStep(d);
   return s ? `<p class="small muted last" style="margin:10px 0 0">Seller's last action, ${hm(s.at)}: <b>${esc(TOOL[s.tool] || s.tool)}</b>${s.ok ? '' : ' (refused)'} · ${esc(tidy(s.summary))} <a href="#" data-tab="agent">AI Agent tab</a></p>` : '';
 }
-function mailLink(d) {
-  return `<div class="row" style="margin-top:4px"><a href="${esc(d.inbox_url)}" target="_blank"><button class="btn-ghost" style="padding-left:0">Open ${esc(contactOf(d))}'s mailbox ↗</button></a><span class="small muted">Demo: reply as the buyer, outside the hotel's dashboard</span></div>`;
+function manualBuyer(d) {
+  return S.runner.settings.buyer_mode !== 'agent' || !d.buyer_profile;
 }
+function mailboxAction(d) {
+  return `<a class="buyer-mailbox-link" href="${esc(d.inbox_url)}" target="_blank" rel="noopener">Open buyer’s mailbox ↗</a>`;
+}
+function buyerMailboxCard(d) {
+  if (!manualBuyer(d) || ['declined','lost'].includes(d.status)) return '';
+  return `<section class="buyer-mailbox-callout" aria-label="Reply as the buyer"><h3>Buyer replies are by you</h3><p>Open ${esc(contactOf(d))}’s mailbox to read the hotel’s messages and send your reply.</p>${mailboxAction(d)}<p class="small" style="margin:8px 0 0">Opens in a new tab. The seller agent picks up your reply automatically.</p></section>`;
+}
+function mailLink(d) {
+  if (manualBuyer(d) && !['declined','lost'].includes(d.status)) return '';
+  return `<div class="row" style="margin-top:12px">${mailboxAction(d)}<span class="small muted">Demo: view or reply as the buyer in a new tab.</span></div>`;
+}
+
 function nextCard(d) {
   const n = nextOf(d), v = curVersion(d);
   let h = `<div class="next ${n.cls}"><div class="who">${esc(n.who)}</div>`;
@@ -489,7 +508,7 @@ function renderDeal(d) {
   const sub = [r.rooms && `${r.rooms} ${r.room_type || ''} rooms`, r.guests && `${r.guests} guests`, r.arrival && r.departure && `${day(r.arrival)}–${day(r.departure)}`,
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
-      <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}</div>
+      <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}${buyerMailboxCard(d)}</div>
     ${nextCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
