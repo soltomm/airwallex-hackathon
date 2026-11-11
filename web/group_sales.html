@@ -67,6 +67,13 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .next.you { border-color: var(--warn); background: var(--warn-soft); } .next.buyer { border-color: var(--buyer); background: var(--buyer-soft); }
 .next.wait { background: var(--sunk); } .next.done { border-color: var(--ok); background: var(--ok-soft); } .next.bad { border-color: var(--bad); background: var(--bad-soft); }
 .next .who { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700; margin-bottom: 4px; }
+.buyer-mailbox-callout { margin-top:14px; padding:14px; border:1px solid var(--accent); border-radius:10px; background:var(--accent-soft); }
+.buyer-mailbox-callout h3 { margin:0 0 6px; font-size:16px; }
+.buyer-mailbox-callout p { margin:0 0 12px; }
+.buyer-mailbox-link { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:12px 18px; border-radius:8px; background:var(--accent); color:var(--on-accent); text-decoration:none; font-weight:700; text-align:center; }
+.buyer-mailbox-link:hover { filter:brightness(1.12); }
+.buyer-mailbox-link:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+@media(max-width:600px) { .buyer-mailbox-callout .buyer-mailbox-link { width:100%; } }
 .next.you .who { color: var(--warn); } .next.buyer .who { color: var(--buyer); } .next.done .who { color: var(--ok); } .next.bad .who { color: var(--bad); }
 .next h3 { margin: 0 0 4px; font-size: 16px; } .next p { margin: 4px 0 10px; }
 .quote { background: var(--panel); border-left: 3px solid var(--buyer); padding: 8px 10px; border-radius: 0 8px 8px 0; margin: 8px 0 10px; white-space: pre-wrap; }
@@ -90,9 +97,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .msg .b { white-space: pre-wrap; padding: 8px 10px; border-radius: 10px; background: var(--sunk); }
 .msg.buyer .b { background: var(--buyer-soft); } .msg.seller .b { background: var(--accent-soft); }
 .msg .b, .quote, dl.kv dd, pre, code { overflow-wrap: anywhere; }
-.msg.old .b { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
-.msg.old.open .b { display: block; }
-.earlier { border: 0; padding: 0; margin: 0 0 12px; } .earlier > summary { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
 .confirm { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 10px; font-size: 13px; }
 .confirm .row { margin-top: 6px; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0; } dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
@@ -242,7 +246,7 @@ const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) 
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 const day = (iso, o) => new Date(iso.slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-GB', {timeZone: 'UTC', day: 'numeric', month: 'short', ...o});
 const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
-let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, convOpen = false, agentOpen = new Set();
+let S = null, sel = store.get('gs.sel'), tab = store.get('gs.tab') || 'conv', scopeAll = false, lastJSON = '', form = null, agentOpen = new Set();
 
 function toast(t) { document.querySelectorAll('.toast').forEach(x => x.remove()); const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
@@ -288,6 +292,7 @@ async function load() {
   if (j === lastJSON || form || typing()) return;   // don't redraw under the presenter's hands
   lastJSON = j;
   render();
+  if(window.Revenue) window.Revenue.route();
 }
 function renderHeader() {
   $('clock').textContent = new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'});
@@ -303,11 +308,11 @@ function render() {
   $('queue').innerHTML = deals.map(d => {
     const v = curVersion(d), n = nextOf(d);
     const hrs = d.reply_by ? Math.round((new Date(d.reply_by) - new Date(S.clock)) / 36e5) : null;
-    return `<div class="q ${d.id === sel ? 'sel' : ''}" data-id="${d.id}"><div class="t"><span>${esc(d.company)}</span>${chip(d.status)}</div>
+    return `<div class="q ${d.id === sel ? 'sel' : ''}" data-id="${d.id}"><div class="t"><span>${esc(d.company)}</span>${d.pricing_review?.status==='pending'?'<span class="chip warn">Revenue review</span>':chip(d.status)}</div>
       <div class="s">${d.ref}${v ? ' · ' + gbp(v.pricing.total) : ''}${hrs != null && hrs > 0 && !d.booking ? ` · reply in ${hrs}h` : ''}</div>
       <div class="w"><span class="chip ${({you: 'warn', buyer: 'buyer', done: 'ok', bad: 'bad'})[n.cls] || ''}">${esc(n.short)}</span></div></div>`;
   }).join('') || '<div class="muted small">No inquiries.</div>';
-  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; convOpen = false; render(); });
+  document.querySelectorAll('.q').forEach(el => el.onclick = () => { sel = el.dataset.id; store.set('gs.sel', sel); form = null; render(); });
   renderDeal(S.deals.find(d => d.id === sel));
   $('avail').innerHTML = availHtml();
   const changed = S.activity.filter(a => a.kind === 'rules_changed').length;
@@ -319,6 +324,7 @@ const SELLER_TURN = ['new', 'intake', 'approved_to_send', 'accepted', 'refund_du
 const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
 function nextOf(d) {
   const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy, v = curVersion(d), co = esc(d.company);
+  if (d.pricing_review?.status==='pending') return {cls:'you',short:d.pricing_review.stale?'Refresh revenue review':'Awaiting revenue review',who:'Pricing decision · Revenue team',pricing:true};
   if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
   if (ap) return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
@@ -353,12 +359,25 @@ function lastLine(d) {
   const s = lastStep(d);
   return s ? `<p class="small muted last" style="margin:10px 0 0">Seller's last action, ${hm(s.at)}: <b>${esc(TOOL[s.tool] || s.tool)}</b>${s.ok ? '' : ' (refused)'} · ${esc(tidy(s.summary))} <a href="#" data-tab="agent">AI Agent tab</a></p>` : '';
 }
-function mailLink(d) {
-  return `<div class="row" style="margin-top:4px"><a href="${esc(d.inbox_url)}" target="_blank"><button class="btn-ghost" style="padding-left:0">Open ${esc(contactOf(d))}'s mailbox ↗</button></a><span class="small muted">Demo: reply as the buyer, outside the hotel's dashboard</span></div>`;
+function manualBuyer(d) {
+  return S.runner.settings.buyer_mode !== 'agent' || !d.buyer_profile;
 }
+function mailboxAction(d) {
+  return `<a class="buyer-mailbox-link" href="${esc(d.inbox_url)}" target="_blank" rel="noopener">Open buyer’s mailbox ↗</a>`;
+}
+function buyerMailboxCard(d) {
+  if (!manualBuyer(d) || ['declined','lost'].includes(d.status)) return '';
+  return `<section class="buyer-mailbox-callout" aria-label="Reply as the buyer"><h3>Buyer replies are by you</h3><p>Open ${esc(contactOf(d))}’s mailbox to read the hotel’s messages and send your reply.</p>${mailboxAction(d)}<p class="small" style="margin:8px 0 0">Opens in a new tab. The seller agent picks up your reply automatically.</p></section>`;
+}
+function mailLink(d) {
+  if (manualBuyer(d) && !['declined','lost'].includes(d.status)) return '';
+  return `<div class="row" style="margin-top:12px">${mailboxAction(d)}<span class="small muted">Demo: view or reply as the buyer in a new tab.</span></div>`;
+}
+
 function nextCard(d) {
   const n = nextOf(d), v = curVersion(d);
   let h = `<div class="next ${n.cls}"><div class="who">${esc(n.who)}</div>`;
+  if(n.pricing) return window.Revenue ? window.Revenue.card(d) : '<p>Loading revenue review…</p>';
   if (n.ap) {
     const a = n.ap;
     const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
@@ -385,6 +404,7 @@ function nextCard(d) {
     if (n.handoff) h += handoffWhy(n.handoff);
     if (n.chkPay) h += `<div class="row"><button data-act="chkPay">Check the payment with Airwallex</button></div>`;
     if (n.mail) h += mailLink(d);
+    if(n.staff && /pric|rate|margin|budget/i.test(d.handoff?.reason||'')) h += `<button data-revenue-request="${esc(d.id)}">Request revenue pricing review</button>`;
     if (n.staff) h += `<label class="small" for="instr" style="display:block;margin-top:10px">Instruction for the seller (optional)</label>
       <textarea id="instr" rows="2" placeholder="For example: quote without the group dinner and explain we can recommend a restaurant nearby."></textarea>
       <div class="row" style="margin-top:8px"><button class="btn-p" data-act="handBack">Hand back to seller</button><button class="btn-ghost" data-act="close">Close inquiry</button></div>
@@ -480,11 +500,11 @@ function payoutCard(d) {
 const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
   if (tab === 'conv') {
-    // Newest first. The latest two messages are shown in full; earlier ones are folded away.
-    const msg = (m, old) => `<div class="msg ${m.from}${old ? ' old' : ''}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
-    const all = d.thread.slice().reverse(), recent = all.slice(0, 2), older = all.slice(2);
-    return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>` + recent.map(m => msg(m)).join('')
-      + (older.length ? `<details class="earlier" id="earlier"${convOpen ? ' open' : ''}><summary>${older.length} earlier message${older.length === 1 ? '' : 's'}</summary>${older.map(m => msg(m, true)).join('')}</details>` : '');
+    // Keep every message readable in full, newest first.
+    const msg = m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Harbour House'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
+    const all = d.thread.slice().reverse();
+    return `<p class="small muted" style="margin:0 0 10px">Newest first · ${all.length} message${all.length === 1 ? '' : 's'}</p>`
+      + all.map(msg).join('');
   }
   if (tab === 'act') return activityHtml(d);
   if (tab === 'agent') return agentHtml(d);
@@ -520,8 +540,8 @@ function renderDeal(d) {
   const r = d.requirements || {};
   const sub = [r.rooms && `${r.rooms} ${r.room_type || ''} rooms`, r.guests && `${r.guests} guests`, r.arrival && r.departure && `${day(r.arrival)}–${day(r.departure)}`,
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
-  $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
-      <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}</div>
+  $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${d.pricing_review?.status==='pending'?'<span class="chip warn">Revenue review</span>':chip(d.status)}</div>
+      <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}${buyerMailboxCard(d)}</div>
     ${nextCard(d)}${negotiationCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
@@ -531,9 +551,7 @@ function renderDeal(d) {
 function wire(d) {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = e => { e.preventDefault(); tab = b.dataset.tab; store.set('gs.tab', tab); renderDeal(d); });
   document.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => { scopeAll = b.dataset.scope === 'all'; renderDeal(d); });
-  if ($('earlier')) $('earlier').ontoggle = e => { convOpen = e.target.open; };
   document.querySelectorAll('details.ag').forEach(x => x.ontoggle = () => { x.open ? agentOpen.add(x.dataset.k) : agentOpen.delete(x.dataset.k); });
-  document.querySelectorAll('.msg.old .b').forEach(b => b.onclick = () => b.parentElement.classList.toggle('open'));
   document.querySelectorAll('#deal [data-ap]').forEach(b => b.onclick = () => decide(b));
   document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -558,6 +576,7 @@ async function decide(b) {
 const EVENT = {
   intake: 'Inquiry received', email: 'Email received', duplicate: 'Duplicate email ignored', requirements: 'Requirements recorded',
   records: 'Hotel systems checked', clarification: 'Questions sent to the buyer', dates_offered: 'Other dates offered',
+  pricing_review_requested:'Revenue pricing review requested', pricing_review_approved:'Revenue pricing approved', pricing_review_rejected:'Revenue pricing declined',
   handed_back: 'Handed back to the seller', closed: 'Inquiry closed', reasoning: 'Seller note',
   offer_drafted: 'Offer drafted', offer_sent: 'Offer sent', hold: 'Rooms held', hold_released: 'Hold released', hold_expiry: 'Hold expired, payment unclear',
   expired: 'Offer expired', lapsed: 'Buyer told the offer lapsed', approval_requested: 'Approval requested', approval_approved: 'Approved',
@@ -595,7 +614,7 @@ const TOOL = {
   suggest_dates: 'Checked other dates', offer_dates: 'Offered other dates',
   price_terms: 'Priced terms (dry run)', propose_offer: 'Proposed an offer', send_offer: 'Sent an offer', open_checkout: 'Opened checkout',
   check_payment: 'Checked the payment', prepare_reduction: 'Prepared a change', send_amendment: 'Sent a change', refund_excess: 'Started a refund',
-  check_refund: 'Checked the refund', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',
+  request_pricing_review:'Requested revenue pricing review', check_refund: 'Checked the refund', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',
   read_deal: 'Read the deal', list_queue: 'Looked at the queue'};
 const AG_READS = new Set(['read_deal', 'list_queue']);
 const ARG = {req: 'Requirements', rate: 'Rate', deposit_pct: 'Deposit %', attrition_pct: 'Attrition %', rooms_per_night: 'Rooms a night', room_type: 'Room type',
@@ -810,13 +829,13 @@ $('reset').onclick = () => askReset(true);
 $('resetNo').onclick = () => askReset(false);
 $('resetYes').onclick = async () => {
   $('resetYes').disabled = true;
-  try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; convOpen = false; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
+  try { await api('/api/reset', {}); sel = null; tab = 'conv'; form = null; lastJSON = ''; toast('Scenario reset'); askReset(false); load(); }
   catch (e) {} finally { $('resetYes').disabled = false; }
 };
 $('liveDrawerBody').appendChild($('desk'));
 window.Harbour = {
   state: () => S,
-  open: id => { sel = id; form = null; convOpen = false; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
+  open: id => { sel = id; form = null; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
   next: d => nextOf(d),
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
@@ -860,6 +879,7 @@ showView(); load(); setInterval(load, 1500);
 </script>
 <script src="/assets/fx.js"></script>
 <script src="/assets/vendors.js"></script>
+<script src="/assets/revenue.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>
 </html>

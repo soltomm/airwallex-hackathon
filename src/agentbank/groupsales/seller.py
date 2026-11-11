@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from decimal import Decimal
 from datetime import date, timedelta
 
@@ -595,12 +596,8 @@ class RulesSeller:
             unmet.append(f"{n_rooms} {t['room_type']} rooms sleep up to {n_rooms * cap} of your {guests} guests")
         short = _margin_short(p)
         if short:
-            e.escalate(deal_id, "even the target rate is below the margin floor on these dates (" + "; ".join(short)
-                       + "): a revenue manager should decide whether to quote above target or decline",
-                       why="The margin floor is a hard limit nobody can approve, and quoting above the buyer's target "
-                           "is a commercial call, not the seller's.",
-                       todo="Quote above the target, change the dates, or decline.")
-            return f"{d['ref']}: handed off (margin on these dates)"
+            e.request_pricing_review(deal_id, 'Target pricing breaches the hard margin floor: ' + '; '.join(short))
+            return f"{d['ref']}: awaiting revenue pricing review (hard limit; choose a higher price or alternative scope)"
         pr = p["pricing"]
         target = req.get("target_per_room_night")
         if _gbp_budget(req) and pr["total"] > _gbp_budget(req):
@@ -635,7 +632,10 @@ class RulesSeller:
         rate = t["rate"]
         bands = e.rms["rates"][t["room_type"]]
         if ask.get("rate"):
-            rate = max(int(ask["rate"]), bands["autonomous_floor"])
+            if bands['absolute_min'] <= int(ask['rate']) < bands['autonomous_floor']:
+                e.request_pricing_review(deal_id, 'Buyer requested a rate below the agent’s negotiating authority.', requested_rate=int(ask['rate']))
+                return f"{d['ref']}: awaiting revenue pricing review"
+            rate = max(int(ask['rate']),bands['autonomous_floor'])
         why = []
         if att > e.policy["attrition"]["standard_pct"]:
             dep = e.policy["deposit"]["required_pct_for_exceptions"]
@@ -852,6 +852,7 @@ How to work:
 - Services the hotel does not offer (anything beyond twin/king rooms, breakfast and the Thames Room):
   escalate to a person with a clear reason. If hotel staff later hand the deal back telling you to
   quote without that service, record_requirements with unsupported set to [] and quote the rest.
+- For pricing deadlocks, use request_pricing_review instead of a generic escalation. Revenue staff must decide; do not call this to override hard price or margin limits.
 - If read_deal shows a staff_instruction, hotel staff handed the deal back to you: act on it with your
   tools, within the hotel's rules, and reply to the buyer.
 - Price with price_terms before you commit. When the buyer asks for different terms, price their ask as
@@ -865,8 +866,8 @@ How to work:
   change them, and these are the current values):
 {RULES}
 - Negotiate in trades, not concessions: e.g. more attrition in exchange for a higher deposit. Keep the
-  rate where you can. You never ask the manager for approval yourself: the engine does, and only when
-  a term crosses one of the rules above (it names the rule on the manager's card). Anything within
+  rate where you can. Normal offer exceptions are requested by propose_offer when a term crosses
+  a rule above. Pricing deadlocks use request_pricing_review and wait for revenue staff. Anything within
   your authority goes straight to the buyer. When a version does need approval, give a concise
   justification; the engine pauses until the manager decides. After approval, send_offer.
 - escalate hands a deal to a person when you can't take it further within the rules. Say which rule
@@ -899,9 +900,25 @@ How to work:
 
 
 
+def meeting_room_facts(engine) -> str:
+    """What the hotel's meeting rooms are, from the hotel data, so the seller doesn't offer layouts or equipment the
+    hotel doesn't have (it suggested "boardroom, classroom or theatre" for a room set up for classroom only)."""
+    days = "Mon Tue Wed Thu Fri Sat Sun".split()
+    out = []
+    for room in engine.hotel["meeting_rooms"].values():
+        layouts = ", ".join(f"{lay} (up to {cap})" for lay, cap in room["capacity"].items())
+        open_days = "-".join(days[i] for i in (room["open_weekdays"][0], room["open_weekdays"][-1])) \
+            if room.get("open_weekdays") else "every day"
+        out.append(f"{room['label']}: {layouts}; {room.get('hours', '')} {open_days}; includes "
+                   f"{', '.join(room.get('includes') or []) or 'nothing extra'}; day hire {gbp(room['day_rate'])}.")
+    return ("\nMeeting rooms (the only layouts and equipment the hotel offers; never suggest others): "
+            + " ".join(out) + "\nWhen you ask the buyer questions, write them in the message; the questions list "
+            "repeats them in short form for the buyer's answer form.")
+
+
 def system_prompt(engine) -> str:
     """SYSTEM with the hotel's current rule values (rules.seller_brief), so the prompt matches the engine."""
-    return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario))
+    return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario) + meeting_room_facts(engine))
             .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
             .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
                                  f"{engine.policy['min_days_before_arrival']} days ahead") + "\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff to resolve them.")
@@ -913,9 +930,47 @@ _S = {"type": "string"}
 
 
 def _tool(name, desc, props, required=None):
-    return {"name": name, "description": desc, "strict": True,
+    # Not "strict": the API compiles strict tool schemas into one grammar, and with all of these tools strict it
+    # rejected every request ("The compiled grammar is too large"), so the Claude seller never ran on the live demo.
+    # The same guarantee is kept in code instead: every call is checked against its schema (schema_errors) before it
+    # runs, and the engine checks every value as before.
+    return {"name": name, "description": desc,
             "input_schema": {"type": "object", "properties": props, "required": required if required is not None else list(props),
                              "additionalProperties": False}}
+
+
+_JSON_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "object": dict, "array": list,
+               "null": type(None)}
+
+
+def schema_errors(value, schema: dict, path: str = "input") -> list[str]:
+    """Where `value` doesn't match `schema`, for the keywords these tool schemas use (type, enum, anyOf, properties,
+    required, additionalProperties, items). An empty list means it matches."""
+    if "anyOf" in schema:
+        options = [schema_errors(value, opt, path) for opt in schema["anyOf"]]
+        return [] if any(not o for o in options) else [f"{path} matches none of the allowed forms"]
+    errs: list[str] = []
+    types = schema.get("type")
+    if types is not None:
+        names = types if isinstance(types, list) else [types]
+        ok = any(isinstance(value, _JSON_TYPES[t]) and not (t in ("integer", "number") and isinstance(value, bool))
+                 for t in names)
+        if not ok:
+            return [f"{path} should be {' or '.join(names)}, not {type(value).__name__}"]
+    if "enum" in schema and value not in schema["enum"]:
+        errs.append(f"{path} should be one of {schema['enum']}")
+    if isinstance(value, dict) and "properties" in schema:
+        props = schema["properties"]
+        errs += [f"{path}.{k} is required" for k in schema.get("required", []) if k not in value]
+        if schema.get("additionalProperties") is False:
+            errs += [f"{path}.{k} is not a known field" for k in value if k not in props]
+        for k, v in value.items():
+            if k in props:
+                errs += schema_errors(v, props[k], f"{path}.{k}")
+    if isinstance(value, list) and "items" in schema:
+        for i, v in enumerate(value):
+            errs += schema_errors(v, schema["items"], f"{path}[{i}]")
+    return errs
 
 
 _DEAL = {"deal_id": {"type": "string", "description": "deal id or ref, e.g. GS-1001"}}
@@ -978,6 +1033,7 @@ TOOLS = [
     _tool("refund_excess", "Refund what the buyer is owed after an accepted reduction (asks the hotel manager above the seller's refund limit).", {
         **_DEAL, "justification": _S}),
     _tool("check_refund", "Retrieve the status of refunds already created for this deal.", _DEAL),
+    _tool("request_pricing_review", "Pause pricing negotiation and route an internal revenue review when the buyer's requested rate/budget exceeds your authority or a price breaches margin limits. Never approve it yourself.", {**_DEAL, 'reason': _S, 'requested_rate': {'type':['integer','null'],'description':'Buyer-requested room rate in GBP pence; null if only a package budget is stated.'}}),
     _tool("escalate", "Hand the deal to a person when you can't take it further within the hotel's rules. Not a "
           "way to ask for approval: the engine asks the manager itself when a term needs it.", {
         **_DEAL, "reason": _S, "message_to_buyer": _S,
@@ -1033,6 +1089,8 @@ class ClaudeSeller:
             else:
                 r.pop("target_per_room_night_gbp", None)
             return e.record_requirements(did, r)
+        if name == 'request_pricing_review':
+            return e.request_pricing_review(did,a.get('reason',''),a.get('requested_rate'))
         if name == "check_systems":
             return e.check_systems(did)
         if name == "ask_buyer":
@@ -1104,6 +1162,9 @@ class ClaudeSeller:
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default")
             except anthropic.APIStatusError as err:
                 raw.note(None, f"Seller model call failed ({err.status_code}: {str(err.message)[:200]}); falling back to rules for this run.")
+                # Also in the server logs (Render): the activity note alone let this go unnoticed on the live demo.
+                print(f"Claude seller call failed ({err.status_code}): {str(err.message)[:300]}; the rules seller "
+                      "answers this run", file=sys.stderr, flush=True)
                 return out + RulesSeller(raw).run(trigger="Claude seller unavailable: " + trigger)
             if resp.stop_reason == "refusal":
                 raw.note(None, "Seller model declined this turn; nothing was changed.")
@@ -1120,6 +1181,14 @@ class ClaudeSeller:
             for b in uses:
                 calls += 1
                 try:
+                    tool = next((t for t in TOOLS if t["name"] == b.name), None)
+                    bad = (schema_errors(b.input, tool["input_schema"]) if tool else [f"unknown tool {b.name}"])
+                    if bad:
+                        # The tools aren't strict (see _tool): a call that doesn't match its schema goes back to the
+                        # model to correct, and never reaches the engine.
+                        results.append({"type": "tool_result", "tool_use_id": b.id, "is_error": True,
+                                        "content": "Invalid arguments: " + "; ".join(bad[:10])})
+                        continue
                     res = self._do(b.name, b.input)
                     results.append({"type": "tool_result", "tool_use_id": b.id,
                                     "content": json.dumps(res, default=str)[:12000]})
