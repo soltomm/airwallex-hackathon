@@ -103,11 +103,12 @@ a reset and steps 1-2, to show the seller change its mind on money when new evid
   Only 2 are free beside Northstar's held block, so the seller offers it other dates (13-16 or 14-17
   March) and the 2 rooms on its own dates.
 - 3'. In Maya's mailbox, **Send counteroffer** (20% attrition, 25% deposit), the same ask as step 3.
-  This time the seller doesn't trade: it keeps **10% attrition and a 30% deposit (£2,880)** and tells
-  Maya another group has asked for the same nights (never naming it). There is nothing to approve.
+  This time the seller doesn't trade: it keeps v1 open (**10% attrition, 30% deposit, £2,880**, same
+  hold) and tells Maya another group has asked for the same nights (never naming it). There is nothing
+  to approve; Maya can still accept v1.
   Northstar's **Activity** tab says why: *Decision changed by competing demand: Lumen Health wants these
   nights and can't fit beside this block. Without it I would trade 20% attrition for a 40% deposit
-  (margin 43.1% with the full release used); with it ... the margin falls to 39.7%, below the 40% floor.*
+  (margin 43.1% with the full release used); with it ... the margin falls below the 40% floor.*
   **Records checked** lists the waiting group under Competing demand.
 - If Lumen Health takes other dates first (**Take 13 to 16 March** in its mailbox), nothing competes
   for the nights any more and the same counter gets the 20% / 40% trade again.
@@ -118,7 +119,10 @@ send one.
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
 
-Other things to show: **＋ New inquiry → Write your own** with dates the hotel can't sell (for example 11–14 May).
+Other things to show: **＋ New inquiry → Busy dates** (any seed): dates in the busy season with rooms
+still free. The seller quotes above the usual target (the RMS record and the version card say by how much
+and why), and when the buyer asks for 20% attrition it keeps its offer open instead of trading, with
+nothing for the manager. **＋ New inquiry → Write your own** with dates the hotel can't sell (for example 11–14 May).
 The seller doesn't hand it off: it replies that those dates aren't available and offers dates that
 are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 March 2027** (or type a
 reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
@@ -196,18 +200,26 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
   release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
   displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
-  demand times that night's demand: the share of the group allocation other business has already
-  taken, read from the same calendar the availability page shows (`hotel.background_demand`), so
-  sold-out nights count 100% and quiet ones little. The demo stay's allocation is set by hand, so
-  `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
-  sold out). Rooms released before the cutoff are counted 50% resold. **Competing demand:** when another
+  demand times that night's **forecast** demand: the share of the group allocation other business has
+  already taken (the availability calendar, `hotel.background_demand`) plus the share of the rest the
+  RMS expects to sell before arrival (`forecast_pickup_by_month`), so a busy night can still have rooms
+  free; sold-out nights count 100%. The demo stay's allocation is set by hand, so
+  `rms.displacement.demand_by_night_pct` states its forecast: a busy week (the nights before it are
+  sold out). **Busy-night rates** (`rms.busy_night_pricing`): when the forecast is so high that the
+  target rate can't keep the 40% margin on standard terms, the stay's target becomes the lowest
+  whole-pound rate that does, and the seller's floor and the absolute minimum rise by the same amount
+  (`calc.rate_bands`; the price includes the package, so breakfast and the meeting room count). On those
+  dates every concession on rate or free release breaks the floor, so the seller holds its terms.
+  Quiet dates keep the usual rates; the demo stay is not busy enough to raise them, so £220 stands. Rooms released before the cutoff are counted 50% resold. **Competing demand:** when another
   open inquiry (no hold, no booking, dates the hotel sells) wants the same room type on the same nights
   and what is left beside this block doesn't cover it, the rooms it would lose count at the full value
   (£80 / £60) instead of that night's demand; releases still come back at 50%, since they come weeks
   later, after the waiting group has gone elsewhere. The demand found is stored on the version, it
   changes the margin only (never the price), and buyers never see it (`engine.competing_demand`). On the demo dates (80% / 80% / 64%)
   the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
-  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide. Every approval names each rule it
+  quiet January weekend the whole manager band down to £195 passes. When the seller can't concede, what it
+  can offer is often the offer already sent: it keeps that offer open (`offer_stands`, same hold and
+  expiry) instead of sending a copy. Only the named approver can decide. Every approval names each rule it
   crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
   rejecting each do, and the card shows exactly that. The engine refuses a manager request that names no
   crossed rule, so the manager is only asked when a seller rule is broken. A hand-off to a person is not
@@ -383,7 +395,7 @@ RFP email plus a private brief for the buyer agent (its answers, goals, limits a
 generator only writes the inbound: the seller agent, the buyer agent and the engine handle everything after
 it, and the seller never sees the brief.
 
-An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`, `compete`), `price`
+An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`, `compete`), `demand` (`any`, `quiet`, `busy`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
 (`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
 
@@ -394,6 +406,7 @@ An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_s
 | `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
 | `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
+| `busy_dates` | dates forecast busy with rooms free: quoted above the usual target, 20% attrition refused, v1 kept open and accepted, paid |
 | `competing_group` | needs an open twin offer (Northstar's v1): asks for its nights, can't fit, offered other dates; the held group is then refused extra free release (`tests/test_competing_demand.py`) |
 
 The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the

@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from .bookable import window_text
+from . import calc
 from .calc import d, gbp
 
 LAYOUTS_ON_FILE = {"classroom"}
@@ -31,7 +32,13 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     rt = terms.get("room_type")
     if rt not in rms["rates"]:
         return {"hard": [f"unknown room type {rt!r}"], "approvals": [], "rules": [], "ok": False}
-    bands = rms["rates"][rt]
+    # The stay's rates: the RMS bands, raised on busy nights (calc.rate_bands), with the competing demand the
+    # engine priced the terms with.
+    bands = calc.rate_bands(terms, hotel, rms, policy, (pricing.get("displacement") or {}).get("firm"))
+    if bands["uplift"] is None:
+        hard.append(f"no {rt} rate keeps the {rms['min_contribution_margin_pct']}% margin on these dates with these "
+                    "services")
+        return {"hard": hard, "approvals": needs, "rules": rules, "ok": False, "bands": bands}
     rate, dep, att = int(terms["rate"]), int(terms["deposit_pct"]), int(terms["attrition_pct"])
     dep_pol, att_pol = policy["deposit"], policy["attrition"]
 
@@ -50,7 +57,8 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
         hard.append(f"{rt} rate {gbp(rate)} is below the absolute minimum {gbp(bands['absolute_min'])}")
     exception_terms = False
     if rate < bands["autonomous_floor"]:
-        needs.append(f"{rt} rate {gbp(rate)} below the seller's floor {gbp(bands['autonomous_floor'])}")
+        needs.append(f"{rt} rate {gbp(rate)} below the seller's floor {gbp(bands['autonomous_floor'])}"
+                     + (" (raised for busy dates)" if bands["uplift"] else ""))
         rules.append(rule(f"{rt.capitalize()} rate", f"{gbp(bands['autonomous_floor'])} or more", gbp(rate)))
         exception_terms = True
     if att > att_pol["max_pct_with_approval"]:
@@ -93,4 +101,4 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     for case, label in (("margin_all_rooms", "all rooms used"), ("margin_full_release", "full allowance released")):
         if pricing[case]["margin_pct"] < floor:
             hard.append(f"contribution margin {pricing[case]['margin_pct']}% with {label} is below {floor}%")
-    return {"hard": hard, "approvals": needs, "rules": rules, "ok": not hard}
+    return {"hard": hard, "approvals": needs, "rules": rules, "ok": not hard, "bands": bands}

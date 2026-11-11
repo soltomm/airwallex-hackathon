@@ -15,7 +15,9 @@
                    "7": 0.6, "8": 0.45, "9": 0.65, "10": 0.6, "11": 0.45, "12": 0.35},
       "by_weekday": [0.05, 0.15, 0.15, 0.1, 0.0, -0.1, -0.15],
       "noise": 0.2,
-      "sold_out_spans": [6, 2, 4]
+      "sold_out_spans": [6, 2, 4],
+      "forecast_pickup_by_month": {"1": 0.1, "2": 0.2, "3": 0.35, "4": 0.45, "5": 0.55, "6": 0.65, "7": 0.55, "8": 0.4, "9": 0.65, "10": 0.6, "11": 0.4, "12": 0.3},
+      "_forecast_note": "The RMS forecast for a night: rooms other business has taken, plus this share of the rest expected to sell before arrival. Displacement uses the forecast, so a night can be busy while rooms are still free."
     },
     "availability_by_night": {
       "2027-03-10": {"twin": 14, "king": 16},
@@ -46,12 +48,14 @@
     },
     "delivery_costs": {"twin": 7000, "king": 6000, "breakfast": 600, "meeting_day": 18000},
     "displacement": {
-      "_note": "Opportunity cost of blocking a room for a group: the contribution another guest would have paid, times that night's demand. Demand is the share of the group allocation other business has already taken (hotel.background_demand, the same calendar the availability page shows), except nights listed in demand_by_night_pct. Released rooms are partly resold.",
+      "_note": "Opportunity cost of blocking a room for a group: the contribution another guest would have paid, times that night's forecast demand (hotel.background_demand: rooms other business has taken plus the pickup expected before arrival), except nights listed in demand_by_night_pct, where the RMS states the forecast. Released rooms are partly resold.",
       "full_demand": {"twin": 8000, "king": 6000},
       "demand_by_night_pct": {"2027-03-10": 80, "2027-03-11": 80, "2027-03-12": 64},
       "resale_pct": 50
     },
-    "min_contribution_margin_pct": 40
+    "min_contribution_margin_pct": 40,
+    "busy_night_pricing": true,
+    "_busy_night_pricing_note": "When displacement on the stay's nights is so high that the target rate can't keep the minimum margin on standard terms, the group target becomes the lowest whole-pound rate that does, and the seller's floor and the absolute minimum rise by the same amount."
   },
   "policy": {
     "deposit": {"standard_pct": 30, "max_pct": 40, "min_pct_with_approval": 20, "required_pct_for_exceptions": 40},

@@ -75,19 +75,20 @@ def test_a_competing_group_makes_the_seller_hold_the_standard_release(eng):
     assert c["status"] == "dates_proposed"     # it can't fit: the seller offers it other dates
     buyer_turn(eng, "Northstar")               # the same counter as above
     s.run()
+    # It doesn't trade: v1 (10% attrition, 30% deposit) stays open, same hold, nothing for the manager.
     v = n["versions"][-1]
-    assert (v["terms"]["attrition_pct"], v["terms"]["deposit_pct"], v["status"]) == (10, 30, "sent")
-    assert (v["pricing"]["total"], v["pricing"]["deposit"]) == (960000, 288000)
-    assert not pending(eng, n["id"])           # nothing for the manager: the seller stayed within its authority
-    firm = v["pricing"]["displacement"]["firm"]
-    assert firm["rooms"] == {night: 5 for night in MARCH} and firm["groups"][0]["ref"] == c["ref"]
+    assert len(n["versions"]) == 1 and (v["terms"]["attrition_pct"], v["terms"]["deposit_pct"]) == (10, 30)
+    assert v["status"] == "sent" and (v["pricing"]["total"], v["pricing"]["deposit"]) == (960000, 288000)
+    assert not pending(eng, n["id"])
     notes = [a["text"] for a in eng.s["activity"] if a["deal_id"] == n["id"] and a["kind"] == "reasoning"]
-    assert any(t.startswith("Decision changed by competing demand") and "43.1%" in t for t in notes)
+    assert any(t.startswith("Decision changed by competing demand") and "43.1%" in t and "20% attrition" in t
+               for t in notes)
     rec = next(r for r in n["records"] if r["system"] == "Competing demand")
     assert c["ref"] in rec["summary"]
     reply = n["thread"][-1]["text"]
-    assert "another group has asked for the same nights" in reply.lower()
+    assert "another group has asked for the same nights" in reply.lower() and "stays open" in reply
     assert c["company"] not in reply and c["ref"] not in reply
+    assert buyer_turn(eng, "Northstar")["accepted"] is True      # v1 can be accepted as it stands
 
 
 def test_when_the_competitor_takes_other_dates_the_trade_comes_back(eng):

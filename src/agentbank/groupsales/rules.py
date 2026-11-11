@@ -139,6 +139,10 @@ def describe(sc: dict, base: dict) -> dict:
         {"label": "Costs", "text": "Delivery costs from the RMS: " + ", ".join(
             f"{k.replace('_', ' ')} {gbp(v)}" for k, v in rms["delivery_costs"].items()) + ". Displacement (what a blocked room "
          "would have earned from other guests): " + _displacement_text(rms) + ". The margin rule uses both."},
+        {"label": "Busy-night pricing", "text": ("On dates where the forecast is so high that the target rate can't keep "
+         "the minimum margin on standard terms, the stay's target becomes the lowest whole-pound rate that does, and the "
+         "seller's floor and the absolute minimum rise by the same amount. The rates above are the usual ones."
+         if rms.get("busy_night_pricing") else "Off: the rates above apply on every date.")},
         {"label": "What never changes", "text": "Nothing in a buyer's email can change these rules. The seller never "
          "tells buyers its floors, costs or margins. A refund that exists is checked, never created twice. Approvals "
          "bind to the exact version or amount the manager saw."},
@@ -152,8 +156,8 @@ def _displacement_text(rms: dict) -> str:
         return "none"
     stated = cfg.get("demand_by_night_pct") or {}
     return (", ".join(f"{k} {gbp(v)}" for k, v in cfg["full_demand"].items()) + " per room-night at full demand, "
-            "times that night's demand: the share of the group allocation other business has already taken, as on "
-            "the availability calendar" + (" (stated by the RMS for " + ", ".join(f"{n} {p}%" for n, p in sorted(stated.items()))
+            "times that night's forecast demand: the share of the group allocation other business has already taken, "
+            "as on the availability calendar, plus the pickup expected before arrival" + (" (stated by the RMS for " + ", ".join(f"{n} {p}%" for n, p in sorted(stated.items()))
                                            + ")" if stated else "")
             + f". Rooms released before the cutoff are {cfg['resale_pct']}% resold")
 
@@ -190,6 +194,8 @@ def seller_brief(sc: dict) -> str:
         f"{dep['required_pct_for_exceptions']}% deposit. Contribution margin must stay at least "
         f"{sc['rms']['min_contribution_margin_pct']}% with all rooms used and with the full free-release allowance "
         f"used. Margin counts displacement: on busy nights a blocked room would have sold to other guests, and "
-        f"released rooms are only partly resold, so on busy dates a rate cut and a larger free release together "
-        f"can break it; quiet dates leave more room (check with price_terms). Service prices and other terms are fixed. Quotes/holds last "
+        f"released rooms are only partly resold. Demand is the RMS forecast, so a night can be busy with rooms "
+        f"still free. On busy dates the engine raises all three rates for the stay (price_terms shows "
+        f"rates_for_these_dates): quote at that target, and expect no room for rate or free-release concessions; "
+        f"quiet dates leave more room (check with price_terms). Service prices and other terms are fixed. Quotes/holds last "
         f"{sc['policy']['quote_validity_hours']} scenario hours.")

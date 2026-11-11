@@ -30,7 +30,7 @@ PRESETS: dict[str, dict] = {
     "dates_short_haggle": {"availability": "too_soon", "price": "below_floor"},
     # The full money story: attrition traded for a bigger deposit (manager approval), payment, then fewer
     # rooms and a partial refund.
-    "full_lifecycle": {"room_type": "twin", "attrition": 20, "meeting": True, "change_rooms": 2},
+    "full_lifecycle": {"room_type": "twin", "attrition": 20, "meeting": True, "change_rooms": 2, "demand": "quiet"},
     # A payer abroad: the deposit's currency side, then a smaller block and a refund.
     "payer_abroad": {"payer_country": "DE", "change_rooms": 1},
     # The RFP leaves out who pays and whether the budget includes taxes: the seller has to ask.
@@ -38,6 +38,9 @@ PRESETS: dict[str, dict] = {
     # A second group wants the nights an open twin offer is holding (in the demo, Northstar's) and can't fit
     # beside it. The seller offers it other dates, and its demand changes what the first group is offered.
     "competing_group": {"availability": "compete", "room_type": "twin"},
+    # Dates the RMS forecasts busy: the seller quotes above the usual target and can't trade free release for
+    # deposit, because every blocked room would likely have sold to other guests.
+    "busy_dates": {"room_type": "twin", "demand": "busy", "attrition": 20},
 }
 
 # What each preset shows, for the dashboard's New inquiry drawer.
@@ -57,6 +60,10 @@ PRESET_INFO: dict[str, dict] = {
                         "shows": "Send after Northstar's first offer. Another group wants the same nights and can't "
                                  "fit: the seller offers it other dates, and then won't trade Northstar 20% attrition, "
                                  "because every room the block blocks now has a buyer waiting."},
+    "busy_dates": {"title": "Busy dates",
+                   "shows": "Dates the hotel forecasts busy, with rooms still free. The seller quotes above the usual "
+                            "target and won't trade 20% attrition for a bigger deposit: a blocked room would likely "
+                            "have sold to other guests."},
     "missing_details": {"title": "Missing details",
                         "shows": "The RFP leaves out who pays and whether the budget includes taxes: the seller asks, "
                                  "the buyer answers from its brief."},
@@ -70,10 +77,14 @@ TRAITS: dict[str, tuple] = {
     "availability": ("fits", "short_rooms", "too_soon", "compete"),
     "price": ("comfortable", "tight", "below_floor"),
     "missing": ("payer", "taxes", "layout"),
+    # any: wherever the rooms fit. quiet: dates where the usual rates apply. busy: dates the RMS forecasts busy,
+    # so the stay's rates are raised (calc.rate_bands).
+    "demand": ("any", "quiet", "busy"),
 }
 DEFAULTS = {"room_type": None, "rooms": None, "nights": None, "availability": "fits", "price": "comfortable",
             "attrition": None, "meeting": False, "breakfast": True, "missing": [],
-            "payer_country": None, "payer_currency": None, "change_rooms": 0, "change_after_hours": 168}
+            "payer_country": None, "payer_currency": None, "change_rooms": 0, "change_after_hours": 168,
+            "demand": "any"}
 
 # Company suffixes the extractor recognises as a legal payer.
 SUFFIX = {"GB": "Ltd", "DE": "GmbH", "US": "Inc", "AU": "Pty Ltd", "SG": "Pte Ltd", "IE": "Ltd", "NL": "Ltd",
@@ -95,7 +106,7 @@ def resolve(traits: dict | None = None, preset: str | None = None) -> dict:
     unknown = set(t) - set(DEFAULTS)
     if unknown:
         raise Refused(f"unknown traits: {', '.join(sorted(unknown))}")
-    for k in ("availability", "price"):
+    for k in ("availability", "price", "demand"):
         if t[k] not in TRAITS[k]:
             raise Refused(f"{k} must be one of {', '.join(TRAITS[k])}")
     if t["room_type"] is not None and t["room_type"] not in TRAITS["room_type"]:
@@ -159,11 +170,11 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
     else:
         if not t["rooms"]:
             # Ask for no more rooms than some window in the live calendar has free (bookings already hold some).
-            most = _most_free(engine, rt, nights_n, lead_min, t["meeting"])
+            most = _most_free(engine, rt, nights_n, lead_min, t["meeting"], t["demand"], t["breakfast"])
             if most < lo:
                 raise Refused(f"no {nights_n}-night stay with {lo} {rt} rooms free in the next months; try fewer rooms")
         rooms = t["rooms"] or rng.randint(lo, min(room_cap, lo + 6, most))
-        arrival = _fitting_window(engine, rng, rt, nights_n, rooms, lead_min, t["meeting"])
+        arrival = _fitting_window(engine, rng, rt, nights_n, rooms, lead_min, t["meeting"], t["demand"], t["breakfast"])
     nights = stay_nights(arrival, _plus(arrival, nights_n))
     departure = _plus(arrival, nights_n)
     if t["change_rooms"] and t["change_rooms"] >= rooms:
@@ -177,9 +188,14 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
             raise Refused("no free meeting-room day in that stay; try another seed")
         meeting = {"room": "thames", "date": day, "layout": rng.choice(sorted(LAYOUTS_ON_FILE)), "attendees": guests}
 
-    # Price pressure, from the hotel's own rate bands for this room type.
-    bands = engine.rms["rates"][rt]
+    # Price pressure, from the hotel's rate bands for this stay (raised on busy dates, calc.rate_bands).
     bf_unit = engine.hotel["breakfast"]["price_per_person"]
+    bands = calc.rate_bands({"room_type": rt, "rate": engine.rms["rates"][rt]["target"], "rooms": {n: rooms for n in nights},
+                             "released": {n: 0 for n in nights}, "meeting": meeting, "attrition_pct": 0, "deposit_pct": 0,
+                             "breakfast": {_plus(n, 1): guests for n in nights} if t["breakfast"] else {},
+                             "currency": "GBP"}, engine.hotel, engine.rms, engine.policy)
+    if bands["uplift"] is None:
+        raise Refused("no rate keeps the hotel's margin on those dates; try another seed")
     target_rate = None
     if t["price"] == "tight":
         target_rate = bands["autonomous_floor"]
@@ -285,30 +301,52 @@ def _email(first, guests, rooms, rt, arrival, departure, t, meeting, per_night, 
     return " ".join(parts)
 
 
+def _demand_ok(engine: Engine, rt: str, nights: list[str], rooms: int, demand: str, breakfast: bool) -> bool:
+    """Whether a stay matches the demand trait: busy when the stay's rates are raised for these dates
+    (calc.rate_bands, on a standard package), quiet when they aren't and the forecast leaves room to negotiate."""
+    if demand == "any":
+        return True
+    occ = engine.hotel["room_types"][rt]["max_occupancy"]
+    terms = {"room_type": rt, "rate": engine.rms["rates"][rt]["target"], "rooms": {n: rooms for n in nights},
+             "released": {n: 0 for n in nights}, "meeting": None, "attrition_pct": 0, "deposit_pct": 0,
+             "breakfast": {_plus(n, 1): rooms * occ for n in nights} if breakfast else {}, "currency": "GBP"}
+    b = calc.rate_bands(terms, engine.hotel, engine.rms, engine.policy)
+    if demand == "busy":
+        return (b["uplift"] or 0) >= 500                 # clearly busy: at least £5 above the usual target
+    return b["uplift"] == 0 and b.get("forecast_pct", 0) < 70
+
+
 def _fitting_window(engine: Engine, rng: random.Random, rt: str, n: int, rooms: int, lead_min: int,
-                    meeting: bool) -> str:
+                    meeting: bool, demand: str = "any", breakfast: bool = True) -> str:
     today = date.fromisoformat(engine.now()[:10])
     options = []
     for k in range(lead_min, lead_min + 150):
         a = (today + timedelta(days=k)).isoformat()
         nights = stay_nights(a, _plus(a, n))
-        if all(_free(engine, x, rt) >= rooms for x in nights) and (not meeting or _meeting_day(engine, nights)):
+        if (all(_free(engine, x, rt) >= rooms for x in nights) and (not meeting or _meeting_day(engine, nights))
+                and _demand_ok(engine, rt, nights, rooms, demand, breakfast)):
             options.append(a)
     if not options:
-        raise Refused(f"no {n}-night stay with {rooms} {rt} rooms free in the next months; try fewer rooms")
+        raise Refused(f"no {n}-night stay with {rooms} {rt} rooms free" + ("" if demand == "any" else f" on {demand} dates")
+                      + " in the next months; try fewer rooms")
     return rng.choice(options)
 
 
-def _most_free(engine: Engine, rt: str, n: int, lead_min: int, meeting: bool) -> int:
-    """The most rooms of this type free on every night of some n-night stay that _fitting_window would search."""
+def _most_free(engine: Engine, rt: str, n: int, lead_min: int, meeting: bool, demand: str = "any",
+               breakfast: bool = True) -> int:
+    """The most rooms of this type free on every night of some n-night stay that _fitting_window would search,
+    in a block that matches the demand trait on those dates."""
     today = date.fromisoformat(engine.now()[:10])
     best = 0
     for k in range(lead_min, lead_min + 150):
         a = (today + timedelta(days=k)).isoformat()
         nights = stay_nights(a, _plus(a, n))
         free = [_free(engine, x, rt) for x in nights]
-        if free and None not in free and (not meeting or _meeting_day(engine, nights)):
-            best = max(best, min(free))
+        if free and None not in free and (not meeting or _meeting_day(engine, nights)) and min(free) > best:
+            for r in range(min(free), best, -1):
+                if _demand_ok(engine, rt, nights, r, demand, breakfast):
+                    best = r
+                    break
     return best
 
 

@@ -22,7 +22,7 @@ TOOLS = {
     "propose_offer": "propose_offer", "send_offer": "send_offer", "open_checkout": "open_checkout",
     "check_payment": "check_payment", "prepare_reduction": "prepare_reduction", "send_amendment": "send_amendment",
     "refund_excess": "refund_excess", "check_refund": "check_refund", "escalate": "escalate", "decline": "decline",
-    "note": "log_reasoning",
+    "note": "log_reasoning", "offer_stands": "offer_stands",
 }
 READS = {"list_queue", "read_deal", "vendor_workspace"}
 MAX_RUNS = 60

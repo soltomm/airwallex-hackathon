@@ -566,10 +566,18 @@ class RulesSeller:
         e = self.e
         d = e.deal(deal_id)
         req = d["requirements"]
-        bands = e.rms["rates"][req["room_type"]]
-        rate = bands["target"]
+        rate = e.rms["rates"][req["room_type"]]["target"]
         dep, att = e.policy["deposit"]["standard_pct"], e.policy["attrition"]["standard_pct"]
         p = e.price_terms(deal_id, rate, dep, att)
+        bands = p["rate_bands"]
+        if bands["uplift"]:
+            # Busy dates: the RMS target can't carry the displacement, so the stay's target is higher.
+            rate = bands["target"]
+            p = e.price_terms(deal_id, rate, dep, att)
+            e.note(deal_id, f"Busy dates: forecast demand {bands.get('forecast_pct')}%, so a blocked room would likely "
+                            f"have sold to other guests. Quoting {gbp(rate)} ({gbp(bands['uplift'])} above the usual "
+                            f"target), the lowest rate that keeps the {e.rms['min_contribution_margin_pct']}% margin on "
+                            "standard terms; there is no room to concede on rate or free release.")
         if not p["fits_inventory"]:
             # The block asked for can't be held on these dates. Never cut it silently (a short block may not house
             # the group): offer dates where it fits, and the smaller block on these dates as a choice.
@@ -626,7 +634,7 @@ class RulesSeller:
         att = min(int(ask.get("attrition_pct") or t["attrition_pct"]), e.policy["attrition"]["max_pct_with_approval"])
         dep = int(ask.get("deposit_pct") or t["deposit_pct"])
         rate = t["rate"]
-        bands = e.rms["rates"][t["room_type"]]
+        bands = (cur.get("hotel_check") or {}).get("bands") or e.rms["rates"][t["room_type"]]
         if ask.get("rate"):
             rate = max(int(ask["rate"]), bands["autonomous_floor"])
         why = []
@@ -658,12 +666,21 @@ class RulesSeller:
                    + f", so the most we can release free is {att}%, at the {gbp(rate)} rate"]
             if asked < dep:
                 why.append(f"our standard deposit is {dep}% for new accounts")
+            if (cur["status"] == "sent" and d["status"] == "offer_sent" and min(t["rooms"].values()) == rooms
+                    and (t["rate"], t["deposit_pct"], t["attrition_pct"]) == (rate, dep, att)):
+                # The terms we can offer are the ones already on the table: keep that offer (same hold, same expiry)
+                # rather than sending a copy. Its terms may not even clear the margin again now that demand is higher.
+                held = f" until {cur['expires_at'][:16].replace('T', ' ')} UTC" if cur.get("expires_at") else ""
+                e.offer_stands(deal_id, f"Thank you for asking. We can't extend the free release on your dates. "
+                               + " ".join(w[0].upper() + w[1:] + "." for w in why)
+                               + f" Our offer v{cur['n']} ({gbp(cur['pricing']['total'])}, {att}% attrition, {dep}% "
+                               f"deposit) stays open{held}, with your rooms held; you can accept it as it stands."
+                               "\n\nGroup Sales, Harbour House")
+                return f"{d['ref']}: kept v{cur['n']}"
             p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
         pr = p["pricing"]
         release = (f"{att}% attrition (up to {pr['attrition_allowance']} room-nights released without penalty until "
                    f"{e.policy['attrition']['release_days_before_arrival']} days before arrival)")
-        if competing and cur.get("expires_at"):
-            why.append(f"your rooms stay held for you until {cur['expires_at'][:16].replace('T', ' ')} UTC")
         head = (f"Thank you for asking. We can't extend the free release on your dates; our offer stays at {release} "
                 f"and a {dep}% deposit. " if withdrawn else
                 f"Thank you. We can offer {release} in exchange for a {dep}% deposit. ")
@@ -693,10 +710,13 @@ class RulesSeller:
         floor = e.rms["min_contribution_margin_pct"]
         e.check_systems(deal_id)              # refresh the records, so the Records tab shows the waiting group
         who = ", ".join(f"{g['company']} ({g['ref']}, {g['rooms']} rooms)" for g in firm["groups"])
+        cur = e.deal(deal_id)["versions"][-1]["terms"]
+        asked = _and([x for x in (f"a {gbp(rate)} rate" if rate != cur["rate"] else "",
+                                  f"{att}% attrition" if att != cur["attrition_pct"] else "") if x])
         e.note(deal_id, f"Decision changed by competing demand: {who} wants these nights and can't fit beside this block. "
-                        f"Without it I would trade {att}% attrition for a {dep}% deposit (margin {m0}% with the full "
-                        f"release used); with it the rooms this block blocks would sell for certain, the margin falls to "
-                        f"{m}%, below the {floor}% floor. Holding the standard release, so no manager approval is needed.")
+                        f"Without it I would offer {asked or 'these terms'} with a {dep}% deposit (margin {m0}% with the "
+                        f"full release used); with it the rooms this block blocks would sell for certain, the margin falls "
+                        f"to {m}%, below the {floor}% floor. Keeping the current terms, so no manager approval is needed.")
         return firm
 
     def _fit(self, deal_id: str, cur: dict, rate: int, dep: int, att: int):
@@ -1077,6 +1097,12 @@ class ClaudeSeller:
                                          for g in p["displacement"]["firm"]["groups"]],
                                          "rooms_counted_at_full_value": p["displacement"]["firm"]["rooms"]}
                                         if p["displacement"].get("firm") else {})},
+                    "rates_for_these_dates": {"target": gbp(r["rate_bands"]["target"]),
+                                              "your_floor": gbp(r["rate_bands"]["autonomous_floor"]),
+                                              "absolute_min": gbp(r["rate_bands"]["absolute_min"]),
+                                              "forecast_demand_pct": r["rate_bands"].get("forecast_pct"),
+                                              "busy_uplift": (gbp(r["rate_bands"]["uplift"]) if r["rate_bands"]["uplift"]
+                                                              else r["rate_bands"]["uplift"])},
                     "hard_violations": r["hotel_check"]["hard"], "needs_manager_approval": r["hotel_check"]["approvals"],
                     "fits_inventory": r["fits_inventory"]}
         if name == "propose_offer":

@@ -157,12 +157,12 @@ def price(terms: dict, hotel: dict, rms: dict, firm: dict | None = None) -> dict
 
 
 def demand_pct(night: str, room_type: str, hotel: dict, rms: dict) -> int:
-    """Demand for a night (0-100): the chance a room blocked for a group would otherwise have sold.
+    """Forecast demand for a night (0-100): the chance a room blocked for a group would otherwise have sold.
 
-    It is read from the same calendar the availability page shows: the share of the group allocation
-    other business has already taken (allocation minus what is still on sale), so a sold-out or nearly
-    full night carries high displacement and a quiet one little. Nights the RMS states explicitly
-    (demand_by_night_pct, the demo stay whose allocation is set by hand) use that figure instead.
+    It is the RMS forecast from the calendar (hotel.forecast, see bookable.forecast): the share of the group
+    allocation other business has already taken plus the pickup expected before arrival, so a busy night can
+    still have rooms free. Nights the RMS states explicitly (demand_by_night_pct, the demo stay) use that
+    figure. Without a forecast it falls back to the share already taken (allocation minus what is on sale).
     """
     cfg = rms.get("displacement")
     if not cfg:
@@ -170,11 +170,53 @@ def demand_pct(night: str, room_type: str, hotel: dict, rms: dict) -> int:
     stated = (cfg.get("demand_by_night_pct") or {}).get(night)
     if stated is not None:
         return int(stated)
+    fc = (hotel.get("forecast") or {}).get(night, {}).get(room_type)
+    if fc is not None:
+        return int(fc)
     alloc = int((hotel.get("availability") or {}).get(room_type, 0))
     on_sale = (hotel.get("capacity") or {}).get(night, {}).get(room_type)
     if not alloc or on_sale is None:
         return 0
     return max(0, min(100, (alloc - int(on_sale)) * 100 // alloc))
+
+
+def rate_bands(terms: dict, hotel: dict, rms: dict, policy: dict, firm: dict | None = None) -> dict:
+    """The seller's rates for this stay and package: target, the seller's floor and the absolute minimum.
+
+    Normally the RMS rates for the room type. With busy_night_pricing on, when displacement on the stay's
+    nights is so high that the target can't keep the minimum margin on standard terms (standard attrition),
+    the target becomes the lowest whole-pound rate that does, and the floor and the absolute minimum rise by
+    the same amount (the uplift). Below that rate no package with these services clears the margin floor, so
+    on busy nights any concession on rate or free release is refused by the margin rule; quiet nights keep the
+    normal bands. The package (breakfast, meeting) counts: it is the whole contribution that has to cover the
+    displacement. Rounded up to the pound so quotes stay readable.
+    """
+    base = rms["rates"][terms["room_type"]]
+    out = {"target": base["target"], "autonomous_floor": base["autonomous_floor"], "absolute_min": base["absolute_min"],
+           "uplift": 0, "busy": False}
+    nights = terms.get("rooms") or {}
+    if nights:
+        out["forecast_pct"] = round(sum(demand_pct(n, terms["room_type"], hotel, rms) for n in nights) / len(nights))
+    if not rms.get("busy_night_pricing"):
+        return out
+    floor = rms["min_contribution_margin_pct"]
+    std = {**terms, "attrition_pct": policy["attrition"]["standard_pct"], "deposit_pct": policy["deposit"]["standard_pct"]}
+
+    def clears(rate: int) -> bool:
+        p = price({**std, "rate": rate}, hotel, rms, firm)
+        return p["margin_all_rooms"]["margin_pct"] >= floor and p["margin_full_release"]["margin_pct"] >= floor
+
+    if clears(base["target"]):
+        return out
+    lo, hi = base["target"] // 100, base["target"] // 100 * 3       # pounds: lo fails; search up to 3x the target
+    if not clears(hi * 100):
+        return {**out, "uplift": None, "busy": True}                # no rate clears it: the margin rule refuses
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        lo, hi = (lo, mid) if clears(mid * 100) else (mid, hi)
+    up = hi * 100 - base["target"]
+    return {**out, "target": hi * 100, "autonomous_floor": base["autonomous_floor"] + up,
+            "absolute_min": base["absolute_min"] + up, "uplift": up, "busy": True}
 
 
 def displacement(terms: dict, hotel: dict, rms: dict, firm: dict | None = None) -> dict:

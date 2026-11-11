@@ -985,10 +985,13 @@ def test_displacement_follows_the_dates():
     t = {**northstar_terms(att=20, rate=19500), "rooms": {n: 12 for n in quiet}, "released": {n: 0 for n in quiet},
          "breakfast": {m: 24 for m in ("2027-01-16", "2027-01-17", "2027-01-18")},
          "meeting": {"room": "thames", "date": "2027-01-15", "layout": "classroom", "attendees": 24}}
-    # Demand comes from the availability calendar: the share of the allocation other business has taken.
+    # Demand is the RMS forecast from the availability calendar: the share of the allocation other business has
+    # taken (30% / 0% / 10% here), plus January's 10% pickup of the rest before arrival.
     alloc = H_ALL["availability"]["twin"]
-    assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in quiet] == [
-        (alloc - H_ALL["capacity"][n]["twin"]) * 100 // alloc for n in quiet] == [30, 0, 10]
+    taken = [(alloc - H_ALL["capacity"][n]["twin"]) * 100 // alloc for n in quiet]
+    assert taken == [30, 0, 10]
+    assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in quiet] == [t_ + round((100 - t_) * 0.1) for t_ in taken] \
+        == [37, 10, 19]
     assert [calc.demand_pct(n, "twin", H_ALL, RMS) for n in MARCH] == [80, 80, 64]     # stated by the RMS
     sold_out = next(n for n in H_ALL["nights"] if H_ALL["capacity"][n]["twin"] == 0)
     assert calc.demand_pct(sold_out, "twin", H_ALL, RMS) == 100
@@ -1019,9 +1022,10 @@ def test_margin_floor_bites_on_the_default_rules(eng):
     assert "displacement" not in json.dumps(e.deal_view(n["id"], for_="buyer"))
 
 
-def _busier(tmp_path, **disp):
+def _busier(tmp_path, busy_night_pricing=True, **disp):
     sc = json.loads(SCENARIO.read_text())
     sc["rms"]["displacement"].update(disp)
+    sc["rms"]["busy_night_pricing"] = busy_night_pricing
     path = tmp_path / "scenario.json"
     path.write_text(json.dumps(sc))
     return Engine(tmp_path / "var", SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0), scenario_path=path)
@@ -1039,9 +1043,12 @@ def test_rules_seller_keeps_standard_release_when_margin_cannot_carry_more(tmp_p
     assert n["versions"][0]["terms"]["attrition_pct"] == 10
     buyer_turn(e, "Northstar")                                       # counter: 20% attrition
     s.run()
+    # What it can offer is what is already on the table, so v1 stays open (same hold) instead of a copy.
     v = n["versions"][-1]
-    assert len(n["versions"]) == 2 and v["terms"]["attrition_pct"] == 10 and v["terms"]["rate"] == 22000
-    assert "demand on your dates is high" in v["message"].lower()
+    assert len(n["versions"]) == 1 and v["status"] == "sent" and v["terms"]["attrition_pct"] == 10
+    reply = n["thread"][-1]
+    assert reply["from"] == "seller" and reply["version"] == 1 and n["status"] == "offer_sent"
+    assert "demand on your dates is high" in reply["text"].lower() and "stays open" in reply["text"]
     assert not any("Engine refused" in a["text"] for a in e.s["activity"])
 
 
@@ -1059,15 +1066,18 @@ def test_a_withdrawn_concession_never_leaves_the_buyer_worse_off(tmp_path):
     buyer_turn(e, "Northstar")                                       # counter: 20% attrition, 25% deposit
     s.run()
     v = n["versions"][-1]
-    assert (v["terms"]["attrition_pct"], v["terms"]["deposit_pct"], v["terms"]["rate"]) == (10, 30, 22000)
-    assert v["pricing"]["deposit"] == v1["pricing"]["deposit"]
-    assert "in exchange" not in v["message"].lower()
-    assert "demand on your dates is high" in v["message"].lower()
+    assert v is v1 and v1["status"] == "sent"                        # the offer they had, still open
+    reply = n["thread"][-1]["text"]
+    assert "in exchange" not in reply.lower() and "40%" not in reply
+    assert "demand on your dates is high" in reply.lower()
+    r = buyer_turn(e, "Northstar")                                   # the buyer can still accept it as it stands
+    assert r["accepted"] is True and n["accepted_version"] == 1
     assert not [a for a in e.s["approvals"].values() if a["deal_id"] == n["id"]]   # nothing for the manager
 
 
 def test_rules_seller_hands_off_when_even_the_target_rate_misses_the_margin(tmp_path):
-    e = _busier(tmp_path, full_demand={"twin": 15000, "king": 15000})
+    """With busy-night pricing off, the target is the target: if it misses the margin a person decides."""
+    e = _busier(tmp_path, busy_night_pricing=False, full_demand={"twin": 15000, "king": 15000})
     s = RulesSeller(e)
     s.run()
     buyer_turn(e, "Northstar")
@@ -1080,6 +1090,7 @@ def test_rules_seller_hands_off_when_even_the_target_rate_misses_the_margin(tmp_
 def test_package_below_margin_floor_is_refused(tmp_path):
     sc = json.loads(SCENARIO.read_text())
     sc["rms"]["delivery_costs"]["twin"] = 15000                      # a costlier hotel: same rates, thinner margin
+    sc["rms"]["busy_night_pricing"] = False                          # so the seller's target stays at £220
     path = tmp_path / "scenario.json"
     path.write_text(json.dumps(sc))
     e = Engine(tmp_path / "var", SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0), scenario_path=path)

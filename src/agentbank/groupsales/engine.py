@@ -787,6 +787,9 @@ class Engine:
                       "committed": v["held"] + v["booked"]}
                   for m, v in ((m, self._bf(m)) for m in self._mornings(nights)) if v}
             rates = self.rms["rates"].get(rt) if rt else self.rms["rates"]
+            bands = self._stay_bands(d) if rt in self.rms["rates"] else None
+            if bands:
+                rates = {k: bands[k] for k in ("target", "autonomous_floor", "absolute_min")}
             req_dates = calc.key_dates(req["arrival"], self.policy) if req.get("arrival") else None
             crm = self.scenario["crm"].get(d["domain"], {"account": None, "type": "unknown sender", "credit_terms": False})
             records = [
@@ -800,8 +803,14 @@ class Engine:
                 {"system": "F&B (breakfast)", "summary": "; ".join(f"{m}: {v['committed']}/{v['capacity']} group covers committed"
                                                                  for m, v in bf.items()), "data": bf},
                 {"system": "RMS", "summary": (f"{rt}: target {gbp(rates['target'])}, seller floor {gbp(rates['autonomous_floor'])}, "
-                                              f"absolute min {gbp(rates['absolute_min'])}; min margin {self.rms['min_contribution_margin_pct']}%")
-                 if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"],
+                                              f"absolute min {gbp(rates['absolute_min'])}; min margin {self.rms['min_contribution_margin_pct']}%"
+                                              + (f"; forecast demand {bands['forecast_pct']}%" if bands and "forecast_pct" in bands else "")
+                                              + (f"; busy dates: rates raised {gbp(bands['uplift'])} so the margin holds on "
+                                                 "standard terms" if bands and bands["uplift"] else "")
+                                              + ("; busy dates: no rate keeps the margin with these services"
+                                                 if bands and bands["uplift"] is None else ""))
+                 if rt else "room type unknown", "data": {"rates": rates, "bands": bands,
+                                                                   "delivery_costs": self.rms["delivery_costs"],
                                                                    "displacement": self.rms.get("displacement", {})}},
                 self._competing_record(d, req, nights, rt),
                 {"system": "CRM", "summary": f"{crm.get('account') or d['domain']}: {crm.get('type')}, "
@@ -821,6 +830,19 @@ class Engine:
             self._save()
             return {"checked_at": now, "pms": pms, "meeting": meeting, "breakfast": bf, "rms": rates,
                     "competing_demand": next(r["summary"] for r in records if r["system"] == "Competing demand"), "crm": crm, "key_dates": req_dates}
+
+    def _stay_bands(self, d: dict) -> dict | None:
+        """The rates for this deal's stay and package at standard terms (calc.rate_bands), or None if the request
+        can't be priced yet (dates, rooms or services still missing or outside what the hotel sells)."""
+        try:
+            pol = self.policy
+            terms = self.build_terms(d, self.rms["rates"][d["requirements"]["room_type"]]["target"],
+                                     pol["deposit"]["standard_pct"], pol["attrition"]["standard_pct"])
+        except (Refused, KeyError, TypeError, ValueError):
+            return None
+        if any(self._inv(n) is None for n in terms["rooms"]):
+            return None
+        return calc.rate_bands(terms, self.hotel, self.rms, self.policy, self.competing_demand(d, terms))
 
     def _competing_record(self, d: dict, req: dict, nights: list[str], rt: str | None) -> dict:
         """The records entry for other groups waiting for this deal's nights (see competing_demand)."""
@@ -872,6 +894,23 @@ class Engine:
             self.log(d["id"], actor, "clarification", f"Asked {d['company']}: {'; '.join(questions)}")
             self._save()
             return {"sent": True, "status": d["status"]}
+
+    def offer_stands(self, deal_id: str, message: str, actor: str = "seller") -> dict:
+        """Answer a buyer's counter by keeping the offer already sent, without a new version: its terms, hold and
+        expiry are unchanged, and the buyer can still accept it. Only while that offer is open."""
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            v = d["versions"][-1] if d["versions"] else None
+            if d["status"] != "offer_sent" or not v or v["status"] != "sent":
+                raise Refused("there is no open offer to keep; propose one instead")
+            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                "text": message, "version": v["n"]})
+            self._seller_acted(d)
+            self.log(d["id"], actor, "offer_kept", f"Kept v{v['n']} open for {d['company']}: no change to its terms "
+                                                  f"(held until {v['expires_at']}).")
+            self._save()
+            return {"version": v["n"], "status": "sent", "expires_at": v["expires_at"]}
 
     def note(self, deal_id: str | None, text: str, actor: str = "seller"):
         with self.lock:
@@ -1090,7 +1129,7 @@ class Engine:
             pricing = self._price(d, terms, competing)
             check = hotel_check(terms, pricing, self.scenario)
             return {"terms": terms, "pricing": pricing, "hotel_check": check,
-                    "fits_inventory": self._can_hold(terms, d)}
+                    "fits_inventory": self._can_hold(terms, d), "rate_bands": check["bands"]}
 
     def propose_offer(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int, message: str,
                       explanation: str = "", unmet: list[str] | None = None, rooms_per_night: int | None = None,

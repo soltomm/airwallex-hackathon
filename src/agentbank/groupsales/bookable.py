@@ -14,6 +14,7 @@ The scenario says which nights are on sale and the defaults, and lists only the 
     hotel["nights"]              every bookable night, in order
     hotel["mornings"]            the breakfast morning after each of those nights
     hotel["capacity"]            {night: {room_type: rooms}}
+    hotel["forecast"]            {night: {room_type: forecast demand %}} (with background_demand.forecast_pickup_by_month)
     meeting_room["available"]    {date: hours} for every open day inside the window
 """
 from __future__ import annotations
@@ -53,6 +54,21 @@ def background_demand(nights: list[str], allocation: dict, spec: dict) -> dict:
     return out
 
 
+def forecast(capacity: dict, allocation: dict, pickup_by_month: dict) -> dict:
+    """The RMS demand forecast per night and room type (0-100): the share of the group allocation other business
+    has already taken, plus the share of the rest expected to sell before arrival (by month). A night can be
+    forecast busy while rooms are still free, which is what makes displacement bite on dates a group can book.
+    Returns {night: {room_type: pct}}."""
+    out = {}
+    for n, by_type in capacity.items():
+        share = float(pickup_by_month.get(str(date.fromisoformat(n).month), 0))
+        out[n] = {}
+        for rt, alloc in allocation.items():
+            taken = (alloc - int(by_type.get(rt, alloc))) * 100 // alloc if alloc else 0
+            out[n][rt] = min(100, taken + round((100 - taken) * share))
+    return out
+
+
 def expand(scenario: dict) -> dict:
     sc = copy.deepcopy(scenario)
     h = sc["hotel"]
@@ -72,6 +88,9 @@ def expand(scenario: dict) -> dict:
                else {n: dict(h["availability"]) for n in nights})
     h["capacity"] = {n: {rt: int(by_night.get(n, {}).get(rt, on_sale[n][rt])) for rt in h["availability"]}
                      for n in nights}
+    pickup = (h.get("background_demand") or {}).get("forecast_pickup_by_month")
+    if pickup:
+        h["forecast"] = forecast(h["capacity"], h["availability"], pickup)
     # A meeting can be on any day of the stay, including the departure day.
     days = nights + [(date.fromisoformat(nights[-1]) + timedelta(days=1)).isoformat()]
     for mr in h.get("meeting_rooms", {}).values():
