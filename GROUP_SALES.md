@@ -174,7 +174,10 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
 - **Authority.** Twin rate at or above £210 and king at or above £180, deposit 30-40% and attrition up
   to 10% are the seller's own call. A rate below the floor (down to £195/£170), attrition up to 20% or
   a deposit of 20-29% needs the manager. A below-floor rate or attrition above 10% forces a 40%
-  deposit. Contribution margin must be at least 40%, both with all rooms used and with the full
+  deposit. **Prepayment** is a package of its own: with 50% or more paid on signing and standard 10%
+  attrition, the seller may go below its floor alone, down to £200 twin / £175 king; deposits of 41-49%
+  aren't offered. A buyer pushing on price gets that trade, with the standard-deposit rate named as the
+  alternative, unless the margin refuses it. Contribution margin must be at least 40%, both with all rooms used and with the full
   release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
   displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
   demand times that night's demand: the share of the group allocation other business has already

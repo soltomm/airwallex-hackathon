@@ -250,7 +250,7 @@ function formHtml(v) {
   const t = v && v.terms;
   const go = label => `<div class="row" style="margin-top:6px"><button class="btn-p" data-act="sendForm">${label}</button><button class="btn-ghost" data-form="">Cancel</button></div>`;
   if (form === 'counter') return `<div class="form"><label>Attrition %<input type="number" id="fAtt" value="20" min="0" max="30"></label>
-      <label>Deposit %<input type="number" id="fDep" value="25" min="0" max="60"></label><label>Room rate £ (optional)<input type="number" id="fRate" placeholder="${t ? t.rate / 100 : ''}"></label></div>
+      <label>Deposit %<input type="number" id="fDep" value="25" min="0" max="100"></label><label>Room rate £ (optional)<input type="number" id="fRate" placeholder="${t ? t.rate / 100 : ''}"></label></div>
       <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send counteroffer')}`;
   if (form === 'change') return `<div class="form"><label>Fewer rooms per night<input type="number" id="fRooms" value="2" min="1"></label></div>
       <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send change request')}`;

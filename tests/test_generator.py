@@ -75,9 +75,16 @@ def test_dates_short_haggle_offers_dates_then_holds_the_floor(eng, seed):
     assert path == ["buyer reply", "buyer counter", "buyer accept", "paid"]
     assert any(m.get("date_options") for m in d["thread"])               # the seller offered other dates
     counter = next(m for m in d["thread"] if m.get("action") == "counter")
-    floor = eng.rms["rates"][d["versions"][-1]["terms"]["room_type"]]["autonomous_floor"]
-    assert counter["payload"]["rate"] < floor                            # asked below the seller's floor
-    assert d["versions"][-1]["terms"]["rate"] == floor                   # the rule held, in code
+    t = d["versions"][-1]["terms"]
+    bands = eng.rms["rates"][t["room_type"]]
+    assert counter["payload"]["rate"] < bands["autonomous_floor"]        # asked below the seller's floor
+    # The rule held, in code: below its floor only as a prepayment trade (more paid on signing, standard
+    # attrition, never under the prepayment floor), otherwise at the floor itself.
+    if t["deposit_pct"] >= eng.policy["prepay"]["min_deposit_pct"]:
+        assert t["rate"] == max(counter["payload"]["rate"], bands["prepay_floor"])
+        assert t["attrition_pct"] == eng.policy["attrition"]["standard_pct"]
+    else:
+        assert t["rate"] == bands["autonomous_floor"]
     assert d["status"] == "confirmed"
 
 

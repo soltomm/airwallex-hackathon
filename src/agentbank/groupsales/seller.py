@@ -103,6 +103,7 @@ def _margin_short(p: dict) -> list[str]:
 
 class RulesSeller:
     name = "rules"
+    _prepay_blocked = ""       # why the last prepayment counter couldn't be offered, for the buyer's reply
 
     def __init__(self, engine: Engine, reader=None):
         """`reader(text, today=, subject=, context=)` -> (fields, error) reads buyer text with the model
@@ -634,6 +635,13 @@ class RulesSeller:
         dep = int(ask.get("deposit_pct") or t["deposit_pct"])
         rate = t["rate"]
         bands = e.rms["rates"][t["room_type"]]
+        prepay_blocked = ""
+        if (e.policy.get("prepay") and ask.get("rate") and int(ask["rate"]) < bands["autonomous_floor"]
+                and att <= e.policy["attrition"]["standard_pct"]):
+            done = self._prepay_counter(deal_id, cur, ask, bands)
+            if done:
+                return done
+            prepay_blocked = self._prepay_blocked
         if ask.get("rate"):
             rate = max(int(ask["rate"]), bands["autonomous_floor"])
         why = []
@@ -666,9 +674,16 @@ class RulesSeller:
         pr = p["pricing"]
         release = (f"{att}% attrition (up to {pr['attrition_allowance']} room-nights released without penalty until "
                    f"{e.policy['attrition']['release_days_before_arrival']} days before arrival)")
-        head = (f"Thank you for asking. We can't extend the free release on your dates; our offer stays at {release} "
-                f"and a {dep}% deposit. " if withdrawn else
-                f"Thank you. We can offer {release} in exchange for a {dep}% deposit. ")
+        price_only = bool(ask.get("rate")) and att <= e.policy["attrition"]["standard_pct"] and not withdrawn
+        if withdrawn:
+            head = (f"Thank you for asking. We can't extend the free release on your dates; our offer stays at {release} "
+                    f"and a {dep}% deposit. ")
+        elif price_only:
+            head = ((f"Thank you. We can't reach {gbp(int(ask['rate']))} a room-night; " if int(ask["rate"]) < rate else "Thank you. ")
+                    + f"the best rate we can offer on your dates is {gbp(rate)}, with a {dep}% deposit and {release}. "
+                    + (f"{prepay_blocked} " if prepay_blocked else ""))
+        else:
+            head = f"Thank you. We can offer {release} in exchange for a {dep}% deposit. "
         msg = (head + " ".join(w[0].upper() + w[1:] + "." for w in why) + " "
                + self._offer_message(d, p, unmet, short=True))
         just = (f"Attendance uncertain; buyer asked for {ask.get('attrition_pct')}% attrition and a "
@@ -680,6 +695,47 @@ class RulesSeller:
         except Refused as err:
             return self._cannot_requote(deal_id, str(err), WAITING_FOR_PERSON)
         return f"{d['ref']}: counter v{r['version']} {r['status']}"
+
+    def _prepay_counter(self, deal_id: str, cur: dict, ask: dict, bands: dict) -> str | None:
+        """The buyer pushes below the seller's floor: trade rate for cash up front. Offer the lowest rate the
+        prepayment rules allow (never below what was asked) for the prepayment share paid on signing, and name the
+        standard-deposit alternative in the same email. None when the trade can't be offered (margin on busy dates,
+        capacity), so the ordinary counter answers instead."""
+        e = self.e
+        d = e.deal(deal_id)
+        pol, pp = e.policy, e.policy["prepay"]
+        att = pol["attrition"]["standard_pct"]
+        asked_rate, asked_dep = int(ask["rate"]), int(ask.get("deposit_pct") or cur["terms"]["deposit_pct"])
+        prate = max(asked_rate, bands.get("prepay_floor", bands["autonomous_floor"]))
+        pdep = min(100, max(pp["min_deposit_pct"], asked_dep))
+        std_dep = max(pol["deposit"]["standard_pct"], min(asked_dep, pol["deposit"]["max_pct"]))
+        self._prepay_blocked = ""
+        fit = self._fit(deal_id, cur, prate, pdep, att)
+        if not fit:
+            return None
+        rooms, unmet, p = fit
+        if not p["fits_inventory"] or p["hotel_check"]["hard"] or p["hotel_check"]["approvals"]:
+            if _margin_short(p):
+                self._prepay_blocked = ("Demand on your dates is high, so we can't go lower even with more paid up front.")
+            return None
+        std = e.price_terms(deal_id, bands["autonomous_floor"], std_dep, att, rooms_per_night=rooms)
+        pr = p["pricing"]
+        offer = (f"we can do {gbp(prate)} a room-night if you pay {pdep}% on signing instead of {std_dep}%" if prate == asked_rate
+                 else f"we can't reach {gbp(asked_rate)} a room-night, but we can offer {gbp(prate)} if you pay {pdep}% on "
+                      f"signing instead of {std_dep}%")
+        msg = (f"Thank you: {offer}. If you'd rather keep a {std_dep}% "
+               f"deposit, our best rate is {gbp(bands['autonomous_floor'])}"
+               + (f" (total {gbp(std['pricing']['total'])})" if std["fits_inventory"] else "") + ". "
+               + self._offer_message(d, p, unmet, short=True))
+        why = (f"buyer pushed on price ({gbp(asked_rate)} asked); {gbp(cur['terms']['rate'] - prate)} off the rate in "
+               f"exchange for {pdep}% paid on signing ({gbp(pr['deposit'])} up front instead of "
+               f"{gbp(std['pricing']['deposit'])}); margin {pr['margin_full_release']['margin_pct']}% even with the "
+               f"full allowance released")
+        try:
+            r = e.propose_offer(deal_id, prate, pdep, att, msg, explanation=why, unmet=unmet, rooms_per_night=rooms)
+        except Refused:
+            return None
+        return f"{d['ref']}: prepayment counter v{r['version']} {r['status']}"
 
     def _fit(self, deal_id: str, cur: dict, rate: int, dep: int, att: int):
         """Price a re-quote of version `cur` on what can be held now: (rooms_per_night, unmet, price_terms) or None.
@@ -864,7 +920,8 @@ How to work:
 - Commercial rules (the engine enforces them; know them so you don't waste turns; hotel staff may
   change them, and these are the current values):
 {RULES}
-- Negotiate in trades, not concessions: e.g. more attrition in exchange for a higher deposit. Keep the
+- Negotiate in trades, not concessions: e.g. more attrition in exchange for a higher deposit, or, when the
+  buyer pushes on price, a lower rate in exchange for prepayment (more paid on signing). Keep the
   rate where you can. You never ask the manager for approval yourself: the engine does, and only when
   a term crosses one of the rules above (it names the rule on the manager's card). Anything within
   your authority goes straight to the buyer. When a version does need approval, give a concise

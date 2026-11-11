@@ -41,8 +41,8 @@
   },
   "rms": {
     "rates": {
-      "twin": {"target": 22000, "autonomous_floor": 21000, "absolute_min": 19500},
-      "king": {"target": 19000, "autonomous_floor": 18000, "absolute_min": 17000}
+      "twin": {"target": 22000, "autonomous_floor": 21000, "prepay_floor": 20000, "absolute_min": 19500},
+      "king": {"target": 19000, "autonomous_floor": 18000, "prepay_floor": 17500, "absolute_min": 17000}
     },
     "delivery_costs": {"twin": 7000, "king": 6000, "breakfast": 600, "meeting_day": 18000},
     "displacement": {
@@ -55,6 +55,7 @@
   },
   "policy": {
     "deposit": {"standard_pct": 30, "max_pct": 40, "min_pct_with_approval": 20, "required_pct_for_exceptions": 40},
+    "prepay": {"min_deposit_pct": 50},
     "attrition": {"standard_pct": 10, "max_pct_with_approval": 20, "release_days_before_arrival": 14},
     "installments": [
       {"days_before_arrival": 30, "cumulative_pct": 50},
