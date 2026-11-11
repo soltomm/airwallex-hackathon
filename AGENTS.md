@@ -1,6 +1,6 @@
 # Working on this repo (for AI agents and people)
 
-Harbour House: a hotel group-sales agent for the Airwallex Agentic Banking Hackathon. A seller agent
+Groupy: a hotel group-sales agent for the Airwallex Agentic Banking Hackathon. A seller agent
 (Claude or a deterministic rules seller) takes a group RFP from first email to a paid Airwallex
 deposit, an amendment and a partial refund. Read [README.md](README.md) and
 [GROUP_SALES.md](GROUP_SALES.md) before changing behaviour.
