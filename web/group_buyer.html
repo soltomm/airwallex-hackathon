@@ -89,12 +89,12 @@ dl.outcomes { margin-top: 8px; }
   <div class="subject" id="subject"></div>
   <p class="lede" id="lede"></p>
   <div id="thread"></div>
-  <div id="act"></div>
+  <div id="act"></div><div id="finalFolio"></div>
 </main>
 <script>
 const CFG = __INBOX__;
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const esc = s => String(s ?? '').replace(/\bHarbour\s+House\b/gi, 'Groupy').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) / 100).toLocaleString('en-GB', {minimumFractionDigits: Math.abs(p) % 100 ? 2 : 0, maximumFractionDigits: 2});
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 let V = null, form = null, lastJSON = '', opened = new Set(), draftDirty = false;
@@ -130,12 +130,13 @@ function asked(m) {
   const qs = (m.questions || []).filter(q => q && String(q).trim()), ds = m.date_options || [];
   const said = (m.text || '').toLowerCase();
   let h = '';
-  if (qs.length && !qs.every(q => said.includes(String(q).trim().toLowerCase()))) h += `<ol class="qs">${qs.map(q => `<li>${esc(q)}</li>`).join('')}</ol>`;
+  // The hotel's questions are in its email; m.questions only drives the Answer form. Listing them again under the
+  // email showed every question twice once the Claude seller wrote them in its own words.
   if (ds.length) h += `<ol class="qs">${ds.map(o => `<li>${esc(span(o.arrival, o.departure))}</li>`).join('')}</ol>`;
   return h;
 }
 function render() {
-  const me = V.contact, hotelAddr = 'groups@harbourhouse.example';
+  const me = V.contact, hotelAddr = 'groups@groupy.example';
   $('title').innerHTML = `${esc(me)} <span>· ${esc(V.company)}</span>`;
   document.title = `${V.company} Mailbox`;
   $('subject').textContent = V.subject || 'Group booking';
@@ -154,6 +155,8 @@ function render() {
     + recent.map((m, i) => mail(m, older.length + i)).join('');
   document.querySelectorAll('.mail .hd').forEach(h => h.onclick = () => { const el = h.parentElement; el.classList.toggle('open'); el.classList.contains('open') ? opened.add(el.dataset.id) : opened.delete(el.dataset.id); });
   $('act').innerHTML = actions();
+  const f=V.final_folio;
+  $('finalFolio').innerHTML=f?`<section class="box"><h2>Final stay folio</h2><p>Reservation ${esc(f.reservation_ref)} · ${esc(f.status.replaceAll('_',' '))}</p><table>${f.snapshot.lines.map(l=>`<tr><td>${esc(l.description)}</td><td>${gbp(l.amount)}</td></tr>`).join('')}</table><p>Final master bill: ${gbp(f.master_total)} · Payments reconciled: ${gbp(f.paid)} · Balance due: ${gbp(f.balance_due)}</p>${f.payment_url?`<a class="btn-p" href="${esc(f.payment_url)}" target="_blank" rel="noopener">Pay final balance ↗</a>`:''}${f.document?`<p><a href="/folio/${encodeURIComponent(V.ref)}/document?t=${encodeURIComponent(CFG.t)}" target="_blank" rel="noopener">Open final folio / save PDF ↗</a></p>`:''}</section>`:'';
   wire();
 }
 const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 'T12:00:00Z'), m = d => d.toLocaleDateString('en-GB', {month: 'long', timeZone: 'UTC'});
@@ -169,7 +172,7 @@ function actions() {
   if (V.booking && V.booking.status === 'confirmed') {
     const f = V.finance_view, rooms = V.booking.rooms ? Math.max(...Object.values(V.booking.rooms)) : null;
     h += `<div class="box ok"><div class="who">Booked</div><h3>${rooms ? `${rooms} ${esc(V.booking.room_type)} rooms a night` : 'Confirmed'} · ${gbp(f.net_received)} paid</h3>
-      ${f.refund_owed ? `<p>${gbp(f.refund_owed)} is owed back to you.</p>` : ''}${f.still_due ? `<p class="small muted">${gbp(f.still_due)} still due on the payment schedule.</p>` : ''}</div>`;
+      ${f.refund_owed ? `<p>${gbp(f.refund_owed)} is owed back to you.</p>` : ''}${f.still_due ? `<p class="small muted">${gbp(f.still_due)} still due ${f.post_stay?'on the final folio':'on the payment schedule'}.</p>` : ''}</div>`;
   }
   if (V.hotel_busy) h += `<p class="small muted"><span class="dot pulse"></span>${esc(V.hotel)} is replying…</p>`;
   if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. Choose Buyer replies: "By you, in the buyer's mailbox" in the hotel's New inquiry drawer to reply here.</p></div>`;
@@ -209,18 +212,20 @@ function questionFields() {
   const types = [['king', 'King'], ['twin', 'Twin'], ['any', 'Either is fine']];
   return lastQuestions().map((q, i) => {
     const l = String(q).toLowerCase(), id = 'fq' + i;
+    // Matched by keywords, not exact wording: the rules seller asks in fixed phrases, the Claude seller in its own.
+    const roomType = l.startsWith('room type') || (l.includes('king') && l.includes('twin'));
     if (l.startsWith('room type and number of rooms'))
       return {q, kind: 'rooms_and_type', id, html: lab('Room type', sel(id + 't', types)) + lab('Rooms per night', `<input type="number" id="${id}n" min="1">`)};
-    if (l.startsWith('room type')) return {q, kind: 'room_type', id, html: lab('Room type', sel(id, types))};
+    if (roomType) return {q, kind: 'room_type', id, html: lab('Room type', sel(id, types))};
     if (l.startsWith('number of rooms')) return {q, kind: 'rooms', id, html: lab('Rooms per night', `<input type="number" id="${id}" min="1">`)};
-    if (l.startsWith('arrival and departure')) return {q, kind: 'dates', id, html: lab('Arrival', `<input type="date" id="${id}a">`) + lab('Departure', `<input type="date" id="${id}d">`)};
+    if (l.startsWith('arrival and departure') || (l.includes('arrival') && l.includes('departure'))) return {q, kind: 'dates', id, html: lab('Arrival', `<input type="date" id="${id}a">`) + lab('Departure', `<input type="date" id="${id}d">`)};
     if (l.startsWith('meeting room layout')) {
       const inside = (String(q).match(/\(([^)]*)\)/) || [, ''])[1];
       const opts = inside.split(',').map(x => x.trim()).filter(x => x && x !== '...' && !x.endsWith('...'));
       return {q, kind: 'layout', id, html: lab('Meeting room layout', sel(id, [...opts.map(o => [o, o[0].toUpperCase() + o.slice(1)]), ['any', 'Any layout is fine']]))};
     }
     if (l === 'meeting date') return {q, kind: 'meeting_date', id, html: lab('Meeting date', `<input type="date" id="${id}">`)};
-    if (l.startsWith('legal name')) return {q, kind: 'payer', id, html: lab('Company paying (legal name)', `<input type="text" id="${id}" placeholder="e.g. Acme Ltd">`)};
+    if (l.startsWith('legal name') || l.includes('legal name') || l.includes('company paying')) return {q, kind: 'payer', id, html: lab('Company paying (legal name)', `<input type="text" id="${id}" placeholder="e.g. Acme Ltd">`)};
     if (l.startsWith('whether the budget includes taxes')) return {q, kind: 'taxes', id, html: lab('Does your budget include taxes?', sel(id, [['true', 'Yes'], ['false', 'No']]))};
     const size = String(q).match(/^whether to quote the (.+?) for (\d+) people/i);
     if (size) return {q, kind: 'meeting_size', id, html: lab(`The ${size[1]} seats ${size[2]}`, sel(id, [['use_room_capacity', `Quote it for ${size[2]} people`], ['drop_meeting', 'Leave the meeting room out']]))};

@@ -23,8 +23,8 @@
   <h1 id="title"></h1>
   <p class="sub" id="sub"></p>
   <table id="lines"></table>
-  <p>Signing deposit due now: <span class="due" id="amount"></span></p>
-  <div id="action"></div>
+  <p><span id="dueLabel">Signing deposit due now:</span> <span class="due" id="amount"></span></p>
+  <p id="paidSummary" hidden></p><div id="action"></div>
   <div id="status"></div>
   <p class="sub" style="margin-top:18px;font-size:13px">Sandbox: test card <code>4035 5010 0000 0008</code>, any future expiry, any CVC. Card details are entered on Airwallex's hosted page; the hotel and its agent never see them.</p>
 </main>
@@ -32,25 +32,30 @@
   const P = __PAY__;
   const $ = id => document.getElementById(id);
   const say = (t, c) => { $('status').textContent = t; $('status').className = c || ''; };
+  const finalFolio=P.purpose==='folio';
+  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  if(finalFolio)$('dueLabel').textContent='Outstanding final folio balance:';
   $('title').textContent = `${P.hotel} · ${P.company}`;
-  $('sub').textContent = `Booking ${P.ref}, agreement version ${P.version || '-'} · total ${P.total || '-'}`;
-  $('lines').innerHTML = (P.lines || []).map(l => `<tr><td>${l.item}</td><td>${l.amount}</td></tr>`).join('');
+  if(finalFolio){$('paidSummary').hidden=false;$('paidSummary').textContent='Payments already reconciled: '+P.paid;}
+  $('sub').textContent = finalFolio?`Final master folio · Reservation ${P.ref} · total ${P.total}`:`Booking ${P.ref}, agreement version ${P.version || '-'} · total ${P.total || '-'}`;
+  $('lines').innerHTML = (P.lines || []).map(l => `<tr><td>${esc(l.item)}</td><td>${esc(l.amount)}</td></tr>`).join('');
   $('amount').textContent = P.amount ? `${P.amount} GBP` : '-';
   if (P.message) say(P.message, 'bad');
-  if (P.booking === 'confirmed') {
+  if(finalFolio && P.op_status==='succeeded'){say('Final folio payment verified. Return to your mailbox for the reconciled statement.','ok');}
+  else if (P.booking === 'confirmed') {
     say('Payment verified with Airwallex. Your booking is confirmed.', 'ok');
   } else if (P.booking === 'exception') {
     say('Payment received. The hotel is resolving a booking exception and will contact you; you will not be charged again.', 'bad');
   } else if (P.op_status === 'succeeded') {
     say('Payment verified.', 'ok');
   } else if (!P.hold_ok) {
-    say('This offer has expired, so checkout is closed. The hotel will renew the offer before you can pay.', 'bad');
+    say(finalFolio?'Final checkout is not available. Ask the hotel to review the current folio or check the existing payment.':'This offer has expired, so checkout is closed. The hotel will renew the offer before you can pay.', 'bad');
   } else if (!P.client_secret && P.provider !== 'simulated') {
     say(`Checkout is not available (${P.op_status || 'no payment opened'}).`, 'bad');
   } else if (P.provider === 'simulated') {
-    $('action').innerHTML = `<a class="btn" href="${P.sim_url}">Pay deposit (simulated hosted page)</a>`;
+    $('action').innerHTML = `<a class="btn" href="${P.sim_url}">${finalFolio?'Pay final balance':'Pay deposit'} (simulated hosted page)</a>`;
   } else {
-    $('action').innerHTML = `<button id="pay">Pay deposit with Airwallex</button>`;
+    $('action').innerHTML = `<button id="pay">${finalFolio?'Pay final balance':'Pay deposit'} with Airwallex</button>`;
     (async () => {
       const { payments } = await window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
       $('pay').onclick = () => payments.redirectToCheckout({

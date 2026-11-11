@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Harbour House group-sales demo server: hotel dashboard, agents, hosted payment page, webhooks.
+"""Groupy group-sales demo server: hotel dashboard, agents, hosted payment page, webhooks.
 
   PYTHONPATH=src python scripts/group_sales.py            # http://localhost:8010
 Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presenter|agent
      PUBLIC_BASE_URL (for Airwallex return URLs)  AWX_WEBHOOK_SECRET (to accept Airwallex webhooks)
      GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
-     GS_MAX_CLAUDE_RUNS_PER_DAY (default 150): beyond this the seller falls back to rules.
+     GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # 
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
-from agentbank.groupsales import vendors  # noqa: E402
+from agentbank.groupsales import vendors, folio  # noqa: E402
 from agentbank.groupsales import understand  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
@@ -45,9 +45,11 @@ PORT = int(os.environ.get("GS_PORT") or os.environ.get("PORT") or "8010")
 VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
 PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
-MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
+# No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
+# Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
+MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
-OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
+OPEN_PATHS = ("/folio/", "/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
 # token instead, so a buyer can use the link without the hotel's access token. Presenter tools
 # (/api/buyer/<id>/suggest and /agent) still need the dashboard token.
@@ -101,7 +103,7 @@ class Runner:
                     if self.claude_runs["day"] != today:
                         self.claude_runs = {"day": today, "n": 0}
                     self.claude_runs["n"] += 1
-                    if self.claude_runs["n"] > MAX_CLAUDE_RUNS:
+                    if MAX_CLAUDE_RUNS and self.claude_runs["n"] > MAX_CLAUDE_RUNS:
                         mode = "rules"
                         engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
                                     "seller until tomorrow.", actor="system")
@@ -159,6 +161,8 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["buyer_mode"] = runner.settings["buyer_mode"]
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
     v["finance_view"] = engine.finance(d)
+    if d.get("folio") and engine.folio_view(d["id"])["approved"]:
+        v["final_folio"] = engine.folio_view(d["id"],public=True)
     return v
 
 
@@ -214,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/healthz":
             return self._send(200, {"ok": True})
         if not self._authorized(p, q):
-            return self._send(401, "<h1>Harbour House group desk</h1><p>Open the link with its access token.</p>", "text/html")
+            return self._send(401, "<h1>Groupy group desk</h1><p>Open the link with its access token.</p>", "text/html")
         if q.get("k") and ACCESS:
             self.send_response(303)
             self.send_header("Set-Cookie", f"gs_k={ACCESS}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
@@ -225,15 +229,29 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
-            assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
+            assets = {"/assets/folio.js": ("folio.js", "text/javascript"),
+                      "/assets/revenue.js": ("revenue.js", "text/javascript"),
+                      "/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
+            if p.startswith('/api/deals/') and p.endswith('/folio/report'):
+                view=engine.folio_view(p.split('/')[3])
+                if not view.get('document'):return self._send(409,{'error':'Final folio not issued yet.'})
+                return self._send(200,folio.document_html(view['document'],internal=True),'text/html')
+            if p.startswith('/api/deals/') and p.endswith('/folio'):
+                return self._send(200, engine.folio_view(p.split('/')[3]))
+            if p.startswith('/folio/'):
+                return self._folio_page(p.split('/')[2], q.get('t',''), p.endswith('/return'), p.endswith('/document'))
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                return self._send(200, engine.pricing_review(p.split('/')[3]))
             if p == "/api/state":
                 return self._send(200, state())
+            if p.startswith('/api/vendors/') and p.endswith('/history'):
+                return self._send(200, engine.vendor_history(p.split('/')[3], q.get('exclude_deal')))
             if p == '/api/vendor_directory':
                 return self._send(200, vendors.directory())
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
@@ -301,10 +319,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
             if p == "/api/fx/scan":
                 return self._send(200, engine.scan_fx())
+            if p.startswith('/api/deals/') and p.endswith('/folio'):
+                return self._send(200, engine.folio_action(p.split('/')[3],b.get('command'),b.get('payload') or {}))
             if p.startswith("/api/deals/") and p.endswith("/payer"):
                 return self._send(200, engine.update_payer(p.split("/")[3], b.get('country_code'), b.get('currency')))
             if p.startswith("/api/deals/") and p.endswith("/fx_simulate"):
                 return self._send(200, engine.simulate_fx_receipt(p.split("/")[3]))
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                did=p.split('/')[3]
+                if b.get('action') == 'request':
+                    return self._send(200, engine.request_pricing_review(did,b.get('reason') or 'Sales requested a revenue pricing decision.',b.get('requested_rate'),actor='hotel staff'))
+                return self._send(200, engine.pricing_review_action(did,b.get('action'),b.get('payload') or {},actor='hotel_manager'))
             if p.startswith("/api/deals/") and p.endswith("/hand_back"):
                 return self._send(200, engine.hand_back(p.split("/")[3], b.get("instruction", ""), actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/close"):
@@ -339,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
                 # take it from there; nothing else in the deal is simulated.
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
                                          seed=b.get("seed"))
-                return self._send(200, generator.send(engine, gen))
+                return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party"))))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
@@ -349,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc:
                         raise Refused(str(exc))
                 result = engine.ingest_email(b["from"], b.get("subject") or "(no subject)", b["body"],
-                                            message_id=b.get("message_id") or None)
+                                            message_id=b.get("message_id") or None, third_party=b.get("third_party"))
                 if b.get('payer_country'):
                     engine.update_payer(result['deal_id'], b['payer_country'], b.get('payer_currency'))
                 return self._send(200, result)
@@ -381,6 +406,34 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             traceback.print_exc()
             return self._send(500, {"error": str(e)})
+
+    def _folio_page(self, ref, token, returned=False, document=False):
+        d=engine.deal(ref)
+        if not hmac.compare_digest(token or '',d['buyer_token']):
+            return self._send(403,'Not authorized','text/html')
+        message=''
+        if returned:
+            try: engine.check_folio_payment(d['id'])
+            except Exception: message='Payment verification is pending. The hotel can check the same payment; no second charge is needed.'
+        view=engine.folio_view(d['id'],public=True)
+        if document:
+            doc=view.get('document')
+            if not doc:return self._send(409,'Final folio has not been issued yet.','text/html')
+            return self._send(200,folio.document_html(doc),'text/html')
+        ops=[o for o in engine.s['operations'].values() if o['deal_id']==d['id'] and o['kind']=='folio_payment']
+        op=ops[-1] if ops else None
+        eligible=bool(op and op['folio_hash']==view['snapshot_hash'] and op['status']=='created' and op['amount']==view['balance_due'] and not view['blocks'])
+        service=folio.Service(engine)
+        success=service.url(d,'return')
+        info={'purpose':'folio','hotel':engine.hotel['name'],'ref':view['reservation_ref'],'company':d['company'],
+              'status':d['status'],'op_status':op['status'] if op else None,'provider':engine.provider.name,
+              'intent_id':op.get('payment_intent_id') if op else None,'client_secret':op.get('client_secret') if eligible else None,
+              'currency':'GBP','paid':gbp(view['paid']),'amount':gbp(op['amount']) if op else None,'version':None,'total':gbp(view['master_total']),
+              'lines':[{'item':l['description'],'amount':gbp(l['amount'])} for l in view['snapshot']['lines']],
+              'expires_at':None,'hold_ok':eligible,'message':message,'success_url':success,
+              'sim_url':f"/sim-hpp/{op['payment_intent_id']}?ret="+success.replace('&','%26') if op and op.get('payment_intent_id') else None,
+              'booking':None}
+        return self._send(200,PAY_PAGE.replace('__PAY__',json.dumps(info).replace('<','\\u003c')),'text/html')
 
     # ---- payment page ---------------------------------------------------------------------------
     def _pay(self, ref: str, token: str, returned: bool):
@@ -465,7 +518,7 @@ def main():
             time.sleep(30)
     threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
-    print(f"Harbour House group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
+    print(f"Groupy group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
           f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']}, "
           f"rules seller reads emails with: {'the model' if understand.available() else 'patterns (no Anthropic key)'})",
           flush=True)

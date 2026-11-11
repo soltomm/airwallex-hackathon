@@ -17,7 +17,7 @@ static assets use explicit authenticated routes, not a directory-serving route.
 
 ## New inquiries
 
-**＋ New inquiry** sends a real inquiry to Harbour House, so the seller agent works it with the real rules: it
+**＋ New inquiry** sends a real inquiry to Groupy, so the seller agent works it with the real rules: it
 checks rooms and rates, asks for anything missing, quotes, asks the hotel manager only when a seller rule would
 be exceeded, and takes the deposit through Airwallex like any other deal. The drawer offers:
 

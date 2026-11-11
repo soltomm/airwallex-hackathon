@@ -1,8 +1,8 @@
 {
-  "_note": "Fictional data for the Harbour House group-sales demo. All money is in GBP pence. Synthetic, tax-inclusive figures.",
+  "_note": "Fictional data for the Groupy group-sales demo. All money is in GBP pence. Synthetic, tax-inclusive figures.",
   "start": "2027-01-11T09:00:00+00:00",
   "hotel": {
-    "name": "Harbour House",
+    "name": "Groupy",
     "city": "London",
     "currency": "GBP",
     "rooms_total": 80,

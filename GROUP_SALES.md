@@ -1,4 +1,10 @@
-# Harbour House group sales agent
+# Groupy group sales agent
+
+Internal pricing decisions and the revenue-manager demo are documented in
+[Revenue pricing review](docs/REVENUE_REVIEW.md).
+
+Post-stay PMS folios and incremental balance collection are documented in
+[Post-stay reconciliation](docs/POST_STAY_RECONCILIATION.md).
 
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
@@ -149,8 +155,8 @@ bookkeeping: no agent tool moves them, and the buyer's view never shows them. Wi
 (live Airwallex), deposits are collected untagged and the card shows "No hotel account connected".
 
 **Onboarding the hotel.** Property tools → **Hotel payout account** shows the hotel's connected account
-and offers **Onboard Harbour House**. On the server (so it works on Render, inside the key's IP
-whitelist) it creates a connected account named Harbour House under your Airwallex account
+and offers **Onboard Groupy**. On the server (so it works on Render, inside the key's IP
+whitelist) it creates a connected account named Groupy under your Airwallex account
 (`POST /accounts/create`), submits it, activates it in the sandbox and enables card payments (Visa and
 Mastercard capabilities), reusing the onboarding the Hotel Negotiation Desk verified live. It takes a
 minute or two and runs in the background; progress is saved after each step, and a retry resumes the
@@ -177,7 +183,8 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   deposit. **Prepayment** is a package of its own: with 50% or more paid on signing and standard 10%
   attrition, the seller may go below its floor alone, down to £200 twin / £175 king; deposits of 41-49%
   aren't offered. A buyer pushing on price gets that trade, with the standard-deposit rate named as the
-  alternative, unless the margin refuses it. Contribution margin must be at least 40%, both with all rooms used and with the full
+  alternative, unless the margin refuses it. An ask between the absolute minimum and the prepayment
+  floor (£195-£199 twin, £170-£174 king) goes to [revenue review](docs/REVENUE_REVIEW.md) instead. Contribution margin must be at least 40%, both with all rooms used and with the full
   release allowance used. Margin counts delivery costs per room-night used (£70 twin, £60 king) and
   displacement: what a blocked room would have earned from other guests, £80 twin / £60 king at full
   demand times that night's demand: the share of the group allocation other business has already
@@ -237,7 +244,7 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
 ### 2026-11-09: hotel payouts (Payments for Platforms), on staging
 
 The full demo story ran on the staging deploy (Render) against the Airwallex sandbox, with the hotel
-onboarded from the dashboard as a connected account named Harbour House under the platform account:
+onboarded from the dashboard as a connected account named Groupy under the platform account:
 
 | Step | Amount | Airwallex id | Status |
 |---|---|---|---|

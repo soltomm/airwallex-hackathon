@@ -23,11 +23,19 @@ def eng(tmp_path):
     return Engine(tmp_path / "var", SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0))
 
 
-def drive(e: Engine, deal_id: str, max_steps: int = 40) -> list[str]:
+def drive(e: Engine, deal_id: str, max_steps: int = 40, review_pricing: bool = False) -> list[str]:
     """Run a deal to rest. Returns the path: buyer moves, approvals, payment and clock jumps."""
     d, s, path, jumped = e.deal(deal_id), RulesSeller(e), [], False
     for _ in range(max_steps):
         s.run()
+        if review_pricing and (d.get('pricing_review') or {}).get('status') == 'pending':
+            rate=e.rms['rates'][d['requirements']['room_type']]['autonomous_floor']
+            payload={'review_id':d['pricing_review']['id'],'rate':rate}
+            preview=e.pricing_review_action(deal_id,'preview',payload)
+            assert not preview['problems']
+            e.pricing_review_action(deal_id,'approve',{**payload,'preview_hash':preview['hash'],'note':'Revenue counteroffers at the normal seller floor.'})
+            path.append('revenue counteroffer')
+            continue
         pending = [a for a in e.s["approvals"].values() if a["deal_id"] == deal_id and a["status"] == "pending"]
         if pending:
             for a in pending:
@@ -69,10 +77,10 @@ def test_straight_booking_is_accepted_and_paid_without_approvals(eng, seed):
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
-def test_dates_short_haggle_offers_dates_then_holds_the_floor(eng, seed):
+def test_dates_short_haggle_routes_to_revenue_then_holds_the_floor(eng, seed):
     d, _ = new(eng, "dates_short_haggle", seed)
-    path = drive(eng, d["id"])
-    assert path == ["buyer reply", "buyer counter", "buyer accept", "paid"]
+    path = drive(eng, d["id"], review_pricing=True)
+    assert path == ["buyer reply", "buyer counter", "revenue counteroffer", "buyer accept", "paid"]
     assert any(m.get("date_options") for m in d["thread"])               # the seller offered other dates
     counter = next(m for m in d["thread"] if m.get("action") == "counter")
     t = d["versions"][-1]["terms"]

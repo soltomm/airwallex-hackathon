@@ -17,7 +17,7 @@ Buttons are named as they appear on the dashboard.
 
 | Time | On screen | Say |
 |---|---|---|
-| 0:00–0:15 | The dashboard after reset: two inquiries, Northstar and Summit | "Harbour House gets group requests by email. A seller agent works them from the first email to a paid booking, and a person approves anything outside its authority." |
+| 0:00–0:15 | The dashboard after reset: two inquiries, Northstar and Summit | "Groupy gets group requests by email. A seller agent works them from the first email to a paid booking, and a person approves anything outside its authority." |
 | 0:15–0:40 | **Run seller.** Northstar shows three questions; Summit gets a quote, **£4,920, deposit £1,476**. Point at Summit's **Activity** tab and the **Records checked** tab | "Northstar is missing details, so the agent asks rather than guesses, and moves Summit forward while it waits. Every system it checked is listed with a time." |
 | 0:40–1:05 | Northstar → **Send answers**. Offer v1 **£9,600**. **Send counteroffer** (20% attrition, 25% deposit). The card asks the hotel manager | "The buyer wants more flexibility. The agent trades instead of conceding: it keeps £220 and asks for a 40% deposit, £3,840. That is outside its own authority, so the manager decides." |
 | 1:05–1:25 | **Approve** as hotel manager. **Accept v2** in the mailbox; the seller opens checkout on its own | "The manager approved the trade, the buyer accepted, and the agent moves straight to collecting the deposit." |

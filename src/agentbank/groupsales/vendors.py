@@ -2,7 +2,7 @@
 
 No delivery, signing or vendor money movement occurs in this prototype.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
 import copy
@@ -104,6 +104,7 @@ def mutate(d, command, body, now, make_id, all_deals, actor):
         requested=int((d.get('requirements') or {}).get('rooms') or 0)
         host = body.get('host_rooms')
         w.update(enabled=body['enabled'],host_rooms=None if host is None else integer(host,'Host rooms',0,requested),external_meetings=integer(body.get('external_meetings',0),'External meeting rooms',0,20))
+        if not w['enabled']: w.pop('simulation_pending', None)
         return 'Third-party management '+('enabled' if w['enabled'] else 'disabled')
     if not w['enabled']:raise ValueError('Enable third-party management first.')
     if command=='request':
@@ -160,3 +161,37 @@ def mutate(d, command, body, now, make_id, all_deals, actor):
         if body.get('status') not in ('unpaid','scheduled','paid'):raise ValueError('Choose unpaid, scheduled or paid.')
         r['payment_status']=body['status'];return 'Vendor payment marked '+r['payment_status']+' (tracking only; no transfer)'
     raise ValueError('Unknown vendor workflow action.')
+
+
+# Directional demo prices in GBP pence, per the same billing unit as snapshots().
+DEMO_RATES = {'rooms': 12000, 'meeting': 45000, 'catering': 3500,
+              'av': 25000, 'technician': 30000, 'amenities': 2000}
+
+def simulation_options(value):
+    if value is None: return None
+    if not isinstance(value, dict) or value.get('category') not in CATEGORIES:
+        raise ValueError('Choose a supported third-party service.')
+    if not isinstance(value.get('quote_response', False), bool):
+        raise ValueError('Hypothetical quote response must be true or false.')
+    return {'category': value['category'], 'quote_response': value.get('quote_response', False)}
+
+def hypothetical_quote(d, request_id, now):
+    r = next((r for r in active(d) if r['id'] == request_id), None)
+    if not r: raise ValueError('Vendor request not found in this inquiry.')
+    return {'request_id': request_id, 'unit_cost': DEMO_RATES[r['category']],
+            'markup_type': 'percent', 'markup': 20,
+            'valid_until': (datetime.fromisoformat(now) + timedelta(days=2)).isoformat()}
+
+def history_rows(d, run_id):
+    rows = []
+    for r in workspace(d)['requests']:
+        q = r.get('quote') or next(iter(reversed(r['quote_versions'])), None)
+        if not q: continue
+        units = r['quantity'] * (len(stay_nights(r['start'], r['end'])) if r['category'] in ('rooms','meeting') else 1)
+        rows.append({'id': run_id + ':' + r['id'], 'run_id': run_id, 'deal_id': d['id'],
+                     'ref': d['ref'], 'company': d['company'], 'vendor_id': r['vendor_id'],
+                     'category': r['category'], 'title': r['title'], 'start': r['start'], 'end': r['end'],
+                     'quantity': units, 'unit_cost': q['unit_cost'], 'cost': units * q['unit_cost'],
+                     'revision': q['revision'], 'status': r['status'], 'payment_status': r['payment_status'],
+                     'simulated': True, 'source': 'workflow'})
+    return rows
