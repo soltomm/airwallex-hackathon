@@ -1,4 +1,4 @@
-# Recorded demo: shot list (about 3 minutes)
+# Recorded demo: shot list (about 3½ minutes)
 
 A shorter cut of the live demo script in [GROUP_SALES.md](../GROUP_SALES.md#demo-script-about-6-minutes).
 Buttons are named as they appear on the dashboard.
@@ -24,8 +24,11 @@ Buttons are named as they appear on the dashboard.
 | 1:25–1:50 | **Open payment page ↗**, pay with `4035 5010 0000 0008`, return. Status **Confirmed**, Money card shows £3,840 received | "The buyer pays on the hosted page; the agent never sees card data. On return the backend checks the payment with the provider before it turns the hold into a booking." |
 | 1:50–2:20 | **Jump to 20 Jan.** Summit lapses. **Send change request**, then **Accept v3**: **£8,280**, £528 owed | "Two rooms drop out. That is within the agreed allowance, so the deposit is recalculated and £528 is owed back." |
 | 2:20–2:40 | **Approve** the £528 refund (over the seller's £500 limit). The seller creates it and checks it; ledger updates once | "Refunds above £500 need the manager, for that exact amount. Once a refund exists the agent checks it rather than creating another." |
-| 2:40–2:55 | Final Money card: **£3,312 net received, £4,968 still due** | "The refund was checked once and recorded once. Final position: £3,312 received net, £4,968 still due." |
-| 2:55–3:00 | Back to the deal header | "The model negotiates; prices, authority, inventory and money are enforced in code, with offline tests for each rule." |
+| 2:40–2:50 | Money card: **£3,312 net received, £4,968 still due** | "The refund was checked once and recorded once." |
+| 2:50–3:05 | **Jump past 8 Feb.** Card turns **Installment overdue**; point at the **Payment schedule** card | "8 February passes and the £828 installment hasn't arrived. The agent sends a payment link for exactly £828, and weighs the risk: 40% paid, a busy week, rooms resellable until 24 February." |
+| 3:05–3:20 | Mailbox: **Ask for more time** (15 Feb). Dashboard: the manager's card, **Approve** | "The buyer asks for a week. On quiet dates the agent could agree that alone; on a busy week it may give three days, so it asks the manager, with the numbers." |
+| 3:20–3:30 | Mailbox: pay the £828. Money card **£4,140 net received**; payout card: hotel paid its share | "Paid on the same link, verified with Airwallex, recorded once, and the hotel's share paid out by funds split." |
+| 3:30–3:35 | Back to the deal header | "The model negotiates and decides; prices, authority, inventory and money are enforced in code, with offline tests for each rule." |
 
 ## Notes
 

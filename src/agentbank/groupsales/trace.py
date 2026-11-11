@@ -22,7 +22,8 @@ TOOLS = {
     "propose_offer": "propose_offer", "send_offer": "send_offer", "open_checkout": "open_checkout",
     "check_payment": "check_payment", "prepare_reduction": "prepare_reduction", "send_amendment": "send_amendment",
     "refund_excess": "refund_excess", "check_refund": "check_refund", "escalate": "escalate", "decline": "decline",
-    "note": "log_reasoning",
+    "note": "log_reasoning", "request_installment": "request_installment", "price_extension": "price_extension",
+    "extend_installment": "extend_installment",
 }
 READS = {"list_queue", "read_deal", "vendor_workspace"}
 MAX_RUNS = 60
@@ -90,6 +91,10 @@ def _summary(tool, step, res) -> str:
     if tool == "price_terms" and step.get("result"):
         r = step["result"]
         return f"Dry run {step['args'].get('rate', '')}: total {r['total']}, deposit {r['deposit']}; {r['authority']}."
+    if tool == "price_extension" and isinstance(res, dict):
+        return (f"Dry run: pay by {res.get('pay_by')}: {res.get('verdict')}"
+                + (f" ({'; '.join(res.get('hard') or res.get('approvals') or [])})" if res.get("verdict") != "seller alone" else "")
+                + ".")
     if tool == "read_deal":
         return "Read the deal"
     if tool == "list_queue":

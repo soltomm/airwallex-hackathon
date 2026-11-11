@@ -159,13 +159,19 @@ function render() {
 }
 const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 'T12:00:00Z'), m = d => d.toLocaleDateString('en-GB', {month: 'long', timeZone: 'UTC'});
   return x.getUTCMonth() === y.getUTCMonth() ? `${x.getUTCDate()} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}` : `${x.getUTCDate()} ${m(x)} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}`; };
-const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send'};
+const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send', payment_extension: 'Ask for more time'};
+const longDay = x => new Date(x + 'T12:00:00Z').toLocaleDateString('en-GB', {weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC'});
 function actions() {
   let h = '';
   if (V.pay_url) {
     const v = V.accepted_version && ver(V.accepted_version);
     h += `<div class="box warn"><div class="who">Payment</div><h3>Pay the ${gbp(v && v.pricing.deposit)} deposit</h3><p>On Airwallex's hosted page. Sandbox test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
       <div class="row"><a href="${esc(V.pay_url)}" target="_blank"><button class="btn-p">Open payment page ↗</button></a></div></div>`;
+  }
+  const inst = V.installment;
+  if (inst && inst.pay_url) {
+    h += `<div class="box ${inst.overdue ? 'warn' : ''}"><div class="who">Payment</div><h3>Pay the ${gbp(inst.amount)} installment${inst.overdue ? ' (overdue)' : ''}</h3><p>Due ${esc(longDay(inst.due))}. On Airwallex's hosted page. Sandbox test card <b>4035 5010 0000 0008</b>.</p>
+      <div class="row"><a href="${esc(inst.pay_url)}" target="_blank"><button class="btn-p">Open payment page ↗</button></a></div></div>`;
   }
   if (V.booking && V.booking.status === 'confirmed') {
     const f = V.finance_view, rooms = V.booking.rooms ? Math.max(...Object.values(V.booking.rooms)) : null;
@@ -196,6 +202,7 @@ function actions() {
   const opts = V.status === 'dates_proposed' ? ((V.thread.slice().reverse().find(m => m.date_options) || {}).date_options || []) : [];
   opts.forEach((o, i) => { h += `<button class="${i ? '' : 'btn-p'}" data-act="dates" data-i="${i}">Take ${esc(span(o.arrival, o.departure))}</button>`; });
   if (booked && !(s && s.action === 'change_request')) h += `<button data-form="change">Request a change…</button>`;
+  if (inst && !(s && s.action === 'payment_extension')) h += `<button data-form="time">Ask for more time…</button>`;
   h += `<button data-form="msg">Message…</button></div>${formHtml(v)}</div>`;
   return h;
 }
@@ -257,6 +264,8 @@ function formHtml(v) {
       <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send counteroffer')}`;
   if (form === 'change') return `<div class="form"><label>Fewer rooms per night<input type="number" id="fRooms" value="2" min="1"></label></div>
       <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send change request')}`;
+  if (form === 'time') return `<div class="form"><label>We can pay by<input type="date" id="fPayBy" min="${esc(V.clock.slice(0, 10))}"></label></div>
+      <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Ask for more time')}`;
   if (form === 'answers') return `<div class="form answers">${questionFields().map(f => f.html).join('')}</div>${go('Send answers')}`;
   if (form === 'msg') return `<textarea id="fText" rows="3" placeholder="Message to the hotel" style="margin-top:10px"></textarea>${go('Send')}`;
   return '';
@@ -285,6 +294,9 @@ function wire() {
           await act('counter', text || `We'd like ${p.attrition_pct}% attrition and a ${p.deposit_pct}% deposit${p.rate ? ` at £${p.rate / 100}` : ''}.`, p);
         } else if (form === 'change') {
           const n = +$('fRooms').value; await act('change_request', text || `Please reduce our block by ${n} rooms per night.`, {rooms_per_night: n});
+        } else if (form === 'time') {
+          const d = $('fPayBy').value; if (!d) { toast('Choose a date'); b.disabled = false; return; }
+          await act('payment_extension', text || `Could we pay the ${gbp(V.installment.amount)} installment by ${longDay(d)}?`, {pay_by: d});
         } else if (form === 'answers') {
           const {ans, text: said} = collectAnswers();
           if (!said) { toast('Fill in at least one answer'); b.disabled = false; return; }

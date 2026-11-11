@@ -49,7 +49,8 @@ from agentbank.groupsales.trace import TOOLS as TRACE_TOOLS  # noqa: E402
 STATUSES = {"new", "intake", "needs_info", "dates_proposed", "pending_approval", "approved_to_send", "revise", "offer_sent",
             "accepted", "awaiting_payment", "confirmed", "amendment_sent",
             "amendment_review", "amendment_approved", "refund_due", "refund_awaiting_approval", "refund_pending",
-            "refund_failed", "expired", "handoff", "declined", "lost", "payment_received_booking_exception"}
+            "refund_failed", "expired", "handoff", "declined", "lost", "payment_received_booking_exception",
+            "installment_overdue", "installment_requested", "extension_review", "extension_approved"}
 SENT_STATES = {"sent", "accepted", "superseded_by_amendment"}
 HOTEL_ONLY_KEYS = {"margin_all_rooms", "margin_full_release", "displacement", "hotel_check", "records", "records_consulted", "hold",
                    "approvals", "flags", "costs", "contribution", "margin_pct", "next_step", "key_dates"}
@@ -180,6 +181,13 @@ class ChaosSeller:
             return {**a, "reason": "chaos", "message_to_buyer": "", "why_a_person": "", "what_a_person_should_do": ""}
         if name == "log_reasoning":
             return {"deal_id": None, "note": "thinking"}
+        if name == "request_installment":
+            return {**a, "message_to_buyer": r.choice(["", "Your installment is due."])}
+        if name in ("price_extension", "extend_installment"):
+            a["pay_by"] = r.choice(["2027-02-01", "2027-02-10", "2027-02-12", "2027-02-20", "2027-03-30", "bad"])
+            if name == "extend_installment":
+                a.update(message_to_buyer="New date.", justification_for_manager="asked")
+            return a
         return a
 
     def run(self, steps=None):
@@ -296,7 +304,8 @@ class Case:
             self.log(f"approval {a['id']} by {actor} refused: {err}")
 
     def pay_move(self):
-        ops = [o for o in self.e.s["operations"].values() if o["kind"] == "deposit" and o.get("payment_intent_id")]
+        ops = [o for o in self.e.s["operations"].values() if o["kind"] in ("deposit", "installment")
+               and o.get("payment_intent_id")]
         if not ops:
             return
         op = self.rng.choice(ops)
@@ -514,6 +523,19 @@ def check(e: Engine, provider: SimulatedProvider):
             v = next(x for x in d["versions"] if x["n"] == a["version"])
             if not v["reduction"]["waived"] or a["amount"] != v["reduction"]["waived"]:
                 _fail(f"{d['ref']} v{v['n']}: change sent for approval without a waiver")
+        elif a["subject"] == "installment_extension":
+            # Asked only when a rule is crossed: beyond the seller's own days (fewer on busy dates) or a second move;
+            # never past the release deadline, which nobody can approve.
+            if not a["rules"]:
+                _fail(f"{d['ref']} extension approval {a['id']} names no rule")
+            col, r = scen["policy"]["collections"], a["risk"]
+            alone = col["busy_seller_extension_days"] if r["demand_pct"] >= col["busy_demand_pct"] else col["seller_extension_days"]
+            first = calc.d(a["from"]) if not (d.get("extensions") or {}).get(a["label"]) else \
+                calc.d(d["extensions"][a["label"]]["history"][0]["from"])
+            if (calc.d(a["pay_by"]) - first).days <= alone and not any("already extended" in x for x in a["reasons"]):
+                _fail(f"{d['ref']} extension approval {a['id']} asked within the seller's {alone} days")
+            if a["pay_by"] > r["release_deadline"]:
+                _fail(f"{d['ref']} extension approval {a['id']} past the release deadline")
         else:
             _fail(f"{d['ref']} approval {a['id']}: unexpected hotel-manager subject {a['subject']}")
 
@@ -564,6 +586,27 @@ def check(e: Engine, provider: SimulatedProvider):
                 _fail(f"{d['ref']} booked but the provider shows {pi['status']} {pi['amount']}")
             if not any(x["key"] == f"receipt:{pi['id']}" for x in s["ledger"]):
                 _fail(f"{d['ref']} booked without a ledger receipt")
+
+        # Installments: at most one open payment link a deal; each one paid is received once, for its own amount;
+        # no due date moved past the release deadline, and any move beyond the seller's own days was approved.
+        inst = [o for o in s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "installment"]
+        if len([o for o in inst if o["status"] in ("submitting", "unknown", "created")]) > 1:
+            _fail(f"{d['ref']} has more than one open installment payment")
+        for o in inst:
+            if o["status"] == "succeeded":
+                rec = [x for x in s["ledger"] if x["operation"] == o["id"] and x["type"] == "installment_received"]
+                if len(rec) != 1 or rec[0]["amount"] != o["amount"]:
+                    _fail(f"{d['ref']} installment {o['id']} received {len(rec)} times")
+        if d.get("extensions"):
+            v = e._version(d, d["accepted_version"])
+            dates = calc.key_dates(calc.arrival_of(v["terms"]), e.policy)
+            for label, x in d["extensions"].items():
+                for h in x["history"]:
+                    if h["to"] > dates["release_deadline"]:
+                        _fail(f"{d['ref']} {label} moved to {h['to']}, past the release deadline")
+                    col = e.policy["collections"]
+                    if not h["approval"] and (calc.d(h["to"]) - calc.d(x["history"][0]["from"])).days > col["seller_extension_days"]:
+                        _fail(f"{d['ref']} {label} moved beyond the seller's authority without approval")
 
         # Money: what was refunded or is being refunded never exceeds what was received.
         fin = e.finance(d)

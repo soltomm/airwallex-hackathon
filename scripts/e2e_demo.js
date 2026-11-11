@@ -189,6 +189,48 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     check('AI Agent tab shows the refund started and checked', /Started a refund/.test(await card()) && /Checked the refund/.test(await card()));
     await shot('3-final');
 
+    // 8b. Jump past 8 Feb: the £828 installment is overdue. The seller sends a payment link; the buyer asks for 15 Feb;
+    // on busy dates that is beyond the seller's own 3 days, so the manager decides; then the buyer pays it.
+    await open('Northstar');
+    check('the deal offers a jump past the next installment date', /Next installment: £828 due 8 Feb/.test(await card()));
+    await click('#deal [data-act=jumpDue]');
+    n = await settle('Northstar', ['installment_requested']);
+    s = await state();
+    const inst = s.operations.filter(o => o.deal_id === n.id && o.kind === 'installment');
+    check('overdue: one £828 payment link sent', inst.length === 1 && inst[0].amount === 82800 && !!inst[0].payment_intent_id);
+    await open('Northstar');
+    txt = await card();
+    check('the payment schedule shows what the seller weighs', /what the seller weighs/i.test(txt) && /75%/.test(txt)
+          && /3 days/.test(txt) && /24 Feb/.test(txt) && /£4,140/.test(txt), txt.slice(0, 600));
+    await shot('5-overdue');
+    await mb.reload(); await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
+    check('the mailbox asks for the £828 installment', /Pay the £828 installment/.test(await mb.innerText('#act')));
+    check('the mailbox shows none of the hotel\'s risk', !/demand|resold|busy|cancelled today/i.test(await mb.innerText('body')));
+    await mclick(mb, '[data-act=sendSug]');                         // Ask for more time: 15 Feb
+    n = await settle('Northstar', ['extension_review']);
+    await open('Northstar');
+    txt = await card();
+    check('the manager is asked: 7 days on busy dates is beyond the seller', /until 15 Feb to pay £828/.test(txt) && /up to 3 days/.test(txt), txt.slice(0, 600));
+    await shot('6-extension');
+    await click('#deal [data-ap][data-d=approve]');
+    n = await settle('Northstar', ['installment_requested']);
+    check('the installment is now due 15 Feb', n.collection.current.due === '2027-02-15');
+    await mb.reload(); await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
+    const [pay2] = await Promise.all([ctx.waitForEvent('page'), mb.click('button:has-text("Open payment page")')]);
+    await pay2.waitForLoadState();
+    await pay2.click('text=Pay installment'); await pay2.waitForLoadState();
+    await pay2.click('button:has-text("Pay")'); await pay2.waitForLoadState();
+    await pay2.waitForTimeout(800);
+    check('return page shows the installment received', /installment is received/i.test(await pay2.innerText('body')));
+    await pay2.close();
+    n = await settle('Northstar', ['confirmed']);
+    s = await state();
+    check('£4,140 net received once; the hotel paid its share; it reconciles', n.finance_view.net_received === 414000
+          && s.ledger.filter(x => x.type === 'installment_received').length === 1
+          && n.payout_view.hotel_net + n.payout_view.platform_fee === 414000, JSON.stringify(n.payout_view));
+    await open('Northstar');
+    await shot('7-installment-paid');
+
     // Seller rules page: lists the rules, refuses an inconsistent change, saves and restores one.
     await closeDrawers(); await tools();
     await click('#wbRules'); await page.waitForSelector('#rules table', { timeout: 10000 });

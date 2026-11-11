@@ -95,6 +95,18 @@ hand-written RFP and sets who answers for the buyer.
    back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
+9. **Jump past 8 Feb (demo)**, on Northstar's card. The **£828** installment (bringing payments to 50%) was
+   due 8 Feb and hasn't arrived, so the deal turns **Installment overdue** and the seller sends Maya a payment
+   link for exactly £828 (a new Airwallex payment intent). The **Payment schedule** card shows what the seller
+   weighs: £3,312 (40%) paid, demand on the stay 75% (busy), 29 days to arrival, rooms resellable until 24 Feb,
+   and a 50% (£4,140) charge if the booking were cancelled today.
+10. In the mailbox, **Ask for more time** (15 Feb). Seven days is more than the seller may give alone on busy
+    dates (3 days; 7 on quiet ones), so the manager's card names that rule: **Approve**. The seller tells Maya
+    the new date; the payment link stays the same.
+11. In the mailbox, **Open payment page ↗** and pay. Verified with Airwallex: **£4,140 net received**, £4,140
+    still due by 3 Mar, and the hotel's share of the £828 (£745.20) paid out by funds split, £82.80 kept as
+    the fee. If 15 Feb had passed unpaid, the seller would hand the deal to a person with what cancelling
+    would cost.
 
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
@@ -223,6 +235,18 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   block on its own: it offers dates where the whole block fits (with the meeting room free on the
   meeting day), and the smaller block on the buyer's dates as a last option. If the buyer takes the
   smaller block, the offer says how many guests it sleeps.
+- **Installments.** After booking, the contract's schedule (50% 30 days before arrival, 100% 7 days before)
+  is collected, not just shown. When a date passes unpaid, the deal turns `installment_overdue` and the seller
+  decides: `request_installment` sends a payment link for exactly what is due (one payment intent; an open one
+  for the same amount is reused, and one for a changed amount is cancelled first), verified with the provider
+  like the deposit, recorded once and paid out to the hotel by its own funds split. If the buyer asks for
+  time, `policy.extension_check` decides who may agree: the seller alone up to 7 days after the original date,
+  or 3 when the stay's average demand is 70% or more (`policy.collections`: those rooms are worth more resold
+  than waited for), once per installment; longer, or a second move, needs the hotel manager, whose card shows
+  the risk (paid so far, demand, the cancellation charge today, the release deadline); and no date can move
+  past the release deadline, after which the rooms could no longer be resold. Overdue again after an
+  extension, the seller hands the deal to a person. The buyer sees what it owes and when, never the demand,
+  the risk or the seller's limits. No collection is asked while a refund is unresolved.
 - **Hand-offs.** Only an inquiry handed to staff with no booking can be handed back or closed. A staff
   instruction stays in front of the seller until it next writes to the buyer.
 - **Reset.** A reset creates a new run id and restores the hotel data. Airwallex is not reset.
@@ -303,6 +327,13 @@ approved refund.
 - the server: webhook signatures (bad, stale, tampered and missing rejected; valid accepted) and the
   access-token gate (`/pay/`, `/webhooks/`, `/healthz` open, everything else needs the token).
 
+`tests/test_installments.py` covers the overdue installment: the demo story (overdue on 9 Feb, a £828 link,
+15 Feb needing the manager on busy dates, the same link paid, received once, £745.20 split to the hotel and
+hotel net + fee = £4,140 net received); the same week agreed by the seller alone on quiet dates; a date past
+the release deadline refused and the seller's own date offered instead; a manager refusal; overdue again after
+an extension handed to a person with no second link; a second extension needing the manager; a duplicate
+webhook recorded once; a declined card; the buyer's view without the hotel's risk; and the rule's table.
+
 ### Randomized scenarios
 
 `tests/fuzz_group_sales.py` checks the rules against requests nobody wrote by hand. Each case (a seed)
@@ -379,8 +410,9 @@ seed, so replaying a seed in the same run is refused rather than merged. From th
 ### Browser check of the demo script
 
 `scripts/e2e_demo.js` clicks through the demo script in a real browser against a running server with
-simulated payments, and checks 38 points: the seller starting on its own, every spec figure, the
-buyer's moves made from the buyer's mailbox (none on the dashboard), the AI Agent tab, Seller rules
+simulated payments, and checks 55 points: the seller starting on its own, every spec figure, the
+buyer's moves made from the buyer's mailbox (none on the dashboard), the overdue installment (link, extension
+approved by the manager, paid and split), the AI Agent tab, Seller rules
 (a refused change, a saved one and restoring the defaults), Availability, the late notification, 375 px
 width on every tab, the rules page and the mailbox, and no JavaScript errors or browser dialogs. It resets
 the scenario first. It needs Playwright for Node (`npm i playwright`).
@@ -395,5 +427,6 @@ The checks that need real keys, and a hand-off prompt for running them, are in `
 ## Not in this build
 
 Kit 10 (Merchant Onboarding). Payments for extra rooms, other dates, upgrades, custom services, split
-billing, forecasting, separate department interfaces. Later installments are shown as obligations
-and are not charged automatically.
+billing, forecasting, separate department interfaces. Installments are collected only once overdue, by a
+payment link the seller sends; nothing is charged automatically. Cancelling a booking for non-payment is
+left to a person.

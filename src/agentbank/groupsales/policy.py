@@ -94,3 +94,42 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
         if pricing[case]["margin_pct"] < floor:
             hard.append(f"contribution margin {pricing[case]['margin_pct']}% with {label} is below {floor}%")
     return {"hard": hard, "approvals": needs, "rules": rules, "ok": not hard}
+
+
+def short_day(iso: str) -> str:
+    x = d(iso[:10])
+    return f"{x.day} {x:%b}"
+
+
+def extension_check(original_due: str, current_due: str, new_due: str, extensions_used: int, demand_pct: int,
+                    release_deadline: str, today: str, policy: dict) -> dict:
+    """Moving an installment's due date (`new_due`, YYYY-MM-DD). The seller may move it alone by a few days, fewer
+    when the stay's dates are in demand (the rooms are worth more resold than waited for), and only once. Longer, or
+    a second move, needs the hotel manager. Nobody can move it past the release deadline: after that the rooms can
+    no longer be resold, so waiting longer only grows what the hotel stands to lose."""
+    col = policy["collections"]
+    busy = demand_pct >= col["busy_demand_pct"]
+    alone_days = col["busy_seller_extension_days"] if busy else col["seller_extension_days"]
+    alone_until = (d(original_due) + timedelta(days=alone_days)).isoformat()
+    hard: list[str] = []
+    needs: list[str] = []
+    rules: list[dict] = []
+    if new_due <= today:
+        hard.append(f"the new date {new_due} is not after today ({today})")
+    if new_due <= current_due:
+        hard.append(f"the new date {new_due} is not later than the current due date {current_due}")
+    if new_due > release_deadline:
+        hard.append(f"the new date {new_due} is after the release deadline {release_deadline}, the last day the "
+                    "rooms could still be resold")
+    if not hard:
+        late = (d(new_due) - d(original_due)).days
+        if new_due > alone_until:
+            needs.append(f"{late} days after the original due date; the seller may give up to {alone_days} days"
+                         + (f" when demand on the stay is {col['busy_demand_pct']}% or more" if busy else ""))
+            rules.append(rule("Installment extension" + (" (busy dates)" if busy else ""),
+                              f"up to {alone_days} days, to {short_day(alone_until)}", f"{late} days, to {short_day(new_due)}"))
+        if extensions_used >= 1:
+            needs.append("this installment was already extended once")
+            rules.append(rule("Extensions per installment", "one", "a second"))
+    return {"hard": hard, "approvals": needs, "rules": rules, "ok": not hard, "busy": busy,
+            "seller_days": alone_days, "seller_until": alone_until}

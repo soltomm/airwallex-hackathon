@@ -109,6 +109,13 @@ def suggest(engine: Engine, deal_id: str) -> dict | None:
                     "payload": {"version": cur["n"]}}
         if st == "amendment_sent" and cur and cur["kind"] == "amendment" and cur["status"] == "sent":
             return {"action": "accept", "text": f"We accept amendment v{cur['n']}.", "payload": {"version": cur["n"]}}
+        ie = b.get("installment_event")
+        if (ie and st in ("installment_requested", "installment_overdue") and "payment_extension" not in sent_actions
+                and d["thread"] and d["thread"][-1]["from"] == "seller"):
+            inst = engine.deal_view(d["id"], for_="buyer").get("installment")
+            if inst:
+                return {"action": "payment_extension", "text": ie["text"].replace("{amount}", gbp(inst["amount"])),
+                        "payload": {"pay_by": ie["pay_by"]}}
         if st == "confirmed" and b.get("change_event") and "change_request" not in sent_actions:
             ev = b["change_event"]
             if change_due(engine, d, b):

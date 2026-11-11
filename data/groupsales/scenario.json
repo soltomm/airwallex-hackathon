@@ -60,6 +60,12 @@
       {"days_before_arrival": 30, "cumulative_pct": 50},
       {"days_before_arrival": 7, "cumulative_pct": 100}
     ],
+    "collections": {
+      "_note": "Overdue installments. The seller may move a due date alone by seller_extension_days (busy_seller_extension_days when the stay's average demand is busy_demand_pct or more), once. Longer or a second move needs the hotel manager; nobody can move it past the release deadline.",
+      "seller_extension_days": 7,
+      "busy_seller_extension_days": 3,
+      "busy_demand_pct": 70
+    },
     "cancellation": [
       {"more_than_days": 30, "charge_pct": 30},
       {"from_days": 30, "to_days": 8, "charge_pct": 50},
@@ -121,7 +127,11 @@
         "text": "Four colleagues can no longer attend. Please reduce our block by two twin rooms for all three nights and return any excess deposit under our agreement. We understand breakfast and meeting spend remain guaranteed.",
         "release_rooms_per_night": 2
       },
-      "mandate_allows_reduction_within_allowance": true
+      "mandate_allows_reduction_within_allowance": true,
+      "installment_event": {
+        "pay_by": "2027-02-15",
+        "text": "Apologies, our finance team's payment run slipped this month. Could we pay the {amount} instalment by Monday 15 February? It will go out as soon as the run is approved."
+      }
     },
     "summit.example": {
       "organizer": "Alex (Events)",

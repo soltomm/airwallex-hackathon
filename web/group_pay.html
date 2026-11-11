@@ -23,7 +23,7 @@
   <h1 id="title"></h1>
   <p class="sub" id="sub"></p>
   <table id="lines"></table>
-  <p>Signing deposit due now: <span class="due" id="amount"></span></p>
+  <p><span id="what">Signing deposit due now</span>: <span class="due" id="amount"></span></p>
   <div id="action"></div>
   <div id="status"></div>
   <p class="sub" style="margin-top:18px;font-size:13px">Sandbox: test card <code>4035 5010 0000 0008</code>, any future expiry, any CVC. Card details are entered on Airwallex's hosted page; the hotel and its agent never see them.</p>
@@ -36,8 +36,19 @@
   $('sub').textContent = `Booking ${P.ref}, agreement version ${P.version || '-'} · total ${P.total || '-'}`;
   $('lines').innerHTML = (P.lines || []).map(l => `<tr><td>${l.item}</td><td>${l.amount}</td></tr>`).join('');
   $('amount').textContent = P.amount ? `${P.amount} GBP` : '-';
+  const inst = P.kind === 'installment';
+  const day = x => new Date(x + 'T12:00:00Z').toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'});
+  if (inst) { $('what').textContent = `Installment (${P.label}) due ${day(P.due)}`; document.title = 'Group Installment'; }
   if (P.message) say(P.message, 'bad');
-  if (P.booking === 'confirmed') {
+  if (inst && P.op_status === 'succeeded') {
+    say('Payment verified with Airwallex. Thank you: your installment is received.', 'ok');
+  } else if (inst && P.op_status !== 'created') {
+    say(`This payment link is not open (${P.op_status}). The hotel will send a new one.`, 'bad');
+  } else if (inst && P.provider === 'simulated') {
+    $('action').innerHTML = `<a class="btn" href="${P.sim_url}">Pay installment (simulated hosted page)</a>`;
+  } else if (inst) {
+    $('action').innerHTML = `<button id="pay">Pay installment with Airwallex</button>`;
+  } else if (P.booking === 'confirmed') {
     say('Payment verified with Airwallex. Your booking is confirmed.', 'ok');
   } else if (P.booking === 'exception') {
     say('Payment received. The hotel is resolving a booking exception and will contact you; you will not be charged again.', 'bad');
@@ -51,16 +62,18 @@
     $('action').innerHTML = `<a class="btn" href="${P.sim_url}">Pay deposit (simulated hosted page)</a>`;
   } else {
     $('action').innerHTML = `<button id="pay">Pay deposit with Airwallex</button>`;
+  }
+  if ($('pay')) {
     (async () => {
       const { payments } = await window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
       $('pay').onclick = () => payments.redirectToCheckout({
         env: 'demo', mode: 'payment', intent_id: P.intent_id, client_secret: P.client_secret, currency: P.currency,
-        successUrl: P.success_url, submitType: 'book', appearance: { variables: { colorBrand: '#1f4e5f' } },
+        successUrl: P.success_url, submitType: inst ? 'pay' : 'book', appearance: { variables: { colorBrand: '#1f4e5f' } },
       });
     })().catch(e => say('Could not load Airwallex checkout: ' + e.message, 'bad'));
     if (location.pathname.endsWith('/return')) say('Waiting for Airwallex to confirm the payment…');
   }
-  if (location.pathname.endsWith('/return') && P.booking !== 'confirmed' && P.op_status !== 'succeeded' && P.hold_ok) {
+  if (location.pathname.endsWith('/return') && P.op_status !== 'succeeded' && (inst ? P.op_status === 'created' : (P.booking !== 'confirmed' && P.hold_ok))) {
     setTimeout(() => location.reload(), 3000);
   }
 </script>

@@ -253,7 +253,9 @@ const STATUS = {
   confirmed: ['Confirmed', 'ok'], amendment_sent: ['Change offered', 'buyer'], amendment_review: ['Needs approval', 'warn'],
   amendment_approved: ['Approved', 'acc'], refund_due: ['Refund due', 'warn'], refund_awaiting_approval: ['Needs approval', 'warn'],
   refund_pending: ['Refund pending', 'acc'], refund_failed: ['Refund failed', 'bad'], expired: ['Lapsed', 'bad'], handoff: ['With staff', 'bad'], dates_proposed: ['Dates offered', 'buyer'],
-  declined: ['Declined', ''], lost: ['Closed', ''], payment_received_booking_exception: ['Booking exception', 'bad']};
+  declined: ['Declined', ''], lost: ['Closed', ''], payment_received_booking_exception: ['Booking exception', 'bad'],
+  installment_overdue: ['Installment overdue', 'bad'], installment_requested: ['Installment due', 'buyer'],
+  extension_review: ['Needs approval', 'warn'], extension_approved: ['Approved', 'acc']};
 const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class="chip ${c}">${esc(l)}</span>`; };
 const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : null;
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
@@ -310,7 +312,8 @@ function render() {
 }
 
 // ---- the next step, in one place. The dashboard is the hotel's: the buyer answers by email ------
-const SELLER_TURN = ['new', 'intake', 'approved_to_send', 'accepted', 'refund_due', 'amendment_approved', 'revise', 'refund_awaiting_approval'];
+const SELLER_TURN = ['new', 'intake', 'approved_to_send', 'accepted', 'refund_due', 'amendment_approved', 'revise', 'refund_awaiting_approval',
+  'installment_overdue', 'extension_approved'];
 const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
 function nextOf(d) {
   const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy, v = curVersion(d), co = esc(d.company);
@@ -325,6 +328,12 @@ function nextOf(d) {
     title: `Waiting for ${co} to pay the ${gbp(v && v.pricing.deposit)} deposit`,
     text: "They pay on Airwallex's hosted page from the link the seller sent. The booking confirms once the payment is verified with Airwallex."};
   if (st === 'refund_pending') return {cls: 'wait', short: 'Refund confirming', who: 'Airwallex', refund: true};
+  if (st === 'installment_requested' && !d.unread) {
+    const c = d.collection && d.collection.current;
+    return {cls: 'buyer', short: 'Buyer to pay', who: 'Waiting for the buyer', mail: true, chkPay: true,
+      title: `Waiting for ${co} to pay the ${gbp(d.collection.due_now)} installment${c ? `, due ${day(c.due)}` : ''}`,
+      text: "The seller sent a payment link for exactly what is due. The payment is verified with Airwallex before it counts."};
+  }
   if (SELLER_TURN.includes(st) || d.unread) return {cls: 'wait', short: busy ? 'Seller working' : 'Seller up next', who: 'Seller agent', seller: true};
   // A booked deal stays confirmed when the seller hands something to a person (e.g. a change it can't
   // apply): show that hand-off until the buyer writes again.
@@ -356,7 +365,7 @@ function nextCard(d) {
   let h = `<div class="next ${n.cls}"><div class="who">${esc(n.who)}</div>`;
   if (n.ap) {
     const a = n.ap;
-    const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
+    const what = {installment_extension: `Give ${esc(d.company)} until ${day(a.pay_by || '')} to pay ${gbp(a.amount)}?`, offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
     const [yes, no] = a.subject === 'reduction' && a.amount ? ['Approve waiver', 'Keep the charge'] : ['Approve', 'Reject'];
     h += `<h3>${what}</h3>${whyCard(a)}<details><summary class="small muted">Full request</summary><p class="small">${esc(a.summary)}</p></details>
       <div class="row" style="margin-top:10px"><button class="btn-ok" data-ap="${a.id}" data-d="approve" data-who="${a.approver}">${yes}</button><button class="btn-bad" data-ap="${a.id}" data-d="reject" data-who="${a.approver}">${no}</button></div>`;
@@ -372,7 +381,9 @@ function nextCard(d) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
     h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
     if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
+    const nx = d.collection && d.collection.current;
     if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
+    else if (nx && !nx.overdue && !d.collection.blocked) h += `<p class="small">Next installment: ${gbp(nx.amount)} due ${day(nx.due)}.</p><div class="row"><button data-act="jumpDue" data-to="${esc(nx.due)}">Jump past ${day(nx.due)} (demo)</button></div>`;
     h += mailLink(d);
   } else {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
@@ -430,6 +441,29 @@ function offerCard(d) {
   }
   h += payoutCard(d);
   return h;
+}
+// The payment schedule after booking and, once an installment is overdue, what the seller weighs: paid so far, demand
+// on the stay (which sets how far it may move a date alone), days to arrival, what cancelling would cost, and the
+// release deadline (nothing moves past it). Hotel only; the buyer's mailbox shows only what it owes and when.
+function collectionCard(d) {
+  const c = d.collection;
+  if (!c || !c.items.length) return '';
+  const live = c.current && (c.current.overdue || ['installment_overdue', 'installment_requested', 'extension_review', 'extension_approved'].includes(d.status));
+  const rows = c.items.map(m => {
+    const moved = m.due !== m.original_due;
+    const st = m.overdue ? ['bad', `Overdue ${Math.max(1, Math.round((new Date(S.clock) - new Date(m.due + 'T23:59:59Z')) / 864e5))}d`]
+      : c.payment && c.current && m.label === c.current.label ? ['buyer', 'Link sent'] : ['', 'Scheduled'];
+    return `<tr><td>${esc(m.label)}</td><td>${moved ? `<s class="muted">${day(m.original_due)}</s> → <b>${day(m.due)}</b>` : day(m.due)}</td><td class="r">${gbp(m.amount)}</td><td><span class="chip ${st[0]}">${st[1]}</span></td></tr>`;
+  }).join('');
+  const r = c.risk;
+  const risk = live ? `<dl class="kv small" style="margin-top:10px">
+      <dt>Paid so far</dt><dd>${gbp(r.net_received)} of ${gbp(r.total)} (${r.paid_pct}%)</dd>
+      <dt>Demand on the stay</dt><dd>${r.demand_pct}%${r.busy ? ` <span class="chip warn">busy</span>` : ''} · the seller may move a date alone by <b>${r.seller_extension_days} days</b>${r.busy ? ` (busy dates, ${r.busy_demand_pct}%+)` : ''}, once</dd>
+      <dt>Arrival</dt><dd>in ${r.days_to_arrival} days · rooms can be resold until <b>${day(r.release_deadline)}</b> (no date moves past it)</dd>
+      <dt>If cancelled today</dt><dd>${r.cancellation_pct_today}% charge, ${gbp(r.cancellation_charge_today)}${r.uncovered_if_cancelled ? ` · ${gbp(r.uncovered_if_cancelled)} more than is paid` : ' · covered by what is paid'}</dd></dl>` : '';
+  const pay = c.payment ? `<p class="small muted" style="margin:8px 0 0">Payment link: ${gbp(c.payment.amount)} · Airwallex intent <code>${esc(c.payment.payment_intent_id || 'pending')}</code> · ${esc((c.payment.provider_status || c.payment.status || '').replaceAll('_', ' '))}</p>` : '';
+  return `<div class="card"><div class="label"><span>Payment schedule${live ? ' · what the seller weighs' : ''}</span>${c.overdue_amount ? `<span class="chip bad">${gbp(c.overdue_amount)} overdue</span>` : ''}</div>
+    <div class="scroll" style="overflow-x:auto"><table class="t"><tr><th>Installment</th><th>Due</th><th class="r">Amount</th><th></th></tr>${rows}</table></div>${risk}${pay}</div>`;
 }
 function payoutCard(d) {
   const p = d.payout_view;
@@ -490,7 +524,7 @@ function renderDeal(d) {
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}</div>
-    ${nextCard(d)}${offerCard(d)}
+    ${nextCard(d)}${collectionCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.FX) window.FX.mount(d);
@@ -512,6 +546,7 @@ function wire(d) {
       else if (a === 'retry') { await api(`/api/deals/${d.id}/retry`, {}); toast('The seller is retrying'); }
       else if (a === 'retryPayout') { const r = await api(`/api/deals/${d.id}/retry_payout`, {}); toast(r.status === 'paid' ? 'Hotel paid' : 'Payout still pending'); }
       else if (a === 'jump') await api('/api/clock', {to: '2027-01-20T09:00:00+00:00'});
+      else if (a === 'jumpDue') { const t = new Date(b.dataset.to + 'T09:00:00Z'); t.setUTCDate(t.getUTCDate() + 1); await api('/api/clock', {to: t.toISOString().replace('.000Z', '+00:00')}); }
       else if (a === 'handBack') { await api(`/api/deals/${d.id}/hand_back`, {instruction: ($('instr') || {}).value || ''}); toast('Handed back to the seller'); }
       else if (a === 'close') { await api(`/api/deals/${d.id}/close`, {}); toast('Inquiry closed'); }
     } catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
@@ -537,6 +572,8 @@ const EVENT = {
   refund_failed: 'Refund failed', refund_mismatch: 'Refund mismatch', handoff: 'Handed to a person', declined: 'Inquiry declined',
   ledger_dedupe: 'Duplicate ledger entry ignored', rules_changed: 'Seller rules changed', seller_paused: 'Seller paused', seller_retry: 'Seller asked to retry',
   payout_paid: 'Hotel paid by funds split', payout_failed: 'Hotel payout refused', payout_pending: 'Hotel payout pending', payout_retry: 'Hotel payout retried',
+  installment_overdue: 'Installment overdue', installment_requested: 'Payment link sent', extension_requested: 'Extension asked of the manager',
+  installment_extended: 'Installment date moved', installment_received: 'Installment received', buyer_payment_extension: 'Buyer asked for more time',
   payout_reversed: "Hotel's share of refund taken back", payout_reversal_failed: 'Clawback refused', webhook: 'Provider notification', clock: 'Scenario clock moved', reset: 'Scenario reset', sim: 'Demo setting changed'};
 const WHO = {seller: ['Seller agent', 'acc'], hotel_manager: ['Hotel manager', 'warn'], presenter: ['Presenter', ''], system: ['System', ''], 'hotel staff': ['Hotel staff', 'warn']};
 const who = a => a.startsWith('buyer') ? ['Buyer', 'buyer'] : WHO[a] || [cap(a.replaceAll('_', ' ')), ''];
@@ -563,7 +600,8 @@ const TOOL = {
   suggest_dates: 'Checked other dates', offer_dates: 'Offered other dates',
   price_terms: 'Priced terms (dry run)', propose_offer: 'Proposed an offer', send_offer: 'Sent an offer', open_checkout: 'Opened checkout',
   check_payment: 'Checked the payment', prepare_reduction: 'Prepared a change', send_amendment: 'Sent a change', refund_excess: 'Started a refund',
-  check_refund: 'Checked the refund', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',
+  check_refund: 'Checked the refund', request_installment: 'Sent a payment link', price_extension: 'Priced an extension (dry run)',
+  extend_installment: 'Installment extension', escalate: 'Handed to a person', decline: 'Declined the inquiry', log_reasoning: 'Note',
   read_deal: 'Read the deal', list_queue: 'Looked at the queue'};
 const AG_READS = new Set(['read_deal', 'list_queue']);
 const ARG = {req: 'Requirements', rate: 'Rate', deposit_pct: 'Deposit %', attrition_pct: 'Attrition %', rooms_per_night: 'Rooms a night', room_type: 'Room type',

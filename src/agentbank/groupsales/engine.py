@@ -30,7 +30,7 @@ from pathlib import Path
 from . import bookable, calc, rules
 from .calc import gbp
 from .extract import MAX_EMAIL_CHARS, MAX_MESSAGE_CHARS, extract, missing_info, stay_nights
-from .policy import hotel_check, rule
+from .policy import hotel_check, rule, short_day
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
 from . import vendors
@@ -487,6 +487,7 @@ class Engine:
                                      if a["deal_id"] == d["id"]]
                 view["key_dates"] = self._key_dates(d)
                 view["payouts"] = self.payout_view(d)
+                view["collection"] = self.collection_view(d)
                 view["clock"] = self.now()
                 view["staff_instruction"] = copy.deepcopy(d.get("staff_instruction"))
                 view["group_calendar"] = {"first_night": self.hotel["nights"][0], "last_night": self.hotel["nights"][-1],
@@ -496,6 +497,11 @@ class Engine:
                 view["waiting_on"] = w if w.startswith("buyer") else ("hotel" if w else None)
                 # Drafts and versions awaiting the hotel manager are internal until the hotel sends them.
                 view["versions"] = [self._version_public(v, for_) for v in d["versions"] if v.get("sent_at")]
+                # The buyer sees what it owes and when (its own contract), never demand, risk or the hotel's limits.
+                cv = self.collection_view(d)
+                view["installment"] = ({"label": cv["current"]["label"], "amount": cv["due_now"],
+                                        "due": cv["current"]["due"], "overdue": cv["current"]["overdue"],
+                                        "pay_url": cv["pay_url"]} if cv and cv["current"] and cv["payment"] else None)
             return view
 
     def _version_public(self, v: dict, for_: str) -> dict:
@@ -1179,7 +1185,7 @@ class Engine:
             a["status"] = "approved" if decision == "approve" else "rejected"
             a["decided_at"] = self.now()
             a["note"] = note
-            self.log(d["id"], actor, "approval_" + a["status"], f"Hotel manager {a['status']} {a['subject']}"
+            self.log(d["id"], actor, "approval_" + a["status"], f"Hotel manager {a['status']} {a['subject'].replace('_', ' ')}"
                      + (f" v{a['version']}" if a["version"] else "") + (f" {gbp(a['amount'])}" if a["amount"] else "")
                      + (f": {note}" if note else ""))
             if a["subject"] == "offer":
@@ -1197,6 +1203,15 @@ class Engine:
                     d["status"] = "confirmed"
                     d["flags"].append(f"waiver on change v{a['version']} declined by manager: the attrition charge "
                                       "stands; the change can be offered without it")
+            elif a["subject"] == "installment_extension":
+                if decision == "approve":
+                    d["status"] = "extension_approved"
+                else:
+                    cv = self.collection_view(d)
+                    d["status"] = "installment_overdue" if cv and cv["current"] and cv["current"]["overdue"] \
+                        else "installment_requested"
+                    d["flags"].append(f"extension of the {gbp(a['amount'])} installment to {a.get('pay_by')} declined "
+                                      "by the manager")
             elif a["subject"] == "refund":
                 if decision == "reject":
                     d["flags"].append(f"refund {gbp(a['amount'])} not authorized: amount remains owed to the buyer; "
@@ -1236,6 +1251,14 @@ class Engine:
             elif action == "change_request":
                 if not d.get("booking") or d["booking"]["status"] not in ("confirmed",):
                     raise Refused("there is no confirmed booking to change")
+            elif action == "payment_extension":
+                if not d.get("booking") or d["booking"]["status"] != "confirmed":
+                    raise Refused("there is no confirmed booking to pay for")
+                try:
+                    payload = {"pay_by": calc.d(str(payload.get("pay_by") or "")[:10]).isoformat()}
+                except ValueError:
+                    raise Refused("say which date you can pay by (YYYY-MM-DD)")
+                msg["payload"] = payload
             elif action not in ("reply", "counter", "decline", "message"):
                 raise Refused(f"unknown action {action}")
             d["thread"].append(msg)
@@ -1452,6 +1475,7 @@ class Engine:
             self.log(d["id"], "system", "expired", f"Offer and hold expired after {self.policy['quote_validity_hours']} scenario hours; checkout "
                      "disabled. A renewed offer needs a fresh availability check and new acceptance.")
             d["unread"] = True
+        self._note_overdue()
 
     # ================================================================ deposit payment
     def _deposit_op(self, d):
@@ -1519,7 +1543,7 @@ class Engine:
     def _recover(self, op):
         """An op whose creation outcome is unknown: look it up by our own references, never resubmit."""
         try:
-            if op["kind"] == "deposit":
+            if op["kind"] in ("deposit", "installment"):
                 found = [i for i in self.provider.find_intents(op["merchant_order_id"])
                          if i.get("request_id") in (None, op["request_id"])
                          and (i.get("metadata") or {}).get("operation_id") in (None, op["id"])]
@@ -1543,11 +1567,14 @@ class Engine:
     def check_payment(self, deal_id: str, source: str = "seller") -> dict:
         with self.lock:
             d = self.deal(deal_id)
-            op = self._deposit_op(d)
+            op = self.collection_op(d)
             if not op:
                 raise Refused("no checkout opened")
             before = (d["status"], op["status"])
-            self._verify_deposit(d, op, source)
+            if op["kind"] == "installment":
+                self._verify_installment(d, op, source)
+            else:
+                self._verify_deposit(d, op, source)
             self._save()
             changed = (d["status"], op["status"]) != before
             out = {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
@@ -1927,6 +1954,302 @@ class Engine:
         elif new == "RECEIVED":
             op["status"] = "pending"
 
+    # ================================================================ installments (collections)
+    # After signing, the contract's schedule says what must be paid by when (calc.schedule). When an installment's
+    # date passes unpaid, the deal turns installment_overdue and the seller decides: send a payment link for exactly
+    # what is due, or, when the buyer asks for time, move the due date. How far it may move it alone depends on the
+    # risk (policy.extension_check): fewer days when the stay's dates are in demand, once, and never past the release
+    # deadline. Collections are separate Airwallex payment intents, verified like the deposit and paid out to the
+    # hotel by funds split like the deposit.
+    INSTALLMENT_STATES = ("installment_overdue", "installment_requested", "extension_review", "extension_approved")
+
+    def _installment_ops(self, d):
+        return [o for o in self.s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "installment"]
+
+    def _open_installment_op(self, d):
+        ops = [o for o in self._installment_ops(d) if o["status"] in ("submitting", "unknown", "created")]
+        return ops[-1] if ops else None
+
+    def collection_op(self, d):
+        """The payment the buyer's payment page is for: the latest installment asked for (open or paid), else the
+        deposit."""
+        ops = [o for o in self._installment_ops(d) if o["status"] not in ("cancelled", "failed")]
+        return ops[-1] if ops else self._deposit_op(d)
+
+    def _stay_demand(self, terms) -> int:
+        nights = sorted(terms["rooms"])
+        if not nights:
+            return 0
+        return round(sum(calc.demand_pct(n, terms["room_type"], self.hotel, self.rms) for n in nights) / len(nights))
+
+    def _cancellation_pct(self, days_to_arrival: int) -> int:
+        for band in self.policy["cancellation"]:
+            if "more_than_days" in band and days_to_arrival > band["more_than_days"]:
+                return band["charge_pct"]
+            if "within_days" in band and days_to_arrival <= band["within_days"]:
+                return band["charge_pct"]
+            if "from_days" in band and band["to_days"] <= days_to_arrival <= band["from_days"]:
+                return band["charge_pct"]
+        return 100
+
+    def collection_view(self, d) -> dict | None:
+        """The installments still to collect on a confirmed booking, which are overdue, and what the seller weighs
+        when one is: what is already paid, what cancelling today would cost the buyer, demand on the stay, days to
+        arrival and the last date the rooms could still be resold. Hotel only."""
+        b = d.get("booking")
+        if not b or b.get("status") != "confirmed" or not d.get("accepted_version"):
+            return None
+        v = self._version(d, d["accepted_version"])
+        fin = self.finance(d)
+        today = self.now()[:10]
+        ext = d.get("extensions") or {}
+        items = []
+        for m in (fin.get("schedule") or [])[1:]:            # the signing deposit was paid at booking
+            if not m["amount"]:
+                continue
+            e = ext.get(m["label"]) or {}
+            due = e.get("due") or m["due"]
+            items.append({"label": m["label"], "amount": m["amount"], "original_due": m["due"], "due": due,
+                          "cumulative_pct": round(m["cumulative_target"] * 100 / fin["total"]) if fin["total"] else 0,
+                          "extensions": len(e.get("history") or []), "overdue": today > due})
+        overdue = [m for m in items if m["overdue"]]
+        current = overdue[0] if overdue else (items[0] if items else None)
+        dates = calc.key_dates(calc.arrival_of(v["terms"]), self.policy)
+        days_to_arrival = (calc.d(dates["arrival"]) - calc.d(today)).days
+        col = self.policy["collections"]
+        demand = self._stay_demand(v["terms"])
+        busy = demand >= col["busy_demand_pct"]
+        charge_pct = self._cancellation_pct(days_to_arrival)
+        charge = calc.pct_of(fin["total"], charge_pct) if charge_pct < 100 else fin["total"]
+        op = self._open_installment_op(d)
+        return {
+            "items": items, "current": current,
+            "overdue_amount": sum(m["amount"] for m in overdue),
+            "due_now": sum(m["amount"] for m in overdue) or (current["amount"] if current else 0),
+            "days_late": (calc.d(today) - calc.d(current["original_due"])).days if current and current["overdue"] else 0,
+            "blocked": fin.get("collection_blocked"),
+            "risk": {"total": fin["total"], "net_received": fin["net_received"],
+                     "paid_pct": round(fin["net_received"] * 100 / fin["total"]) if fin["total"] else 0,
+                     "still_due": fin.get("still_due"), "days_to_arrival": days_to_arrival,
+                     "demand_pct": demand, "busy": busy, "busy_demand_pct": col["busy_demand_pct"],
+                     "seller_extension_days": col["busy_seller_extension_days"] if busy else col["seller_extension_days"],
+                     "release_deadline": dates["release_deadline"],
+                     "cancellation_pct_today": charge_pct, "cancellation_charge_today": charge,
+                     "uncovered_if_cancelled": max(0, charge - fin["net_received"])},
+            "payment": {k: op.get(k) for k in ("id", "label", "amount", "status", "payment_intent_id", "provider_status")}
+                       if op else None,
+            "pay_url": self.pay_url(d) if op else None,
+        }
+
+    def _note_overdue(self):
+        """Called by the sweep: a booked deal whose installment date passed unpaid becomes installment_overdue, once
+        per due date, and the seller wakes."""
+        for d in self.s["deals"].values():
+            if d["status"] not in ("confirmed", "installment_requested"):
+                continue
+            cv = self.collection_view(d)
+            if not cv or cv["blocked"] or not cv["current"] or not cv["current"]["overdue"]:
+                continue
+            key = f"{cv['current']['label']}|{cv['current']['due']}"
+            if d.get("overdue_noted") == key:
+                continue
+            d["overdue_noted"] = key
+            d["status"] = "installment_overdue"
+            d["unread"] = True
+            self.log(d["id"], "system", "installment_overdue",
+                     f"{cv['current']['label']} installment of {gbp(cv['current']['amount'])} was due "
+                     f"{short_day(cv['current']['due'])} and has not been received ({gbp(cv['overdue_amount'])} overdue).")
+
+    def request_installment(self, deal_id: str, message: str, actor: str = "seller") -> dict:
+        """Ask the buyer for what is due now, with a payment link for exactly that amount (one Airwallex payment
+        intent; an open one for the same amount is reused, never duplicated)."""
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            if d.get("seller_paused"):
+                raise Refused(f"paused after {d['seller_paused']['what']} failed: hotel staff must retry first")
+            op = self._ensure_installment_op(d)
+            if message.strip():
+                d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                    "text": message.strip(), "payment_request": op["id"]})
+            d["status"] = "installment_requested"
+            self.log(d["id"], actor, "installment_requested",
+                     f"Asked for {gbp(op['amount'])} ({op['label']}, due {short_day(op['due'])}); payment link sent "
+                     f"(intent {op.get('payment_intent_id') or 'unknown'}).")
+            self._save()
+            return {"payment_url": self.pay_url(d), "operation": op["id"], "amount": gbp(op["amount"]),
+                    "due": op["due"], "status": op["status"]}
+
+    def _ensure_installment_op(self, d) -> dict:
+        cv = self.collection_view(d)
+        if not cv:
+            raise Refused("there is no confirmed booking to collect for")
+        if cv["blocked"]:
+            raise Refused(cv["blocked"])
+        if not cv["current"] or cv["due_now"] <= 0:
+            raise Refused("nothing is due on the payment schedule")
+        amount, label, due = cv["due_now"], cv["current"]["label"], cv["current"]["due"]
+        op = self._open_installment_op(d)
+        if op:
+            if op["status"] in ("submitting", "unknown"):
+                self._recover(op)
+                if op["status"] in ("submitting", "unknown"):
+                    raise Refused(f"payment {op['id']} has an unknown outcome: it is being looked up, not resubmitted")
+            if op["amount"] == amount:
+                op["due"] = due
+                return op
+            # What is due changed (e.g. another installment fell due): retire the old link before the new one.
+            try:
+                self.provider.cancel_intent(op["request_id"] + "-cancel", op["payment_intent_id"], "amount due changed")
+                op["status"] = "cancelled"
+            except Exception as e:
+                raise Refused(f"the open payment link for {gbp(op['amount'])} could not be cancelled ({e}); "
+                              "check it before asking for a different amount")
+        oid = self._id("op_")
+        n = len(self._installment_ops(d)) + 1
+        op = {"id": oid, "kind": "installment", "deal_id": d["id"], "run_id": self.s["run_id"],
+              "version": d["accepted_version"], "label": label, "due": due, "amount": amount, "currency": "GBP",
+              "request_id": f"{self.s['run_id']}-{oid}", "merchant_order_id": f"{self.s['run_id']}-{d['ref']}-i{n}",
+              "payment_intent_id": None, "status": "submitting", "created_at": self.now(), "provider_status": None}
+        self.s["operations"][oid] = op
+        self._save()   # persist the operation before calling the provider
+        meta = {"run_id": self.s["run_id"], "deal": d["ref"], "agreement_version": str(d["accepted_version"]),
+                "operation_id": oid, "obligation": f"installment: {label}"}
+        try:
+            pi = self.provider.create_intent(op["request_id"], amount, "GBP", op["merchant_order_id"], meta,
+                                             return_url=self.pay_url(d, "return"),
+                                             connected_account_id=self.hotel_account)
+            op.update(payment_intent_id=pi["id"], client_secret=pi.get("client_secret"), status="created",
+                      provider_status=pi["status"])
+        except AmbiguousResult as e:
+            op["status"] = "unknown"
+            op["note"] = str(e)
+            self._recover(op)
+        except AirwallexError as e:
+            op["status"] = "failed"
+            op["note"] = str(e)
+            self._pause_seller(d, "requesting an installment", e)
+            self._save()
+            raise Refused(f"provider refused the payment intent: {e}")
+        return op
+
+    def _extension_subject(self, d, cv, pay_by):
+        cur = cv["current"]
+        obj = {"deal": d["ref"], "label": cur["label"], "amount": cur["amount"], "from": cur["due"], "to": pay_by}
+        return obj, _hash(obj)
+
+    def price_extension(self, deal_id: str, pay_by: str) -> dict:
+        """Dry run: may the overdue (or next) installment move to `pay_by`, and on whose authority."""
+        with self.lock:
+            d = self.deal(deal_id)
+            return self._extension_check(d, pay_by)
+
+    def _extension_check(self, d, pay_by: str) -> dict:
+        cv = self.collection_view(d)
+        if not cv or not cv["current"]:
+            raise Refused("there is no installment to extend")
+        try:
+            pay_by = calc.d(str(pay_by)[:10]).isoformat()
+        except ValueError:
+            raise Refused(f"{pay_by!r} is not a date (YYYY-MM-DD)")
+        cur = cv["current"]
+        from .policy import extension_check
+        chk = extension_check(cur["original_due"], cur["due"], pay_by, cur["extensions"], cv["risk"]["demand_pct"],
+                              cv["risk"]["release_deadline"], self.now()[:10], self.policy)
+        return {"installment": cur, "pay_by": pay_by, "risk": cv["risk"], **chk,
+                "verdict": "not allowed" if chk["hard"] else "needs the manager" if chk["approvals"] else "seller alone"}
+
+    def extend_installment(self, deal_id: str, pay_by: str, message: str, justification: str = "",
+                           actor: str = "seller") -> dict:
+        """Move an installment's due date. Within the seller's authority it applies at once and the buyer is told;
+        beyond it the hotel manager decides first (the request names the rule and the risk); past the release
+        deadline nobody can. The payment link stays the same: only the date moves."""
+        with self.lock:
+            self._sweep()
+            d = self.deal(deal_id)
+            chk = self._extension_check(d, pay_by)
+            if chk["hard"]:
+                raise Refused("extension not allowed: " + "; ".join(chk["hard"]))
+            cv = self.collection_view(d)
+            cur, risk, pay_by = cv["current"], cv["risk"], chk["pay_by"]
+            obj, h = self._extension_subject(d, cv, pay_by)
+            approval = None
+            if chk["approvals"]:
+                approval = next((a for a in self.s["approvals"].values() if a["deal_id"] == d["id"]
+                                 and a["subject"] == "installment_extension" and a["hash"] == h
+                                 and a["status"] == "approved" and not a.get("used")), None)
+                if not approval:
+                    if any(a["deal_id"] == d["id"] and a["subject"] == "installment_extension" and a["hash"] == h
+                           and a["status"] == "pending" for a in self.s["approvals"].values()):
+                        raise Refused("this extension is already waiting for the hotel manager")
+                    if any(a["deal_id"] == d["id"] and a["subject"] == "installment_extension" and a["hash"] == h
+                           and a["status"] == "rejected" for a in self.s["approvals"].values()):
+                        raise Refused("the hotel manager declined this extension")
+                    summary = (f"Move {d['company']}'s {gbp(cur['amount'])} installment ({cur['label']}) from "
+                               f"{short_day(cur['due'])} to {short_day(pay_by)}. {gbp(risk['net_received'])} ({risk['paid_pct']}%) is paid; "
+                               f"demand on the stay is {risk['demand_pct']}%; cancelling today would cost the buyer "
+                               f"{risk['cancellation_pct_today']}% ({gbp(risk['cancellation_charge_today'])}); the rooms "
+                               f"can be resold until {short_day(risk['release_deadline'])}.")
+                    self._request_approval(
+                        d, "hotel_manager", "installment_extension", summary, chk["approvals"], obj_hash=h,
+                        amount=cur["amount"], rules=chk["rules"],
+                        extra={"pay_by": pay_by, "from": cur["due"], "label": cur["label"], "risk": risk,
+                               "justification": justification[:400], "message": message[:2000]},
+                        if_approved=f"The installment is due {short_day(pay_by)}; the seller tells the buyer and the payment link "
+                                    "stays open.",
+                        if_rejected=f"The installment stays due {short_day(cur['due'])}; the seller offers only what it can agree "
+                                    "alone, or hands the deal to you.")
+                    d["status"] = "extension_review"
+                    self.log(d["id"], actor, "extension_requested", f"Asked the manager to move the "
+                             f"{gbp(cur['amount'])} installment to {short_day(pay_by)}: {'; '.join(chk['approvals'])}.")
+                    self._save()
+                    return {"status": "pending_approval", "pay_by": pay_by, "rules": chk["rules"],
+                            "note": "Paused: hotel manager approval required before the date can move."}
+            e = d.setdefault("extensions", {}).setdefault(cur["label"], {"history": []})
+            e["due"] = pay_by
+            e["history"].append({"from": cur["due"], "to": pay_by, "at": self.now(), "by": actor,
+                                 "approval": approval["id"] if approval else None})
+            if approval:
+                approval["used"] = True
+            op = self._ensure_installment_op(d)
+            if message.strip():
+                d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                    "text": message.strip(), "payment_request": op["id"]})
+            d["status"] = "installment_requested"
+            d["overdue_noted"] = None
+            self.log(d["id"], actor, "installment_extended",
+                     f"Moved the {gbp(cur['amount'])} installment from {short_day(cur['due'])} to {short_day(pay_by)}"
+                     + (f" (approved by the hotel manager, {approval['id']})" if approval else " (within the seller's "
+                        f"authority: up to {chk['seller_days']} days{' on busy dates' if chk['busy'] else ''})") + ".")
+            self._save()
+            return {"status": "extended", "pay_by": pay_by, "payment_url": self.pay_url(d), "amount": gbp(op["amount"])}
+
+    def _verify_installment(self, d, op, source: str):
+        if op["status"] in ("submitting", "unknown"):
+            self._recover(op)
+            if op["status"] in ("submitting", "unknown"):
+                return
+        if op["status"] != "created" or not op.get("payment_intent_id"):
+            return
+        pi = self.provider.get_intent(op["payment_intent_id"])
+        op["provider_status"] = pi["status"]
+        if pi["status"] != "SUCCEEDED":
+            return
+        if pi["amount"] != op["amount"] or (pi["currency"] or "").upper() != op["currency"]:
+            d["flags"].append(f"installment payment mismatch: {pi['amount']} {pi['currency']} != {op['amount']} GBP")
+            self.log(d["id"], "system", "payment_mismatch", f"Installment {op['id']}: provider amount differs.")
+            return
+        op["status"] = "succeeded"
+        if self._ledger(f"receipt:{pi['id']}", d, "installment_received", op["amount"], op, pi["id"]):
+            self.log(d["id"], "system", "installment_received", f"Payment {pi['id']} verified with the provider "
+                     f"({source}); {gbp(op['amount'])} received for {op['label']}.")
+        if d["status"] in self.INSTALLMENT_STATES:
+            d["status"] = "confirmed"
+            d["overdue_noted"] = None
+            self._note_overdue()          # another installment may already be overdue
+        d["unread"] = True
+        self._settle_payouts(d)
+
     # ================================================================ hotel payouts (Payments for Platforms)
     # The platform collects the deposit for the hotel ("collect payments directly", intent tagged with the
     # hotel's connected account). Once the deposit is verified and booked, a funds split pays the hotel its
@@ -2038,7 +2361,7 @@ class Engine:
                 self.log(d["id"], "system", "payout_pending", "No hotel connected account is configured, so the "
                          "deposit stays with the platform until one is set and the payout is retried.")
             return
-        payouts = self._payout_ops(d, "payout")
+        payouts = [o for o in self._payout_ops(d, "payout") if o.get("source_op") in (None, dep["id"])]
         live = [o for o in payouts if o["status"] not in ("failed", "superseded")]
         if not live:
             if any(o["status"] == "failed" for o in payouts):
@@ -2059,6 +2382,17 @@ class Engine:
             rev = revs[-1] if revs else self._create_reversal(d, payout, r)
             if rev and rev["status"] in ("submitting", "unknown"):
                 self._submit_reversal(d, rev)
+        # Each verified installment: the hotel's share paid out once, like the deposit's.
+        for inst in self._installment_ops(d):
+            if inst["status"] != "succeeded":
+                continue
+            ps = [o for o in self._payout_ops(d, "payout") if o.get("source_op") == inst["id"]]
+            if any(o["status"] == "failed" for o in ps) and not any(o["status"] not in ("failed", "superseded") for o in ps):
+                continue   # refused: waits for a person to retry
+            live_i = [o for o in ps if o["status"] not in ("failed", "superseded")]
+            p_op = live_i[-1] if live_i else self._create_payout(d, inst)
+            if p_op["status"] in ("submitting", "unknown"):
+                self._recover_payout(p_op)
 
     def _create_payout(self, d, dep) -> dict:
         gross = dep["amount"]
@@ -2067,11 +2401,12 @@ class Engine:
         op = {"id": oid, "kind": "payout", "deal_id": d["id"], "run_id": self.s["run_id"], "gross": gross,
               "commission": fee, "amount": gross - fee, "currency": "GBP", "request_id": f"{self.s['run_id']}-{oid}",
               "payment_intent_id": dep["payment_intent_id"], "destination": self.hotel_account, "provider_id": None,
-              "status": "submitting", "created_at": self.now(), "provider_status": None}
+              "status": "submitting", "created_at": self.now(), "provider_status": None, "source_op": dep["id"]}
         self.s["operations"][oid] = op
         self._save()   # persist the operation before calling the provider
         meta = {"run_id": self.s["run_id"], "deal": d["ref"], "operation_id": oid,
-                "obligation": "hotel share of signing deposit", "commission": calc.gbp(fee)}
+                "obligation": "hotel share of " + ("signing deposit" if dep["kind"] == "deposit" else
+                                                   f"installment ({dep.get('label')})"), "commission": calc.gbp(fee)}
         try:
             sp = self.provider.create_funds_split(op["request_id"], op["payment_intent_id"], op["amount"],
                                                   op["destination"], meta)
@@ -2227,7 +2562,10 @@ class Engine:
                 result = f"belongs to earlier run {run}: kept for reconciliation, not applied to current hotel state"
             elif name.startswith("payment_intent."):
                 op = next((o for o in self.s["operations"].values() if o.get("payment_intent_id") == obj.get("id")), None)
-                if op:
+                if op and op["kind"] == "installment":
+                    self._verify_installment(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
+                    result = f"re-read intent: {op.get('provider_status')}"
+                elif op:
                     self._verify_deposit(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
                     result = f"re-read intent: {op.get('provider_status')}"
             elif name.startswith("refund."):
@@ -2323,7 +2661,8 @@ class Engine:
 
     # ================================================================ views
     def finance(self, d) -> dict:
-        received = sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] == "deposit_received")
+        received = sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"]
+                       and e["type"] in ("deposit_received", "installment_received"))
         refunded = -sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] == "refund_completed")
         pending = sum(o["amount"] for o in self._refund_ops(d) if o["status"] in ("submitting", "unknown", "created", "pending"))
         cur = self._version(d, d["accepted_version"]) if d.get("accepted_version") else None
@@ -2373,7 +2712,11 @@ class Engine:
                 "handoff": "hotel staff", "dates_proposed": "buyer: choose from the dates offered",
                 "payment_received_booking_exception": "hotel manager: booking exception",
                 "refund_awaiting_approval": "hotel manager: refund approval",
-                "refund_failed": "hotel manager: failed refund follow-up (amount still owed)"}.get(st)
+                "refund_failed": "hotel manager: failed refund follow-up (amount still owed)",
+                "installment_overdue": "seller: overdue installment",
+                "installment_requested": "buyer: pay the installment",
+                "extension_review": "hotel manager: installment extension approval",
+                "extension_approved": "seller: apply the approved extension"}.get(st)
 
     def next_step(self, d) -> str:
         st = d["status"]
@@ -2390,6 +2733,22 @@ class Engine:
                 return "manager withheld refund authorization: escalate (the buyer is still owed the money)"
         if st == "refund_pending":
             return "a refund exists: call check_refund (never create another)"
+        if st == "installment_overdue":
+            cv = self.collection_view(d) or {}
+            cur = cv.get("current") or {}
+            if cur.get("extensions"):
+                return ("the installment is overdue again after an extension: a second extension needs the manager; "
+                        "if you can't recommend one, escalate (cancelling under the contract is the hotel's decision)")
+            return (f"the {gbp(cur.get('amount', 0))} installment due {cur.get('due')} is overdue: request_installment "
+                    "sends the buyer a payment link; if they asked for time, price_extension then extend_installment")
+        if st == "installment_requested":
+            return ("read the buyer's message: if they ask for more time, price_extension then extend_installment"
+                    if d.get("unread") else "blocked: waiting for the buyer to pay the installment")
+        if st == "extension_approved":
+            a = next((a for a in reversed(list(self.s["approvals"].values())) if a["deal_id"] == d["id"]
+                      and a["subject"] == "installment_extension" and a["status"] == "approved" and not a.get("used")), None)
+            return (f"manager approved moving the installment to {a['pay_by']}: call extend_installment with that date "
+                    "now" if a else "extension approved")
         if st == "refund_due":
             return "call refund_excess for the amount owed"
         if st == "expired":
@@ -2470,9 +2829,10 @@ class Engine:
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
                 x["payout_view"] = self.payout_view(d)
+                x["collection"] = self.collection_view(d)
                 x["ops"] = self.ops_instructions(d)
                 x["hold"] = self._hold_public(d)
-                x["pay_url"] = self.pay_url(d) if self._deposit_op(d) else None
+                x["pay_url"] = self.pay_url(d) if self.collection_op(d) else None
                 deals.append(x)
             ops = [{k: v for k, v in o.items() if k != "client_secret"} for o in self.s["operations"].values()]
             cal = self._calendar()

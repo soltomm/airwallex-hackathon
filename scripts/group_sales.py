@@ -387,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
         d = engine.deal(ref)
         if token != d["buyer_token"]:
             return self._send(403, "<h1>Not authorized</h1>", "text/html")
-        op = engine._deposit_op(d)
+        op = engine.collection_op(d)
         message = ""
         if returned and op:
             try:
@@ -396,6 +396,7 @@ class Handler(BaseHTTPRequestHandler):
                 message = f"Could not verify yet: {e}"
         hold = engine.s["holds"].get(d.get("hold_id") or "")
         hold_ok = bool(hold and (hold["status"] in ("active", "converted")))
+        inst = bool(op and op["kind"] == "installment")
         v = engine._version(d, op["version"]) if op else None
         info = {
             "hotel": engine.hotel["name"], "ref": d["ref"], "company": d["company"], "status": d["status"],
@@ -410,7 +411,10 @@ class Handler(BaseHTTPRequestHandler):
             "sim_url": f"/sim-hpp/{op.get('payment_intent_id')}?ret=" + engine.pay_url(d, "return").replace("&", "%26")
             if op and op.get("payment_intent_id") else None,
             "booking": d.get("booking") and d["booking"]["status"],
+            "kind": op and op["kind"], "label": op and op.get("label"), "due": op and op.get("due"),
         }
+        if inst and op["status"] == "created":
+            info["client_secret"] = op.get("client_secret")
         return self._send(200, PAY_PAGE.replace("__PAY__", json.dumps(info)), "text/html")
 
     def _sim_hpp(self, intent_id: str, q):
