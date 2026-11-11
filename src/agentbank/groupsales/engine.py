@@ -803,6 +803,7 @@ class Engine:
                                               f"absolute min {gbp(rates['absolute_min'])}; min margin {self.rms['min_contribution_margin_pct']}%")
                  if rt else "room type unknown", "data": {"rates": rates, "delivery_costs": self.rms["delivery_costs"],
                                                                    "displacement": self.rms.get("displacement", {})}},
+                self._competing_record(d, req, nights, rt),
                 {"system": "CRM", "summary": f"{crm.get('account') or d['domain']}: {crm.get('type')}, "
                                              f"credit terms {'yes' if crm.get('credit_terms') else 'no'}", "data": crm},
                 {"system": "Policy", "summary": "Deposit 30% standard (up to 40%; 20-29% needs manager); attrition 10% "
@@ -814,11 +815,24 @@ class Engine:
                 r["checked_at"] = now
                 r["query"] = d["ref"]
             d["records"] = records + [r for r in d["records"] if r["checked_at"] != now][:12]
-            self.log(d["id"], actor, "records", "Checked PMS, meeting space, breakfast, RMS, CRM and policy records.",
+            self.log(d["id"], actor, "records", "Checked PMS, meeting space, breakfast, RMS, competing demand, CRM and "
+                     "policy records.",
                      [{"system": r["system"], "summary": r["summary"]} for r in records])
             self._save()
             return {"checked_at": now, "pms": pms, "meeting": meeting, "breakfast": bf, "rms": rates,
-                    "crm": crm, "key_dates": req_dates}
+                    "competing_demand": next(r["summary"] for r in records if r["system"] == "Competing demand"), "crm": crm, "key_dates": req_dates}
+
+    def _competing_record(self, d: dict, req: dict, nights: list[str], rt: str | None) -> dict:
+        """The records entry for other groups waiting for this deal's nights (see competing_demand)."""
+        firm = None
+        if rt in self.rms["rates"] and nights and req.get("rooms") and all(self._inv(n) for n in nights):
+            firm = self.competing_demand(d, {"room_type": rt, "rooms": {n: int(req["rooms"]) for n in nights}})
+        if not firm:
+            return {"system": "Competing demand", "summary": "No other group is waiting for these nights", "data": None}
+        return {"system": "Competing demand", "data": firm, "summary": "; ".join(
+            f"{g['ref']} {g['company']} wants {g['rooms']} {rt} rooms" for g in firm["groups"])
+            + f": holding this block turns away {sum(firm['rooms'].values())} of their room-nights, counted at full "
+              "value in the margin"}
 
     # ---- buyer briefs: each buyer's private mandate. Scenario buyers come from scenario.json; generated buyers
     # (generator.py) are registered for this run before their RFP arrives. Neither is in any seller view.
@@ -1007,13 +1021,73 @@ class Engine:
                 terms['meeting'] = None
         return terms
 
+    # Open inquiries that still want rooms on their own dates: no hold, no booking, not closed, dates the hotel sells.
+    COMPETING_STATUSES = ("intake", "needs_info", "dates_proposed", "pending_approval", "approved_to_send", "revise",
+                          "handoff", "expired")
+
+    def competing_demand(self, d: dict, terms: dict) -> dict | None:
+        """Rooms other groups have asked for on these nights that they can't have if this block is held.
+
+        A group counts while its inquiry is open and holds nothing: it asked for these nights in this room type,
+        and what is left after this block (rooms free now, plus this deal's own hold, less the block) doesn't
+        cover it. That is firm demand for the rooms, so the margin rule counts them at full value
+        (calc.displacement). Returns {"rooms": {night: n}, "groups": [{ref, company, rooms, nights}]} or None.
+        Hotel-side only: it never reaches a buyer's view."""
+        rt = terms["room_type"]
+        own = self.s["holds"].get(d.get("hold_id") or "")
+        own = own if own and own["status"] == "active" and own["room_type"] == rt else None
+        wanted: dict[str, int] = {}
+        groups = []
+        for x in self.s["deals"].values():
+            req = x.get("requirements") or {}
+            if (x["id"] == d["id"] or x["status"] not in self.COMPETING_STATUSES or x.get("booking")
+                    or x.get("accepted_version") or req.get("date_issue") or req.get("room_type") != rt
+                    or not (req.get("rooms") and req.get("arrival") and req.get("departure"))):
+                continue
+            hold = self.s["holds"].get(x.get("hold_id") or "")
+            if hold and hold["status"] == "active":
+                continue
+            try:
+                nights = [n for n in stay_nights(req["arrival"], req["departure"]) if n in terms["rooms"]]
+            except (TypeError, ValueError):
+                continue
+            if not nights:
+                continue
+            for n in nights:
+                wanted[n] = wanted.get(n, 0) + int(req["rooms"])
+            groups.append({"ref": x["ref"], "company": x["company"], "rooms": int(req["rooms"]), "nights": nights})
+        rooms = {}
+        for n, want in sorted(wanted.items()):
+            if self._inv(n) is None:
+                continue
+            left = self._available(n, rt) + (own["rooms"].get(n, 0) if own else 0) - int(terms["rooms"][n])
+            short = min(int(terms["rooms"][n]), want - max(0, left))
+            if short > 0:
+                rooms[n] = short
+        if not rooms:
+            return None
+        return {"rooms": rooms, "groups": [g for g in groups if any(n in rooms for n in g["nights"])]}
+
+    @staticmethod
+    def _competing_text(pricing: dict) -> str:
+        firm = (pricing.get("displacement") or {}).get("firm")
+        if not firm:
+            return ""
+        who = ", ".join(f"{g['company']} ({g['rooms']} rooms)" for g in firm["groups"])
+        return (f" Another group is waiting for these nights ({who}): holding this block turns away "
+                f"{sum(firm['rooms'].values())} of its room-nights, so the margin counts them at full value.")
+
+    def _price(self, d: dict, terms: dict, competing: bool = True) -> dict:
+        return calc.price(terms, self.hotel, self.rms, self.competing_demand(d, terms) if competing else None)
+
     def price_terms(self, deal_id: str, rate: int, deposit_pct: int, attrition_pct: int,
-                    rooms_per_night: int | None = None, room_type: str | None = None) -> dict:
-        """Dry run: what these terms cost, earn, and whether the seller may offer them."""
+                    rooms_per_night: int | None = None, room_type: str | None = None, competing: bool = True) -> dict:
+        """Dry run: what these terms cost, earn, and whether the seller may offer them. competing=False prices
+        them as if no other group were waiting for the rooms (what the seller compares against)."""
         with self.lock:
             d = self.deal(deal_id)
             terms = self.build_terms(d, rate, deposit_pct, attrition_pct, rooms_per_night, room_type)
-            pricing = calc.price(terms, self.hotel, self.rms)
+            pricing = self._price(d, terms, competing)
             check = hotel_check(terms, pricing, self.scenario)
             return {"terms": terms, "pricing": pricing, "hotel_check": check,
                     "fits_inventory": self._can_hold(terms, d)}
@@ -1030,7 +1104,7 @@ class Engine:
                 raise Refused("still missing: " + "; ".join(d["missing"]) + ". Ask the buyer first.")
             terms = self.build_terms(d, rate, deposit_pct, attrition_pct, rooms_per_night, room_type)
             self._vendor_ready(d, terms)
-            pricing = calc.price(terms, self.hotel, self.rms)
+            pricing = self._price(d, terms)
             check = hotel_check(terms, pricing, self.scenario)
             if not check["ok"]:
                 raise Refused("outside hotel limits: " + "; ".join(check["hard"]))
@@ -1052,7 +1126,8 @@ class Engine:
             self.log(d["id"], actor, "offer_drafted",
                      f"Drafted v{n}: {terms['room_type']} {gbp(terms['rate'])}, {terms['attrition_pct']}% attrition, "
                      f"{terms['deposit_pct']}% deposit; total {gbp(pricing['total'])}, deposit {gbp(pricing['deposit'])}, "
-                     f"margin {pricing['margin_all_rooms']['margin_pct']}% / {pricing['margin_full_release']['margin_pct']}%.")
+                     f"margin {pricing['margin_all_rooms']['margin_pct']}% / {pricing['margin_full_release']['margin_pct']}%."
+                     + self._competing_text(pricing))
             if check["approvals"]:
                 v["status"] = "pending_approval"
                 d["status"] = "pending_approval"

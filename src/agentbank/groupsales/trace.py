@@ -72,7 +72,10 @@ def _result(tool: str, res) -> dict | None:
                 "margin": f"{p['margin_all_rooms']['margin_pct']}% / {p['margin_full_release']['margin_pct']}% after releases",
                 "authority": ("over a hard limit: " + "; ".join(hc["hard"])) if hc["hard"] else
                              ("needs the manager: " + "; ".join(hc["approvals"])) if hc["approvals"] else "within the seller's own authority",
-                "fits_inventory": res["fits_inventory"]}
+                "fits_inventory": res["fits_inventory"],
+                **({"competing_demand": ", ".join(f"{g['ref']} {g['company']} waiting for {g['rooms']} rooms"
+                                                  for g in p["displacement"]["firm"]["groups"])}
+                   if (p.get("displacement") or {}).get("firm") else {})}
     if isinstance(res, dict):
         keep = {k: v for k, v in res.items() if k not in ("finance", "records", "pms", "meeting", "breakfast", "rms",
                                                           "crm", "policy", "payment_url", "client_secret",

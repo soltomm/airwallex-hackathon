@@ -60,11 +60,12 @@ def attrition_allowance(terms: dict) -> int:
     return contracted_room_nights(terms) * int(terms.get("attrition_pct", 0)) // 100
 
 
-def price(terms: dict, hotel: dict, rms: dict) -> dict:
+def price(terms: dict, hotel: dict, rms: dict, firm: dict | None = None) -> dict:
     """Itemised price, deposit, attrition allowance and contribution for a set of terms.
 
     Service prices come from hotel data, never from the terms: an agent can only choose the room
-    rate, deposit % and attrition %.
+    rate, deposit % and attrition %. `firm` is competing demand the engine found for these nights
+    (see displacement); it changes only the margin, never the price.
     """
     rt = terms["room_type"]
     rate = int(terms["rate"])
@@ -109,7 +110,7 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     deposit = pct_of(total, int(terms["deposit_pct"]))
 
     costs = rms["delivery_costs"]
-    disp = displacement(terms, hotel, rms)
+    disp = displacement(terms, hotel, rms, firm)
     def contribution(room_nights: int) -> dict:
         # Delivery costs follow the rooms used. Displacement is carried on every contracted room-night;
         # released rooms get the resale share back (actual releases night by night, the rest of the
@@ -176,26 +177,40 @@ def demand_pct(night: str, room_type: str, hotel: dict, rms: dict) -> int:
     return max(0, min(100, (alloc - int(on_sale)) * 100 // alloc))
 
 
-def displacement(terms: dict, hotel: dict, rms: dict) -> dict:
+def displacement(terms: dict, hotel: dict, rms: dict, firm: dict | None = None) -> dict:
     """Opportunity cost of the rooms a group blocks, night by night (integer pence).
 
     blocked: displacement on every contracted room-night; resold_released: what comes back on rooms
     already released (they are released before the cutoff and the hotel resells resale_pct of that).
+
+    firm: {"rooms": {night: n}, "groups": [...]}, rooms another group has asked for on these nights and
+    can't have if this block is held (the engine works it out from the open inquiries). Those rooms
+    would have sold for certain, so they carry the full-demand value instead of that night's demand.
+    Released rooms still come back at the usual resale share: a release comes weeks later, after the
+    waiting group has gone elsewhere.
     """
     cfg = rms.get("displacement") or {}
     rt = terms["room_type"]
     full = (cfg.get("full_demand") or {}).get(rt, 0)
     resale = int(cfg.get("resale_pct", 0))
     released = terms.get("released") or {}
+    firm_rooms = (firm or {}).get("rooms") or {}
     nights, blocked, back = [], 0, 0
     for night in sorted(terms.get("rooms", {})):
         pct = demand_pct(night, rt, hotel, rms)
         per_room = full * pct // 100
         rooms, rel = int(terms["rooms"][night]), int(released.get(night, 0))
-        blocked += rooms * per_room
+        sure = min(rooms, max(0, int(firm_rooms.get(night, 0))))
+        blocked += sure * full + (rooms - sure) * per_room
         back += rel * per_room * resale // 100
-        nights.append({"night": night, "demand_pct": pct, "per_room": per_room, "rooms": rooms})
-    return {"nights": nights, "blocked": blocked, "resold_released": back, "resale_pct": resale}
+        row = {"night": night, "demand_pct": pct, "per_room": per_room, "rooms": rooms}
+        if sure:
+            row["competing_rooms"] = sure
+        nights.append(row)
+    out = {"nights": nights, "blocked": blocked, "resold_released": back, "resale_pct": resale}
+    if firm and firm_rooms:
+        out["firm"] = firm
+    return out
 
 
 # ---- dates ---------------------------------------------------------------------------------

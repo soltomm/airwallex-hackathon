@@ -55,6 +55,17 @@ def drive(e: Engine, deal_id: str, max_steps: int = 40) -> list[str]:
     return path
 
 
+def northstar_offer_out(e):
+    """The demo up to Northstar's first offer: its twin block is held, so a competing group has something to want."""
+    s = RulesSeller(e)
+    s.run()
+    d = next(x for x in e.s["deals"].values() if x["company"].startswith("Northstar"))
+    act(e, d["id"], suggest(e, d["id"]))
+    s.run()
+    assert d["status"] == "offer_sent"
+    return d
+
+
 def new(e, preset=None, seed=1, **traits):
     r = generator.send(e, generator.generate(e, traits=traits, preset=preset, seed=seed))
     return e.deal(r["deal_id"]), r
@@ -114,6 +125,7 @@ def test_missing_details_make_the_seller_ask_and_the_buyer_answer_from_its_brief
 
 
 def test_the_rfp_reads_back_into_the_brief_it_came_with(eng):
+    northstar_offer_out(eng)
     for preset in generator.PRESETS:
         g = generator.generate(eng, preset=preset, seed=7)
         req = extract(g["subject"], g["body"])
@@ -137,6 +149,7 @@ def test_same_seed_same_inquiry_and_other_seeds_differ(tmp_path):
 def test_every_preset_finds_dates_against_the_seeded_calendar(eng):
     """The room count used to come from total capacity (20), so with the calendar's existing bookings some
     seeds asked for more rooms than any window had free and generate() refused (seed 11, full_lifecycle)."""
+    northstar_offer_out(eng)
     for preset in generator.PRESETS:
         for seed in range(1, 41):
             g = generator.generate(eng, preset=preset, seed=seed)

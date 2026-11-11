@@ -643,22 +643,27 @@ class RulesSeller:
                                                  "or breakfast capacity)", AVAILABILITY_CHANGED)
         rooms, unmet, p = fit
         withdrawn = False
+        competing = None
         if _margin_short(p) and (rate != t["rate"] or att > e.policy["attrition"]["standard_pct"]):
             # Busy dates: displacement leaves no room for this concession. Keep the current rate and offer
             # the standard release instead of asking for something the backend would refuse. The deposit goes
             # back to what the buyer asked, within what the seller may agree alone: the 40% exception deposit
             # only pays for the concession, so keeping it would leave the buyer worse off than before asking.
             withdrawn = True
+            competing = self._competing_note(deal_id, p, rate, dep, att, rooms)
             rate, att = t["rate"], e.policy["attrition"]["standard_pct"]
             asked = int(ask.get("deposit_pct") or t["deposit_pct"])
             dep = max(e.policy["deposit"]["standard_pct"], min(asked, e.policy["deposit"]["max_pct"]))
-            why = [f"demand on your dates is high, so the most we can release free is {att}%, at the {gbp(rate)} rate"]
+            why = [("another group has asked for the same nights" if competing else "demand on your dates is high")
+                   + f", so the most we can release free is {att}%, at the {gbp(rate)} rate"]
             if asked < dep:
                 why.append(f"our standard deposit is {dep}% for new accounts")
             p = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms)
         pr = p["pricing"]
         release = (f"{att}% attrition (up to {pr['attrition_allowance']} room-nights released without penalty until "
                    f"{e.policy['attrition']['release_days_before_arrival']} days before arrival)")
+        if competing and cur.get("expires_at"):
+            why.append(f"your rooms stay held for you until {cur['expires_at'][:16].replace('T', ' ')} UTC")
         head = (f"Thank you for asking. We can't extend the free release on your dates; our offer stays at {release} "
                 f"and a {dep}% deposit. " if withdrawn else
                 f"Thank you. We can offer {release} in exchange for a {dep}% deposit. ")
@@ -673,6 +678,26 @@ class RulesSeller:
         except Refused as err:
             return self._cannot_requote(deal_id, str(err), WAITING_FOR_PERSON)
         return f"{d['ref']}: counter v{r['version']} {r['status']}"
+
+    def _competing_note(self, deal_id: str, p: dict, rate: int, dep: int, att: int, rooms: int) -> dict | None:
+        """When a waiting group is what breaks the margin on a concession, say so in Activity, with the figures the
+        concession would have had without it. Returns the competing demand, or None if it isn't the reason."""
+        firm = p["pricing"]["displacement"].get("firm")
+        if not firm:
+            return None
+        e = self.e
+        alone = e.price_terms(deal_id, rate, dep, att, rooms_per_night=rooms, competing=False)
+        if _margin_short(alone):
+            return None                       # refused even without the other group: it isn't what changed
+        m, m0 = p["pricing"]["margin_full_release"]["margin_pct"], alone["pricing"]["margin_full_release"]["margin_pct"]
+        floor = e.rms["min_contribution_margin_pct"]
+        e.check_systems(deal_id)              # refresh the records, so the Records tab shows the waiting group
+        who = ", ".join(f"{g['company']} ({g['ref']}, {g['rooms']} rooms)" for g in firm["groups"])
+        e.note(deal_id, f"Decision changed by competing demand: {who} wants these nights and can't fit beside this block. "
+                        f"Without it I would trade {att}% attrition for a {dep}% deposit (margin {m0}% with the full "
+                        f"release used); with it the rooms this block blocks would sell for certain, the margin falls to "
+                        f"{m}%, below the {floor}% floor. Holding the standard release, so no manager approval is needed.")
+        return firm
 
     def _fit(self, deal_id: str, cur: dict, rate: int, dep: int, att: int):
         """Price a re-quote of version `cur` on what can be held now: (rooms_per_night, unmet, price_terms) or None.
@@ -854,6 +879,11 @@ How to work:
 - Commercial rules (the engine enforces them; know them so you don't waste turns; hotel staff may
   change them, and these are the current values):
 {RULES}
+- Competing demand: when another open inquiry wants the same nights and can't fit beside this block,
+  check_systems lists it and price_terms counts the rooms it would lose at full value
+  (displacement.competing_groups). Firm demand makes flexibility costly: don't give away free release
+  or rate you would have traded before, and say in log_reasoning that the other group changed your
+  decision. You may tell the buyer another group has asked for the same nights; never name it.
 - Negotiate in trades, not concessions: e.g. more attrition in exchange for a higher deposit. Keep the
   rate where you can. You never ask the manager for approval yourself: the engine does, and only when
   a term crosses one of the rules above (it names the rule on the manager's card). Anything within
@@ -1041,7 +1071,12 @@ class ClaudeSeller:
                     "margin_all_rooms_pct": p["margin_all_rooms"]["margin_pct"],
                     "margin_full_release_pct": p["margin_full_release"]["margin_pct"],
                     "displacement": {"total": gbp(p["displacement"]["blocked"]),
-                                     "demand_by_night_pct": {n["night"]: n["demand_pct"] for n in p["displacement"]["nights"]}},
+                                     "demand_by_night_pct": {n["night"]: n["demand_pct"] for n in p["displacement"]["nights"]},
+                                     **({"competing_groups": [
+                                         f"{g['ref']} {g['company']}: {g['rooms']} {r['terms']['room_type']} rooms"
+                                         for g in p["displacement"]["firm"]["groups"]],
+                                         "rooms_counted_at_full_value": p["displacement"]["firm"]["rooms"]}
+                                        if p["displacement"].get("firm") else {})},
                     "hard_violations": r["hotel_check"]["hard"], "needs_manager_approval": r["hotel_check"]["approvals"],
                     "fits_inventory": r["fits_inventory"]}
         if name == "propose_offer":

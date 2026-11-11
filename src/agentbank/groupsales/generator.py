@@ -35,6 +35,9 @@ PRESETS: dict[str, dict] = {
     "payer_abroad": {"payer_country": "DE", "change_rooms": 1},
     # The RFP leaves out who pays and whether the budget includes taxes: the seller has to ask.
     "missing_details": {"missing": ["payer", "taxes"]},
+    # A second group wants the nights an open twin offer is holding (in the demo, Northstar's) and can't fit
+    # beside it. The seller offers it other dates, and its demand changes what the first group is offered.
+    "competing_group": {"availability": "compete", "room_type": "twin"},
 }
 
 # What each preset shows, for the dashboard's New inquiry drawer.
@@ -50,6 +53,10 @@ PRESET_INFO: dict[str, dict] = {
                                 "paid, then fewer rooms: partial refund and the hotel's payout share reversed."},
     "payer_abroad": {"title": "Payer abroad",
                      "shows": "A company in Germany paying from EUR, then a smaller block and a refund."},
+    "competing_group": {"title": "Competing group",
+                        "shows": "Send after Northstar's first offer. Another group wants the same nights and can't "
+                                 "fit: the seller offers it other dates, and then won't trade Northstar 20% attrition, "
+                                 "because every room the block blocks now has a buyer waiting."},
     "missing_details": {"title": "Missing details",
                         "shows": "The RFP leaves out who pays and whether the budget includes taxes: the seller asks, "
                                  "the buyer answers from its brief."},
@@ -59,7 +66,8 @@ TRAITS: dict[str, tuple] = {
     "room_type": ("twin", "king"),
     # fits: rooms free on the dates. short_rooms: fewer rooms free than asked on some night (the seller quotes
     # what it has). too_soon: less notice than the hotel needs for a group (the seller offers other dates).
-    "availability": ("fits", "short_rooms", "too_soon"),
+    # compete: the nights an open offer is holding, for more rooms than are left beside it.
+    "availability": ("fits", "short_rooms", "too_soon", "compete"),
     "price": ("comfortable", "tight", "below_floor"),
     "missing": ("payer", "taxes", "layout"),
 }
@@ -140,7 +148,10 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
     if lo > room_cap:
         raise Refused(f"a {t['change_rooms']}-room reduction inside the allowance needs at least {lo} rooms; "
                       f"at most {room_cap} fit; ask for attrition or a smaller change")
-    if t["availability"] == "short_rooms":
+    if t["availability"] == "compete":
+        arrival, nights_n, rooms, rt = _competing_window(engine, t["room_type"], t["rooms"])
+        occ = engine.hotel["room_types"][rt]["max_occupancy"]
+    elif t["availability"] == "short_rooms":
         arrival, rooms = _short_window(engine, rng, rt, nights_n, t["rooms"])
     elif t["availability"] == "too_soon":
         rooms = t["rooms"] or rng.randint(lo, min(room_cap, lo + 6))
@@ -299,6 +310,26 @@ def _most_free(engine: Engine, rt: str, n: int, lead_min: int, meeting: bool) ->
         if free and None not in free and (not meeting or _meeting_day(engine, nights)):
             best = max(best, min(free))
     return best
+
+
+def _competing_window(engine: Engine, rt: str | None, rooms: int | None) -> tuple[str, int, int, str]:
+    """The stay of the largest open offer's hold (offer sent, not booked), and a block that can't fit beside it:
+    the rooms still free on those nights plus 40% of the held block, unless `rooms` says otherwise."""
+    with engine.lock:
+        holds = [h for h in engine.s["holds"].values() if h["status"] == "active" and (rt is None or h["room_type"] == rt)
+                 and not engine.s["deals"][h["deal_id"]].get("booking")]
+    if not holds:
+        raise Refused("no open offer is holding " + (f"{rt} " if rt else "") + "rooms right now: a competing group needs "
+                      "one to compete with (in the demo, send Northstar's answers first)")
+    h = max(holds, key=lambda x: (max(x["rooms"].values()), x["created_at"]))
+    nights = sorted(h["rooms"])
+    free = min(_free(engine, n, h["room_type"]) or 0 for n in nights)
+    held = max(h["rooms"].values())
+    want = rooms if rooms is not None else free + -(-held * 4 // 10)
+    want = min(want, engine.hotel["availability"][h["room_type"]])
+    if want <= free:
+        raise Refused(f"{want} rooms fit beside the held offer ({free} free); ask for more than {free}")
+    return nights[0], len(nights), want, h["room_type"]
 
 
 def _too_soon(engine: Engine, rng: random.Random, n: int) -> str:

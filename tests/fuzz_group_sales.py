@@ -539,9 +539,13 @@ def check(e: Engine, provider: SimulatedProvider):
                 continue
             if v["kind"] != "offer":
                 continue
-            # The price on a version is what the calculator says for its terms (nothing edited in between).
-            if calc.price(v["terms"], hotel, e.rms) != v["pricing"]:
+            # The price on a version is what the calculator says for its terms (nothing edited in between), given
+            # the competing demand the engine recorded when it priced them. That demand only moves the margin.
+            firm = v["pricing"]["displacement"].get("firm")
+            if calc.price(v["terms"], hotel, e.rms, firm) != v["pricing"]:
                 _fail(f"{d['ref']} v{v['n']}: pricing does not match its terms")
+            if firm and calc.price(v["terms"], hotel, e.rms)["total"] != v["pricing"]["total"]:
+                _fail(f"{d['ref']} v{v['n']}: competing demand changed the price, not just the margin")
             if not (v.get("sent_at") or v["status"] in SENT_STATES):
                 continue
             chk = hotel_check(v["terms"], v["pricing"], scen)

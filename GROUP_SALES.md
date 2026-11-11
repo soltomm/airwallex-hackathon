@@ -96,6 +96,25 @@ hand-written RFP and sets who answers for the buyer.
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
 
+**The competing group (new information changes the decision).** Run this instead of steps 3-8, after
+a reset and steps 1-2, to show the seller change its mind on money when new evidence arrives:
+
+- 2b. **＋ New inquiry → Competing group** (seed 7 sends Lumen Health). It asks for 7 twins on the same nights.
+  Only 2 are free beside Northstar's held block, so the seller offers it other dates (13-16 or 14-17
+  March) and the 2 rooms on its own dates.
+- 3'. In Maya's mailbox, **Send counteroffer** (20% attrition, 25% deposit), the same ask as step 3.
+  This time the seller doesn't trade: it keeps **10% attrition and a 30% deposit (£2,880)** and tells
+  Maya another group has asked for the same nights (never naming it). There is nothing to approve.
+  Northstar's **Activity** tab says why: *Decision changed by competing demand: Lumen Health wants these
+  nights and can't fit beside this block. Without it I would trade 20% attrition for a 40% deposit
+  (margin 43.1% with the full release used); with it ... the margin falls to 39.7%, below the 40% floor.*
+  **Records checked** lists the waiting group under Competing demand.
+- If Lumen Health takes other dates first (**Take 13 to 16 March** in its mailbox), nothing competes
+  for the nights any more and the same counter gets the 20% / 40% trade again.
+
+The default story (steps 3-8) and its figures don't change: no competing inquiry exists unless you
+send one.
+
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
 
@@ -181,7 +200,12 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   taken, read from the same calendar the availability page shows (`hotel.background_demand`), so
   sold-out nights count 100% and quiet ones little. The demo stay's allocation is set by hand, so
   `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
-  sold out). Rooms released before the cutoff are counted 50% resold. On the demo dates (80% / 80% / 64%)
+  sold out). Rooms released before the cutoff are counted 50% resold. **Competing demand:** when another
+  open inquiry (no hold, no booking, dates the hotel sells) wants the same room type on the same nights
+  and what is left beside this block doesn't cover it, the rooms it would lose count at the full value
+  (£80 / £60) instead of that night's demand; releases still come back at 50%, since they come weeks
+  later, after the waiting group has gone elsewhere. The demand found is stored on the version, it
+  changes the margin only (never the price), and buyers never see it (`engine.competing_demand`). On the demo dates (80% / 80% / 64%)
   the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
   quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide. Every approval names each rule it
   crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
@@ -359,7 +383,7 @@ RFP email plus a private brief for the buyer agent (its answers, goals, limits a
 generator only writes the inbound: the seller agent, the buyer agent and the engine handle everything after
 it, and the seller never sees the brief.
 
-An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
+An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`, `compete`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
 (`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
 
@@ -370,6 +394,7 @@ An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_s
 | `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
 | `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
+| `competing_group` | needs an open twin offer (Northstar's v1): asks for its nights, can't fit, offered other dates; the held group is then refused extra free release (`tests/test_competing_demand.py`) |
 
 The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the
 seed, so replaying a seed in the same run is refused rather than merged. From the server:
