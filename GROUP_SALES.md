@@ -1,5 +1,8 @@
 # Harbour House group sales agent
 
+Post-stay PMS folios and incremental balance collection are documented in
+[Post-stay reconciliation](docs/POST_STAY_RECONCILIATION.md).
+
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are

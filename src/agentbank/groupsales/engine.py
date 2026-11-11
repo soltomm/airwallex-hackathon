@@ -33,7 +33,7 @@ from .extract import MAX_EMAIL_CHARS, MAX_MESSAGE_CHARS, extract, missing_info, 
 from .policy import hotel_check, rule
 from .provider import AirwallexError, AmbiguousResult
 from . import fx
-from . import vendors
+from . import vendors, folio
 from .fx_provider import SandboxFX, SimulatedFX
 from ..storage import doc
 
@@ -1453,6 +1453,21 @@ class Engine:
                      "disabled. A renewed offer needs a fresh availability check and new acceptance.")
             d["unread"] = True
 
+    def folio_view(self, deal_id, public=False):
+        try: return folio.Service(self).view(deal_id, public)
+        except (ValueError, TypeError, KeyError) as exc: raise Refused(str(exc))
+
+    def folio_action(self, deal_id, command, body, actor='hotel_manager'):
+        try: return folio.Service(self).action(deal_id, command, body, actor)
+        except (ValueError, TypeError, KeyError) as exc: raise Refused(str(exc))
+
+    def check_folio_payment(self, deal_id):
+        with self.lock:
+            try:
+                d=self.deal(deal_id);folio.Service(self).check(d)
+                return self.folio_view(deal_id)
+            except (ValueError, TypeError, KeyError) as exc: raise Refused(str(exc))
+
     # ================================================================ deposit payment
     def _deposit_op(self, d):
         ops = [o for o in self.s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "deposit"]
@@ -1519,7 +1534,7 @@ class Engine:
     def _recover(self, op):
         """An op whose creation outcome is unknown: look it up by our own references, never resubmit."""
         try:
-            if op["kind"] == "deposit":
+            if op["kind"] in ("deposit", "folio_payment"):
                 found = [i for i in self.provider.find_intents(op["merchant_order_id"])
                          if i.get("request_id") in (None, op["request_id"])
                          and (i.get("metadata") or {}).get("operation_id") in (None, op["id"])]
@@ -1628,6 +1643,8 @@ class Engine:
             d = self.deal(deal_id)
             if not d.get("booking") or d["booking"]["status"] != "confirmed":
                 raise Refused("no confirmed booking")
+            if (d.get("folio") or {}).get("snapshot"):
+                raise Refused("Post-stay folio is in progress; use a separately approved PMS adjustment, not a reservation amendment.")
             base = self._version(d, d["accepted_version"])
             if release is None:
                 release = {n: int(rooms_per_night or 0) for n in base["terms"]["rooms"]}
@@ -2038,7 +2055,7 @@ class Engine:
                 self.log(d["id"], "system", "payout_pending", "No hotel connected account is configured, so the "
                          "deposit stays with the platform until one is set and the payout is retried.")
             return
-        payouts = self._payout_ops(d, "payout")
+        payouts = [o for o in self._payout_ops(d, "payout") if o["payment_intent_id"] == dep["payment_intent_id"]]
         live = [o for o in payouts if o["status"] not in ("failed", "superseded")]
         if not live:
             if any(o["status"] == "failed" for o in payouts):
@@ -2071,7 +2088,7 @@ class Engine:
         self.s["operations"][oid] = op
         self._save()   # persist the operation before calling the provider
         meta = {"run_id": self.s["run_id"], "deal": d["ref"], "operation_id": oid,
-                "obligation": "hotel share of signing deposit", "commission": calc.gbp(fee)}
+                "obligation": "hotel share of final folio payment" if dep["kind"] == "folio_payment" else "hotel share of signing deposit", "commission": calc.gbp(fee)}
         try:
             sp = self.provider.create_funds_split(op["request_id"], op["payment_intent_id"], op["amount"],
                                                   op["destination"], meta)
@@ -2176,6 +2193,7 @@ class Engine:
                                                                      "no hotel connected account"))]
             self.log(d["id"], actor, "payout_retry", f"{cap_first(actor)} retried the hotel payout.")
             self._settle_payouts(d)
+            if d.get("folio"): folio.Service(self).settle_payouts(d)
             self._save()
             return self.payout_view(d)
 
@@ -2226,9 +2244,12 @@ class Engine:
             if run and run != self.s["run_id"]:
                 result = f"belongs to earlier run {run}: kept for reconciliation, not applied to current hotel state"
             elif name.startswith("payment_intent."):
-                op = next((o for o in self.s["operations"].values() if o.get("payment_intent_id") == obj.get("id")), None)
+                op = next((o for o in self.s["operations"].values() if o.get("payment_intent_id") == obj.get("id") and o["kind"] in ("deposit", "folio_payment")), None)
                 if op:
-                    self._verify_deposit(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
+                    if op["kind"] == "folio_payment":
+                        self.check_folio_payment(op["deal_id"])
+                    elif op["kind"] == "deposit":
+                        self._verify_deposit(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
                     result = f"re-read intent: {op.get('provider_status')}"
             elif name.startswith("refund."):
                 op = next((o for o in self.s["operations"].values() if o.get("provider_id") == obj.get("id")), None)
@@ -2323,7 +2344,7 @@ class Engine:
 
     # ================================================================ views
     def finance(self, d) -> dict:
-        received = sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] == "deposit_received")
+        received = sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] in folio.RECEIPTS)
         refunded = -sum(e["amount"] for e in self.s["ledger"] if e["deal_id"] == d["id"] and e["type"] == "refund_completed")
         pending = sum(o["amount"] for o in self._refund_ops(d) if o["status"] in ("submitting", "unknown", "created", "pending"))
         cur = self._version(d, d["accepted_version"]) if d.get("accepted_version") else None
@@ -2343,6 +2364,12 @@ class Engine:
                 out["schedule"] = calc.schedule(cur["pricing"]["total"], cur["terms"]["deposit_pct"],
                                                 out["net_received"], calc.arrival_of(cur["terms"]), self.policy,
                                                 signing)
+        f=d.get('folio') or {};snap=f.get('snapshot')
+        if snap and f.get('approved_hash')==snap['hash'] and cur and f.get('agreement_hash')==cur['hash']:
+            out['reservation_total']=out['total']
+            out['total']=sum(l['amount'] for l in snap['lines'] if l['payer']=='master')
+            out['still_due']=out['total']-out['net_received']
+            out['schedule']=[];out['post_stay']=True
         return out
 
     def _key_dates(self, d) -> dict | None:
@@ -2466,6 +2493,7 @@ class Engine:
                 x = copy.deepcopy(d)
                 x['payer_fx'] = self.payer_view(d)
                 x['vendor_workflow'] = self.vendor_workspace(d['id']) if vendors.workspace(d)['enabled'] else None
+                if (d.get("booking") or {}).get("status") == "confirmed": x["folio_summary"] = self.folio_view(d["id"])
                 x["waiting_on"] = self.waiting_on(d)
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
