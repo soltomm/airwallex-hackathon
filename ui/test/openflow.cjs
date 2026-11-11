@@ -15,6 +15,11 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  const shot=(name,fullPage=true)=>page.screenshot({path:path.join(screenshots,name),fullPage,style:'.toast, .wb-feedback { visibility:hidden; }'});
  page.on('pageerror',e=>errors.push(e.message));
  page.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname);});
+ // Start from the seeded scenario: a second run would otherwise find seed 4242 already sent ("replay refused") and
+ // wait forever for its deal to open. Resetting is only safe on an isolated, simulated, loopback server.
+ if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw Error('Use an isolated loopback server.');
+ assert.equal((await (await context.request.get(base+'/api/state')).json()).provider,'simulated');
+ assert.ok((await context.request.post(base+'/api/reset',{data:{}})).ok());
  const before=execFileSync('git',['show','origin/main:web/group_sales.html'],{cwd:path.resolve(__dirname,'../..'),encoding:'utf8'});
  await page.route(base+'/',r=>r.fulfill({status:200,contentType:'text/html',body:before}));
  await page.goto(base);
@@ -22,7 +27,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  else await page.getByText('Northstar Analytics',{exact:true}).first().waitFor();
  await shot('before.png');
  await page.unroute(base+'/'); await page.reload();
- await page.getByText('Harbour House · Connected',{exact:true}).first().waitFor();
+ await page.getByText('Groupy · Connected',{exact:true}).first().waitFor();
  const startCount=await page.locator('.wb-table tbody tr').count();
  // Live Harbour detail and support tools retain their working controls.
  await page.getByRole('button',{name:'Northstar Analytics'}).first().click();
@@ -83,7 +88,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+3);
  await page.getByRole('button',{name:'Payments',exact:true}).first().click();
  const pay=await page.locator('#wbBody').innerText();
- assert.match(pay,/Harbour simulated provider|Airwallex sandbox/);
+ assert.match(pay,/Groupy simulated provider|Airwallex sandbox/);
  assert.doesNotMatch(pay,/browser fixture/);
  await page.getByRole('button',{name:'Overview',exact:true}).click();
  await shot('overview.png');
