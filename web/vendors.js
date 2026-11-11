@@ -93,7 +93,9 @@
   }
   function mount(d){
     const block=document.createElement('section');block.className='card';block.innerHTML=`<div class="label">Third-party management</div><label><input type="checkbox" id="vendorInquiryToggle" ${d.third_party?.enabled?'checked':''} ${d.accepted_version?'disabled':''}> Needs third-party management</label><p class="small muted">Source partner space, catering, AV and support under this inquiry’s master proposal.</p><button id="vendorInquiryOpen">Manage connections & subcontracts</button>`;
-    $('vendorInquiryCard')?.remove();block.id='vendorInquiryCard';$('deal').insertBefore(block,$('deal').children[1]||null);
+    // Near the top only when this inquiry uses third parties; otherwise below the decision and money cards, above the tabs.
+    const tabs=$('deal').querySelector('.tabs')?.closest('.card');
+    $('vendorInquiryCard')?.remove();block.id='vendorInquiryCard';$('deal').insertBefore(block,(d.third_party?.enabled?$('deal').children[1]:tabs)||null);
     const open=()=>{backFocus=document.activeElement;location.hash='vendors/'+d.id;};
     $('vendorInquiryToggle').onchange=async e=>{try{await api(`/api/deals/${d.id}/vendors`,{command:'configure',payload:{enabled:e.target.checked,host_rooms:d.third_party?.host_rooms??d.requirements?.rooms??null,external_meetings:d.third_party?.external_meetings??0}});await window.Harbour.reload();if(e.target.checked)open();}catch(err){e.target.checked=!e.target.checked;block.querySelector('p').textContent=err.message;}};
     $('vendorInquiryOpen').onclick=open;

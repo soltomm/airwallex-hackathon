@@ -435,7 +435,11 @@ function stepsOf(d) {
   const s = [['Inquiry', true]];
   if (d.thread.some(m => m.date_options)) s.push(['Dates', d.status !== 'dates_proposed' || offers.length > 0]);
   if (asked) s.push(['Questions', d.status !== 'needs_info' || offers.length > 0]);
-  s.push(['Offer', sent], ['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]);
+  s.push(['Offer', sent]);
+  // When an offer needed the hotel manager, that is the step in progress, not "Agreed".
+  const offerAps = (S.approvals || []).filter(a => a.deal_id === d.id && a.subject === 'offer');
+  if (offerAps.length) s.push(['Manager approval', !!d.accepted_version || !!d.booking || offerAps[offerAps.length - 1].status === 'approved']);
+  s.push(['Agreed', !!d.accepted_version || !!d.booking], ['Deposit paid', f.received > 0]);
   if (am.length || d.thread.some(m => m.action === 'change_request')) {
     s.push(['Change', am.some(v => v.status === 'accepted')]);
     if (am.some(v => v.reduction && v.reduction.refund_due > 0)) s.push(['Refund', f.refunded > 0 && !f.refund_owed]);
@@ -550,7 +554,10 @@ function tabBody(d) {
 function renderDeal(d) {
   if (!d) { $('deal').innerHTML = '<div class="empty">No inquiries yet.</div>'; return; }
   const r = d.requirements || {};
-  const sub = [r.rooms && `${r.rooms} ${r.room_type || ''} rooms`, r.guests && `${r.guests} guests`, r.arrival && r.departure && `${day(r.arrival)}–${day(r.departure)}`,
+  // What is booked (after any reduction) or offered beats what was first asked for.
+  const held = d.booking?.rooms || curVersion(d)?.terms.rooms;
+  const nRooms = (held ? Math.max(...Object.values(held)) : 0) || r.rooms;
+  const sub = [nRooms && `${nRooms} ${(d.booking?.room_type || r.room_type) || ''} rooms`, r.guests && `${r.guests} guests`, r.arrival && r.departure && `${day(r.arrival)}–${day(r.departure)}`,
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${d.pricing_review?.status==='pending'?'<span class="chip warn">Revenue review</span>':chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}${buyerMailboxCard(d)}</div>
