@@ -1698,15 +1698,22 @@ class Engine:
 
     def _reduction_message(self, d, ev, pricing) -> str:
         n, free, charged = ev["requested_room_nights"], ev["free_room_nights"], ev["charged_room_nights"]
+
+        def rn(k):
+            return f"{k} room-night{'' if k == 1 else 's'}"
         if not charged:
-            what = (f"We can release {n} room-nights under your attrition allowance ({ev['remaining_after']} "
-                    "room-night(s) remain for later release without penalty).")
+            left = ev["remaining_after"]
+            what = (f"We can release {rn(n)} under your attrition allowance ({rn(left)} "
+                    f"{'remains' if left == 1 else 'remain'} for later release without penalty).")
         else:
-            why = ("they are released after the room-release deadline" if not ev["before_release_deadline"]
-                   else f"this goes beyond your attrition allowance of {ev['allowance']} room-nights")
-            what = (f"We can release {n} room-nights back to the hotel. "
-                    + (f"{free} come off your total under your attrition allowance; " if free else "")
-                    + f"{'the other ' if free else 'all '}{charged} remain payable at the contracted rate because {why} "
+            why = (f"{'it is' if charged == 1 else 'they are'} released after the room-release deadline"
+                   if not ev["before_release_deadline"]
+                   else f"this goes beyond your attrition allowance of {rn(ev['allowance'])}")
+            rest = (f"the other {charged}" if free else "it" if charged == 1 else f"all {charged}")
+            what = (f"We can release {rn(n)} back to the hotel. "
+                    + (f"{free} {'comes' if free == 1 else 'come'} off your total under your attrition allowance; "
+                       if free else "")
+                    + f"{rest} {'remains' if charged == 1 else 'remain'} payable at the contracted rate because {why} "
                     f"(attrition charge {gbp(ev['attrition_charge'])}"
                     + (f", of which we waive {gbp(ev['waived'])}" if ev["waived"] else "") + ").")
         return (what + " Breakfast and meeting charges stay guaranteed. Revised total "
