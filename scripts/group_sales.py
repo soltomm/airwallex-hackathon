@@ -6,7 +6,7 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
      PUBLIC_BASE_URL (for Airwallex return URLs)  AWX_WEBHOOK_SECRET (to accept Airwallex webhooks)
      GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
-     GS_MAX_CLAUDE_RUNS_PER_DAY (default 150): beyond this the seller falls back to rules.
+     GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -45,7 +45,9 @@ PORT = int(os.environ.get("GS_PORT") or os.environ.get("PORT") or "8010")
 VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
 PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
-MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
+# No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
+# Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
+MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
 OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
@@ -101,7 +103,7 @@ class Runner:
                     if self.claude_runs["day"] != today:
                         self.claude_runs = {"day": today, "n": 0}
                     self.claude_runs["n"] += 1
-                    if self.claude_runs["n"] > MAX_CLAUDE_RUNS:
+                    if MAX_CLAUDE_RUNS and self.claude_runs["n"] > MAX_CLAUDE_RUNS:
                         mode = "rules"
                         engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
                                     "seller until tomorrow.", actor="system")

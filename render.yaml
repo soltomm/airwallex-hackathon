@@ -23,8 +23,8 @@ services:
         value: airwallex
       - key: BUYER_MODE                 # presenter plays the buyer; "agent" lets the buyer side answer itself
         value: presenter
-      - key: GS_MAX_CLAUDE_RUNS_PER_DAY # then the rules seller takes over until the next day
-        value: "150"
+      - key: GS_MAX_CLAUDE_RUNS_PER_DAY # optional daily cap on Claude seller runs; 0 = no cap (set spend limits on the key)
+        value: "0"
       - key: DATABASE_URL               # Postgres (Supabase transaction pooler URL); unset = files that reset on spin-down
         sync: false
       - key: ANTHROPIC_API_KEY          # Claude seller; without it the rules seller runs
