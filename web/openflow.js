@@ -22,7 +22,7 @@
       const status=['confirmed','declined','expired'].includes(d.status) ? d.status : n.cls==='you' ? 'approval' : ['new','intake','needs_info'].includes(d.status) ? 'draft' : d.status==='handoff' ? 'unavailable' : 'proposal';
       const rooms = d.booking?.rooms || v?.terms.rooms;
       return {id:d.id, company:d.company, contact:d.sender, generated:d.generated, arrival:r.arrival, departure:r.departure, rooms:r.rooms || (rooms ? Math.max(...Object.values(rooms)) : 0),
-        payer:d.payer_fx, status, label:({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
+        payer:d.payer_fx, status, label:d.pricing_review?.status==='pending'?'Awaiting revenue review':({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
         nights:rooms ? Object.values(rooms).reduce((a,b)=>a+b,0)+(v?.terms.vendor_lines||[]).filter(l=>l.category==='rooms').reduce((n,l)=>n+l.quantity,0) : (r.arrival && r.departure ? Math.max(0,(Date.parse(r.departure)-Date.parse(r.arrival))/864e5)*(r.rooms||0) : 0),
         next:n.short, review:['you','bad'].includes(n.cls) || ['new','intake'].includes(d.status), open:!['confirmed','declined','expired'].includes(d.status)};
     });
