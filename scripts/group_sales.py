@@ -35,7 +35,7 @@ from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # 
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
-from agentbank.groupsales import vendors  # noqa: E402
+from agentbank.groupsales import vendors, folio  # noqa: E402
 from agentbank.groupsales import understand  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
@@ -49,7 +49,7 @@ ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
 # Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
-OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
+OPEN_PATHS = ("/folio/", "/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
 # token instead, so a buyer can use the link without the hotel's access token. Presenter tools
 # (/api/buyer/<id>/suggest and /agent) still need the dashboard token.
@@ -161,6 +161,8 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["buyer_mode"] = runner.settings["buyer_mode"]
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
     v["finance_view"] = engine.finance(d)
+    if d.get("folio") and engine.folio_view(d["id"])["approved"]:
+        v["final_folio"] = engine.folio_view(d["id"],public=True)
     return v
 
 
@@ -227,7 +229,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
-            assets = {"/assets/revenue.js": ("revenue.js", "text/javascript"),
+            assets = {"/assets/folio.js": ("folio.js", "text/javascript"),
+                      "/assets/revenue.js": ("revenue.js", "text/javascript"),
                       "/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
@@ -235,6 +238,14 @@ class Handler(BaseHTTPRequestHandler):
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
+            if p.startswith('/api/deals/') and p.endswith('/folio/report'):
+                view=engine.folio_view(p.split('/')[3])
+                if not view.get('document'):return self._send(409,{'error':'Final folio not issued yet.'})
+                return self._send(200,folio.document_html(view['document'],internal=True),'text/html')
+            if p.startswith('/api/deals/') and p.endswith('/folio'):
+                return self._send(200, engine.folio_view(p.split('/')[3]))
+            if p.startswith('/folio/'):
+                return self._folio_page(p.split('/')[2], q.get('t',''), p.endswith('/return'), p.endswith('/document'))
             if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
                 return self._send(200, engine.pricing_review(p.split('/')[3]))
             if p == "/api/state":
@@ -308,6 +319,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
             if p == "/api/fx/scan":
                 return self._send(200, engine.scan_fx())
+            if p.startswith('/api/deals/') and p.endswith('/folio'):
+                return self._send(200, engine.folio_action(p.split('/')[3],b.get('command'),b.get('payload') or {}))
             if p.startswith("/api/deals/") and p.endswith("/payer"):
                 return self._send(200, engine.update_payer(p.split("/")[3], b.get('country_code'), b.get('currency')))
             if p.startswith("/api/deals/") and p.endswith("/fx_simulate"):
@@ -393,6 +406,34 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             traceback.print_exc()
             return self._send(500, {"error": str(e)})
+
+    def _folio_page(self, ref, token, returned=False, document=False):
+        d=engine.deal(ref)
+        if not hmac.compare_digest(token or '',d['buyer_token']):
+            return self._send(403,'Not authorized','text/html')
+        message=''
+        if returned:
+            try: engine.check_folio_payment(d['id'])
+            except Exception: message='Payment verification is pending. The hotel can check the same payment; no second charge is needed.'
+        view=engine.folio_view(d['id'],public=True)
+        if document:
+            doc=view.get('document')
+            if not doc:return self._send(409,'Final folio has not been issued yet.','text/html')
+            return self._send(200,folio.document_html(doc),'text/html')
+        ops=[o for o in engine.s['operations'].values() if o['deal_id']==d['id'] and o['kind']=='folio_payment']
+        op=ops[-1] if ops else None
+        eligible=bool(op and op['folio_hash']==view['snapshot_hash'] and op['status']=='created' and op['amount']==view['balance_due'] and not view['blocks'])
+        service=folio.Service(engine)
+        success=service.url(d,'return')
+        info={'purpose':'folio','hotel':engine.hotel['name'],'ref':view['reservation_ref'],'company':d['company'],
+              'status':d['status'],'op_status':op['status'] if op else None,'provider':engine.provider.name,
+              'intent_id':op.get('payment_intent_id') if op else None,'client_secret':op.get('client_secret') if eligible else None,
+              'currency':'GBP','paid':gbp(view['paid']),'amount':gbp(op['amount']) if op else None,'version':None,'total':gbp(view['master_total']),
+              'lines':[{'item':l['description'],'amount':gbp(l['amount'])} for l in view['snapshot']['lines']],
+              'expires_at':None,'hold_ok':eligible,'message':message,'success_url':success,
+              'sim_url':f"/sim-hpp/{op['payment_intent_id']}?ret="+success.replace('&','%26') if op and op.get('payment_intent_id') else None,
+              'booking':None}
+        return self._send(200,PAY_PAGE.replace('__PAY__',json.dumps(info).replace('<','\\u003c')),'text/html')
 
     # ---- payment page ---------------------------------------------------------------------------
     def _pay(self, ref: str, token: str, returned: bool):

@@ -67,6 +67,13 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .next.you { border-color: var(--warn); background: var(--warn-soft); } .next.buyer { border-color: var(--buyer); background: var(--buyer-soft); }
 .next.wait { background: var(--sunk); } .next.done { border-color: var(--ok); background: var(--ok-soft); } .next.bad { border-color: var(--bad); background: var(--bad-soft); }
 .next .who { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700; margin-bottom: 4px; }
+#folioWorkspace { min-width:0; overflow-wrap:anywhere; }
+#folioWorkspace form { margin-top:16px; }
+#folioWorkspace label { display:block; margin:8px 0; }
+#folioWorkspace input:not([type=checkbox]), #folioWorkspace select { display:block; width:100%; min-width:0; box-sizing:border-box; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--sunk); }
+#folioWorkspace .row > label { flex:1 1 150px; min-width:0; }
+#folioWorkspace fieldset { min-width:0; }
+#folioWorkspace button { white-space:normal; min-height:40px; }
 .buyer-mailbox-callout { margin-top:14px; padding:14px; border:1px solid var(--accent); border-radius:10px; background:var(--accent-soft); }
 .buyer-mailbox-callout h3 { margin:0 0 6px; font-size:16px; }
 .buyer-mailbox-callout p { margin:0 0 12px; }
@@ -326,6 +333,8 @@ function nextOf(d) {
   const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy, v = curVersion(d), co = esc(d.company);
   if (d.pricing_review?.status==='pending') return {cls:'you',short:d.pricing_review.stale?'Refresh revenue review':'Awaiting revenue review',who:'Pricing decision · Revenue team',pricing:true};
   if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
+  const f=d.folio_summary;
+  if(d.status==='confirmed'&&f?.checkout_reached&&f.status!=='finalized')return {cls:'you',short:({not_imported:'Import final PMS folio',review_required:'Review final folio',balance_due:'Collect final balance',credit_due:'Reconcile folio credit',guest_balances_open:'Reconcile guest balances',settled:'Issue final folio'})[f.status]||'Reconcile final folio',who:'Post-stay reconciliation',folio:f};
   if (ap) return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
     return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
@@ -378,6 +387,7 @@ function nextCard(d) {
   const n = nextOf(d), v = curVersion(d);
   let h = `<div class="next ${n.cls}"><div class="who">${esc(n.who)}</div>`;
   if(n.pricing) return window.Revenue ? window.Revenue.card(d) : '<p>Loading revenue review…</p>';
+  if(n.folio){const f=n.folio;return `<div class="next you"><div class="who">Post-stay reconciliation</div><h3>${esc(n.short)}</h3><p>Reservation ${esc(f.reservation_ref)} · Final bill ${gbp(f.final_total)} · Master balance ${gbp(f.balance_due)}.</p><p class="small">Reconcile the PMS charges and payer allocations before requesting any remaining payment.</p><button data-tab="folio">Open final folio workflow</button></div>`;}
   if (n.ap) {
     const a = n.ap;
     const what = {offer: `Approve offer v${a.version}?`, acceptance: `Let the buyer accept v${a.version}?`, refund: `Approve a ${gbp(a.amount)} refund?`, reduction: a.amount ? `Waive ${gbp(a.amount)} of the attrition charge on change v${a.version}?` : `Approve change v${a.version}?`}[a.subject] || 'Approve?';
@@ -395,6 +405,7 @@ function nextCard(d) {
   } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
     h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
+    h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
     if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
     if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
     h += mailLink(d);
@@ -521,8 +532,9 @@ function payoutCard(d) {
     <p class="small muted" style="margin:10px 0 0">The platform collects the card payment for the hotel's connected account ${p.connected_account ? `<code>${esc(p.connected_account)}</code>` : '(none set)'}; a funds split pays the hotel its share, and a funds split reversal takes back its share of any refund.</p>
     ${warn ? `<div class="row" style="margin-top:10px"><button class="btn-p" data-act="retryPayout">Retry payout</button></div>` : ''}</div>`;
 }
-const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
+const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off'], ['folio','Final folio']];
 function tabBody(d) {
+  if(tab==='folio')return `<section id="folioWorkspace" data-folio-deal="${esc(d.id)}"><p>Loading final folio…</p></section>`;
   if (tab === 'conv') {
     // Keep every message readable in full, newest first.
     const msg = m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Groupy'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
@@ -567,8 +579,9 @@ function renderDeal(d) {
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${d.pricing_review?.status==='pending'?'<span class="chip warn">Revenue review</span>':chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}${buyerMailboxCard(d)}</div>
     ${nextCard(d)}${negotiationCard(d)}${trailCard(d)}${offerCard(d)}
-    <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
+    <div class="card"><div class="tabs">${TABS.filter(([k])=>k!=='folio'||d.booking?.status==='confirmed').map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
+  if (window.Folios) window.Folios.mount(d);
   if (window.FX) window.FX.mount(d);
   if (window.Vendors) window.Vendors.mount(d);
 }
@@ -903,6 +916,7 @@ showView(); load(); setInterval(load, 1500);
 </script>
 <script src="/assets/fx.js"></script>
 <script src="/assets/vendors.js"></script>
+<script src="/assets/folio.js"></script>
 <script src="/assets/revenue.js"></script>
 <script src="/assets/openflow.js"></script>
 </body>
