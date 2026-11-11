@@ -6,7 +6,7 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
      PUBLIC_BASE_URL (for Airwallex return URLs)  AWX_WEBHOOK_SECRET (to accept Airwallex webhooks)
      GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
-     GS_MAX_CLAUDE_RUNS_PER_DAY (default 150): beyond this the seller falls back to rules.
+     GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -45,7 +45,9 @@ PORT = int(os.environ.get("GS_PORT") or os.environ.get("PORT") or "8010")
 VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
 PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
-MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
+# No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
+# Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
+MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
 OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
@@ -101,7 +103,7 @@ class Runner:
                     if self.claude_runs["day"] != today:
                         self.claude_runs = {"day": today, "n": 0}
                     self.claude_runs["n"] += 1
-                    if self.claude_runs["n"] > MAX_CLAUDE_RUNS:
+                    if MAX_CLAUDE_RUNS and self.claude_runs["n"] > MAX_CLAUDE_RUNS:
                         mode = "rules"
                         engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
                                     "seller until tomorrow.", actor="system")
@@ -225,15 +227,20 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
-            assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
+            assets = {"/assets/revenue.js": ("revenue.js", "text/javascript"),
+                      "/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                return self._send(200, engine.pricing_review(p.split('/')[3]))
             if p == "/api/state":
                 return self._send(200, state())
+            if p.startswith('/api/vendors/') and p.endswith('/history'):
+                return self._send(200, engine.vendor_history(p.split('/')[3], q.get('exclude_deal')))
             if p == '/api/vendor_directory':
                 return self._send(200, vendors.directory())
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
@@ -305,6 +312,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.update_payer(p.split("/")[3], b.get('country_code'), b.get('currency')))
             if p.startswith("/api/deals/") and p.endswith("/fx_simulate"):
                 return self._send(200, engine.simulate_fx_receipt(p.split("/")[3]))
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                did=p.split('/')[3]
+                if b.get('action') == 'request':
+                    return self._send(200, engine.request_pricing_review(did,b.get('reason') or 'Sales requested a revenue pricing decision.',b.get('requested_rate'),actor='hotel staff'))
+                return self._send(200, engine.pricing_review_action(did,b.get('action'),b.get('payload') or {},actor='hotel_manager'))
             if p.startswith("/api/deals/") and p.endswith("/hand_back"):
                 return self._send(200, engine.hand_back(p.split("/")[3], b.get("instruction", ""), actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/close"):
@@ -339,7 +351,7 @@ class Handler(BaseHTTPRequestHandler):
                 # take it from there; nothing else in the deal is simulated.
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
                                          seed=b.get("seed"))
-                return self._send(200, generator.send(engine, gen))
+                return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party"))))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
@@ -349,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc:
                         raise Refused(str(exc))
                 result = engine.ingest_email(b["from"], b.get("subject") or "(no subject)", b["body"],
-                                            message_id=b.get("message_id") or None)
+                                            message_id=b.get("message_id") or None, third_party=b.get("third_party"))
                 if b.get('payer_country'):
                     engine.update_payer(result['deal_id'], b['payer_country'], b.get('payer_currency'))
                 return self._send(200, result)
