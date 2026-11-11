@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from decimal import Decimal
 from datetime import date, timedelta
 
@@ -903,9 +904,47 @@ _S = {"type": "string"}
 
 
 def _tool(name, desc, props, required=None):
-    return {"name": name, "description": desc, "strict": True,
+    # Not "strict": the API compiles strict tool schemas into one grammar, and with all of these tools strict it
+    # rejected every request ("The compiled grammar is too large"), so the Claude seller never ran on the live demo.
+    # The same guarantee is kept in code instead: every call is checked against its schema (schema_errors) before it
+    # runs, and the engine checks every value as before.
+    return {"name": name, "description": desc,
             "input_schema": {"type": "object", "properties": props, "required": required if required is not None else list(props),
                              "additionalProperties": False}}
+
+
+_JSON_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "object": dict, "array": list,
+               "null": type(None)}
+
+
+def schema_errors(value, schema: dict, path: str = "input") -> list[str]:
+    """Where `value` doesn't match `schema`, for the keywords these tool schemas use (type, enum, anyOf, properties,
+    required, additionalProperties, items). An empty list means it matches."""
+    if "anyOf" in schema:
+        options = [schema_errors(value, opt, path) for opt in schema["anyOf"]]
+        return [] if any(not o for o in options) else [f"{path} matches none of the allowed forms"]
+    errs: list[str] = []
+    types = schema.get("type")
+    if types is not None:
+        names = types if isinstance(types, list) else [types]
+        ok = any(isinstance(value, _JSON_TYPES[t]) and not (t in ("integer", "number") and isinstance(value, bool))
+                 for t in names)
+        if not ok:
+            return [f"{path} should be {' or '.join(names)}, not {type(value).__name__}"]
+    if "enum" in schema and value not in schema["enum"]:
+        errs.append(f"{path} should be one of {schema['enum']}")
+    if isinstance(value, dict) and "properties" in schema:
+        props = schema["properties"]
+        errs += [f"{path}.{k} is required" for k in schema.get("required", []) if k not in value]
+        if schema.get("additionalProperties") is False:
+            errs += [f"{path}.{k} is not a known field" for k in value if k not in props]
+        for k, v in value.items():
+            if k in props:
+                errs += schema_errors(v, props[k], f"{path}.{k}")
+    if isinstance(value, list) and "items" in schema:
+        for i, v in enumerate(value):
+            errs += schema_errors(v, schema["items"], f"{path}[{i}]")
+    return errs
 
 
 _DEAL = {"deal_id": {"type": "string", "description": "deal id or ref, e.g. GS-1001"}}
@@ -1094,6 +1133,9 @@ class ClaudeSeller:
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default")
             except anthropic.APIStatusError as err:
                 raw.note(None, f"Seller model call failed ({err.status_code}: {str(err.message)[:200]}); falling back to rules for this run.")
+                # Also in the server logs (Render): the activity note alone let this go unnoticed on the live demo.
+                print(f"Claude seller call failed ({err.status_code}): {str(err.message)[:300]}; the rules seller "
+                      "answers this run", file=sys.stderr, flush=True)
                 return out + RulesSeller(raw).run(trigger="Claude seller unavailable: " + trigger)
             if resp.stop_reason == "refusal":
                 raw.note(None, "Seller model declined this turn; nothing was changed.")
@@ -1110,6 +1152,14 @@ class ClaudeSeller:
             for b in uses:
                 calls += 1
                 try:
+                    tool = next((t for t in TOOLS if t["name"] == b.name), None)
+                    bad = (schema_errors(b.input, tool["input_schema"]) if tool else [f"unknown tool {b.name}"])
+                    if bad:
+                        # The tools aren't strict (see _tool): a call that doesn't match its schema goes back to the
+                        # model to correct, and never reaches the engine.
+                        results.append({"type": "tool_result", "tool_use_id": b.id, "is_error": True,
+                                        "content": "Invalid arguments: " + "; ".join(bad[:10])})
+                        continue
                     res = self._do(b.name, b.input)
                     results.append({"type": "tool_result", "tool_use_id": b.id,
                                     "content": json.dumps(res, default=str)[:12000]})
