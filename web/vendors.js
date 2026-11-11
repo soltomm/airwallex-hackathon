@@ -73,7 +73,7 @@
   }
   function mount(d){
     const block=document.createElement('section');block.className='card';block.innerHTML=`<div class="label">Third-party management</div><label><input type="checkbox" id="vendorInquiryToggle" ${d.third_party?.enabled?'checked':''} ${d.accepted_version?'disabled':''}> Needs third-party management</label><p class="small muted">Source partner space, catering, AV and support under this inquiry’s master proposal.</p><button id="vendorInquiryOpen">Manage connections & subcontracts</button>`;
-    $('vendorInquiryCard')?.remove();block.id='vendorInquiryCard';$('deal').insertBefore(block,$('deal').children[1]||null);
+    $('vendorInquiryCard')?.remove();block.id='vendorInquiryCard';const next=$('deal').querySelector('.next');$('deal').insertBefore(block,next?next.nextSibling:$('deal').children[1]||null);
     const open=()=>{backFocus=document.activeElement;location.hash='vendors/'+d.id;};
     $('vendorInquiryToggle').onchange=async e=>{try{await api(`/api/deals/${d.id}/vendors`,{command:'configure',payload:{enabled:e.target.checked,host_rooms:d.third_party?.host_rooms??d.requirements?.rooms??null,external_meetings:d.third_party?.external_meetings??0}});await window.Harbour.reload();if(e.target.checked)open();}catch(err){e.target.checked=!e.target.checked;block.querySelector('p').textContent=err.message;}};
     $('vendorInquiryOpen').onclick=open;
@@ -88,9 +88,10 @@
       tasks.push({deal:d,id:r.id,external,text,name:r.title});
     }
     const task=t=>`<button class="wb-move" data-vendor-open="${esc(t.deal.id)}"><span><b>${esc(t.text)}</b><small>${esc(t.deal.company)} · ${esc(t.name)}</small></span></button>`;
-    const base=all.filter(d=>d.review).slice(0,3).map(d=>`<button class="wb-move" data-open="${esc(d.id)}"><span><b>${esc(d.next)}</b><small>${esc(d.company)}</small></span></button>`).join('');
-    const buyer=all.filter(d=>d.next?.startsWith('Buyer')).slice(0,3).map(d=>`<button class="wb-move" data-open="${esc(d.id)}"><span><b>${esc(d.next)}</b><small>${esc(d.company)}</small></span></button>`).join('');
-    return `<h3 class="vendor-lane">Internal actions · RevOps & hotel</h3>${base+tasks.filter(t=>!t.external).map(task).join('')||'<p class="small muted">No internal actions.</p>'}<h3 class="vendor-lane">Waiting on external providers</h3>${tasks.filter(t=>t.external).map(task).join('')||'<p class="small muted">No vendor responses pending.</p>'}${buyer?'<h3 class="vendor-lane">Waiting on buyers</h3>'+buyer:''}`;
+    const move=(d,cls)=>`<button class="wb-move ${cls}" data-open="${esc(d.id)}"><span class="wb-move-icon" aria-hidden="true">${cls==='you'?'!':'↗'}</span><span><b>${esc(d.next)}</b><small>${esc(d.company)}${d.ref?' · '+esc(d.ref):''}</small></span></button>`;
+    const base=all.filter(d=>d.review).map(d=>move(d,'you')).join('');
+    const buyer=all.filter(d=>d.turn==='buyer').slice(0,3).map(d=>move(d,'buyer')).join('');
+    return `<h3 class="vendor-lane">Needs you · hotel manager</h3>${base+tasks.filter(t=>!t.external).map(task).join('')||'<p class="small muted">Nothing waiting on you.</p>'}${tasks.some(t=>t.external)?'<h3 class="vendor-lane">Waiting on external providers</h3>'+tasks.filter(t=>t.external).map(task).join(''):''}${buyer?'<h3 class="vendor-lane">Waiting on buyers</h3>'+buyer:''}`;
   }
   document.addEventListener('click',e=>{const b=e.target.closest('[data-vendor-open]');if(b)location.hash='vendors/'+b.dataset.vendorOpen;});
   const pendingIds=()=> (window.Harbour.state()?.deals||[]).filter(d=>d.third_party?.enabled&&d.third_party.requests.some(r=>['quoted','revision_requested'].includes(r.status)||r.status==='delivered'&&r.payment_status!=='paid'||r.status==='confirmed'&&(d.booking||!d.accepted_version&&!d.versions.some(v=>['pending_approval','approved','sent'].includes(v.status))))).map(d=>d.id);

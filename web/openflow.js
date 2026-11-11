@@ -7,62 +7,119 @@
   const $ = id => document.getElementById(id);
   const html = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const money = n => new Intl.NumberFormat('en-GB', {style:'currency', currency:'GBP', maximumFractionDigits:0}).format(n / 100);
+  const exact = n => (n<0?'−':'')+new Intl.NumberFormat('en-GB', {style:'currency', currency:'GBP', minimumFractionDigits:Math.abs(n)%100?2:0}).format(Math.abs(n) / 100);
   const date = s => s ? new Date(s + 'T12:00:00Z').toLocaleDateString('en-GB', {day:'numeric', month:'short'}) : 'To confirm';
   const longDate = s => new Date(s + 'T12:00:00Z').toLocaleDateString('en-GB', {day:'numeric', month:'long', year:'numeric'});
   const time = s => new Date(s).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
   let view = 'overview', filter = 'all', search = '', trigger = null, catalog = null;
-  const labels = {draft:'New inquiry', approval:'Internal approval', proposal:'Proposal', confirmed:'Confirmed'};
-  const NEW = ['draft', 'unavailable'];
   function notify(message) { let el=$('wbToast'); if (!el) { el=document.createElement('div'); el.id='wbToast'; el.setAttribute('role','status'); } const dialog=document.querySelector('.wb-drawer[open]'); el.className=dialog?'wb-feedback':'toast'; if(dialog)dialog.insertBefore(el,dialog.children[1]);else document.body.append(el); el.textContent=message; setTimeout(()=>el.remove(),6000); }
   const actual = () => window.Harbour.state();
   const presetTitle = g => (catalog?.info?.[g.preset]?.title) || (g.preset ? g.preset.replace(/_/g, ' ') : 'Custom traits');
+  // One status vocabulary: whose turn it is (Harbour.next). `turn` drives the chip colour, the filters and the
+  // "Needs you" list; `stage` says how far the deal has got.
+  const TURN = {you:'Needs you', bad:'Needs you', buyer:'With buyer', wait:'Seller agent', done:'Booked'};
+  const stageOf = d => d.booking ? 'Booked' : ['expired','lost','declined'].includes(d.status) ? ({expired:'Lapsed',lost:'Closed',declined:'Declined'})[d.status]
+    : d.accepted_version ? 'Agreed' : d.versions.some(v=>v.sent_at) ? `Offer v${d.versions.at(-1).n}` : d.versions.length ? `Drafting v${d.versions.at(-1).n}` : 'New inquiry';
   function rows() {
     return (actual()?.deals || []).map(d => {
       const v = d.versions.at(-1), r=d.requirements || {}, n=window.Harbour.next(d);
-      const status=['confirmed','declined','expired'].includes(d.status) ? d.status : n.cls==='you' ? 'approval' : ['new','intake','needs_info'].includes(d.status) ? 'draft' : d.status==='handoff' ? 'unavailable' : 'proposal';
+      const closed=['declined','expired','lost'].includes(d.status), turn=closed ? 'closed' : n.cls;
       const rooms = d.booking?.rooms || v?.terms.rooms;
-      return {id:d.id, company:d.company, contact:d.sender, generated:d.generated, arrival:r.arrival, departure:r.departure, rooms:r.rooms || (rooms ? Math.max(...Object.values(rooms)) : 0),
-        payer:d.payer_fx, status, label:({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
+      return {id:d.id, ref:d.ref, company:d.company, contact:d.sender, generated:d.generated, arrival:r.arrival, departure:r.departure, rooms:r.rooms || (rooms ? Math.max(...Object.values(rooms)) : 0),
+        payer:d.payer_fx, turn, stage:stageOf(d), total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view, finance:d.finance_view,
         nights:rooms ? Object.values(rooms).reduce((a,b)=>a+b,0)+(v?.terms.vendor_lines||[]).filter(l=>l.category==='rooms').reduce((n,l)=>n+l.quantity,0) : (r.arrival && r.departure ? Math.max(0,(Date.parse(r.departure)-Date.parse(r.arrival))/864e5)*(r.rooms||0) : 0),
-        next:n.short, review:['you','bad'].includes(n.cls) || ['new','intake'].includes(d.status), open:!['confirmed','declined','expired'].includes(d.status)};
+        next:closed ? stageOf(d) : n.short, ap:n.ap, review:['you','bad'].includes(n.cls), open:!closed && d.status!=='confirmed', booked:!!d.booking};
     });
   }
+  const chip = d => `<span class="wb-turn ${d.turn}">${html(d.next)}</span>`;
   function metric(label, value, sub, extra='') { return `<div class="wb-kpi ${extra}"><dt>${label}</dt><dd>${value}</dd><p>${sub}</p></div>`; }
+  // Where the seller agent is right now, for the top bar and the activity panel.
+  function agentStatus(all) {
+    const s=actual(), busy=s?.runner.busy, mode=s?.runner.settings?.seller_mode==='claude'?'Claude':'rules', you=all.filter(d=>d.review).length;
+    if (busy && busy.startsWith('seller')) return {cls:'working', text:'Seller agent is working…', mode};
+    if (you) return {cls:'waiting', text:`Seller agent · waiting on you (${you})`, mode};
+    return {cls:'idle', text:'Seller agent · watching the inbox', mode};
+  }
   function refresh() {
-    const all=rows(), pending=all.filter(d=>d.review||(window.Vendors?.pendingIds()||[]).includes(d.id)).length, fresh=all.filter(d=>NEW.includes(d.status)).length;
-    $('wbMetrics').innerHTML=metric('Open pipeline',money(all.filter(d=>d.open).reduce((n,d)=>n+d.total,0)),`${all.filter(d=>d.open).length} active group inquiries`)
-      +metric('Group room nights',all.filter(d=>d.open||d.status==='confirmed').reduce((n,d)=>n+d.nights,0),'Across active and confirmed groups')
-      +metric(`New inquiries ${pending ? `<span class="wb-badge">${pending} to review</span>` : ''}`,fresh,'A new opportunity to welcome a group','highlight')
-      +metric('Deposits collected',money(all.reduce((n,d)=>n+d.paid,0)),'Net of refunds');
-    const s=actual(); $('wbConnection').textContent=s ? `Harbour House connected · ${s.provider==='airwallex'?'Airwallex sandbox':'Simulated Harbour payments'} · ${s.runner.busy || 'Seller watching inbox'}` : 'Connecting to Harbour House…';
+    const all=rows(), you=all.filter(d=>d.review), withBuyer=all.filter(d=>d.turn==='buyer'), open=all.filter(d=>d.open);
+    const ag=agentStatus(all), s=actual(), awx=s?.provider==='airwallex';
+    $('wbAgent').className=`wb-agent ${ag.cls}`; $('wbAgent').innerHTML=`<span class="wb-pulse"></span>${html(ag.text)}`; $('wbAgent').title=`Seller mode: ${ag.mode}`;
+    if (view==='overview') {
+      $('wbTitle').textContent = !s ? 'Group sales' : you.length ? `${you.length} ${you.length===1?'decision needs':'decisions need'} you` : 'Nothing needs you right now';
+      $('wbTitle').classList.toggle('attention', you.length>0);
+      $('wbLede').textContent = s ? [withBuyer.length && `${withBuyer.length} waiting on buyers`, open.length && `${money(open.reduce((n,d)=>n+d.total,0))} in open offers`,
+        all.filter(d=>d.booked).length && `${all.filter(d=>d.booked).length} booked`].filter(Boolean).join(' · ') || 'No inquiries yet. Send one with New inquiry.' : 'Connecting to Harbour House…';
+    }
+    $('wbMetrics').innerHTML=metric('Needs you', you.length, you.length ? html(you.map(d=>d.next).slice(0,2).join(' · ')) : 'Nothing waiting on you', you.length ? 'attention' : '')
+      +metric('Open pipeline',money(open.reduce((n,d)=>n+d.total,0)),`${open.length} active group ${open.length===1?'inquiry':'inquiries'}`)
+      +metric('Group room nights',all.filter(d=>d.open||d.booked).reduce((n,d)=>n+d.nights,0),'Across active and booked groups')
+      +metric('Deposits collected',money(all.reduce((n,d)=>n+d.paid,0)),`Net of refunds · ${awx?'Airwallex sandbox':'simulated Airwallex'}`);
+    $('wbConnection').textContent=s ? `Harbour House connected · payments: ${awx?'Airwallex sandbox':'simulated Airwallex'} · seller agent: ${ag.mode}` : 'Connecting to Harbour House…';
     if (view==='payments') renderPayments(all); else renderPipeline(all);
   }
-  const source = d => d.generated ? `Generated · ${presetTitle(d.generated)} · seed ${d.generated.seed}` : 'Harbour House · Connected';
+  const source = d => d.generated ? `${html(d.ref)} · <span class="wb-tag">Generated · ${html(presetTitle(d.generated))}</span>` : html(d.ref);
+  const FILTERS=[['all','All'],['you','Needs you'],['wait','Seller agent'],['buyer','With buyer'],['done','Booked'],['closed','Closed']];
+  const ORDER={you:0,bad:0,wait:1,buyer:2,done:3,closed:4};
   function table(all) {
-    const filtered=all.filter(d=>(filter==='all'||filter==='new'&&NEW.includes(d.status)||filter===d.status) && `${d.company} ${d.contact||''} ${d.payer?.origin?.country||''} ${d.payer?.origin?.local_currency||''}`.toLowerCase().includes(search.toLowerCase()));
-    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th><th>Payer origin</th><th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(source(d))}</span></button></td><td>${window.FX?.summary(d.payer)||'<span class="muted">Not recorded</span>'}</td><td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="6" class="wb-empty">No inquiries match. Try another filter or send a new inquiry.</td></tr>'}</tbody></table></div>`;
+    const filtered=all.filter(d=>(filter==='all'||filter===d.turn||filter==='you'&&d.turn==='bad') && `${d.company} ${d.ref} ${d.contact||''} ${d.payer?.origin?.country||''} ${d.payer?.origin?.local_currency||''}`.toLowerCase().includes(search.toLowerCase()))
+      .sort((a,b)=>(ORDER[a.turn]??5)-(ORDER[b.turn]??5));
+    const payer = d => d.payer?.origin ? window.FX?.summary(d.payer) : `<span class="muted">—</span>${d.payer?.latest ? `<span class="wb-next">${d.payer.latest.simulated?'Simulated FX':'FX'}: ${html(d.payer.latest.status)} ${html(d.payer.latest.currency)}</span>` : ''}`;
+    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group</th><th>Payer origin</th><th>Stay dates</th><th>Rooms</th><th>Value</th><th>Next step</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}" class="${d.review?'needs-you':''}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${source(d)}</span></button></td><td>${payer(d)}</td><td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : '<span class="muted">Not quoted</span>'}</td><td>${chip(d)}${d.booked ? `<span class="wb-next">${exact(d.paid)} paid</span>` : d.stage!==d.next ? `<span class="wb-next">${html(d.stage)}</span>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="wb-empty">No inquiries match. Try another filter or send a new inquiry.</td></tr>'}</tbody></table></div>`;
+  }
+  // Decisions only the hotel can make, with the limit the seller hit. The drawer has the full card and the buttons.
+  function attention(all) {
+    const items=all.filter(d=>d.review);
+    if (!items.length) return '';
+    return `<section class="wb-attention" aria-label="Needs your decision"><div class="wb-attention-head">Needs your decision</div>${items.map(d=>{
+      const rules=d.ap?.rules||[], why=rules.length ? rules.map(r=>`${html(r.rule)}: <b>${html(r.asked)}</b> <span class="muted">(seller alone ${html(r.alone)})</span>`).join(' · ') : d.ap ? html(d.ap.reasons?.[0]||'') : 'Handed to hotel staff. The seller stops until you act.';
+      return `<div class="wb-attention-row"><div><b>${html(d.next)}</b> · ${html(d.company)} <span class="muted">${html(d.ref)}</span><div class="wb-attention-why">${why}</div></div><button class="wb-primary wb-review" data-open="${html(d.id)}">Review</button></div>`;}).join('')}</section>`;
+  }
+  // The seller agent's own actions, newest first, on the demo clock. Reads, dry-run pricing and notes stay in the
+  // inquiry's AI Agent tab.
+  const QUIET = new Set(['price_terms','log_reasoning']);
+  function agentFeed(limit) {
+    const s=actual(), H=window.Harbour, name=id=>s.deals.find(d=>d.id===id)?.company||'';
+    const steps=(s?.agent_runs||[]).flatMap(r=>r.steps.filter(x=>!H.isRead(x.tool)&&!QUIET.has(x.tool)).map(x=>({...x,agent:r.agent}))).reverse().slice(0,limit);
+    return steps.map(x=>`<div class="wb-feed-row"><span class="wb-feed-ico agent" aria-hidden="true">✦</span><div><b>${html(H.tool(x.tool))}</b>${x.ok?'':' <span class="wb-turn bad">refused</span>'}<span class="wb-feed-deal">${html(name(x.deal_id))}</span>
+      <div class="wb-feed-detail">${html(H.tidy(x.summary).slice(0,160))}${H.tidy(x.summary).length>160?'…':''}</div></div><span class="wb-feed-at">${html(H.when(x.at))}</span></div>`).join('') || '<p class="wb-empty">The seller agent hasn’t acted yet.</p>';
+  }
+  // Payments, refunds and payouts as Airwallex reports them, plus the notifications it sent.
+  const AWX = {deposit:'Deposit payment', refund:'Refund', payout:'Funds split to hotel', payout_reversal:'Funds split reversal'};
+  function awxEvents(limit) {
+    const s=actual(), H=window.Harbour, name=id=>s.deals.find(d=>d.id===id)?.company||'';
+    const ops=(s?.operations||[]).map((o,i)=>({i, at:o.created_at, deal:o.deal_id, what:AWX[o.kind]||o.kind.replaceAll('_',' '), amount:(['refund','payout_reversal'].includes(o.kind)?-1:1)*o.amount,
+      status:o.provider_status||o.status, ok:['succeeded','completed','paid','reversed'].includes(o.status), id:o.kind==='deposit'?o.payment_intent_id:o.provider_id}));
+    const hooks=(s?.activity||[]).filter(a=>a.kind==='webhook').map((a,i)=>({i:1e4+i, at:a.at, deal:a.deal_id, what:'Notification received', detail:H.tidy(a.text).replace(/^Provider event /,'')}));
+    const all=[...ops,...hooks].sort((a,b)=>b.at.localeCompare(a.at)||b.i-a.i).slice(0,limit);
+    return all.map(e=>`<div class="wb-feed-row"><span class="wb-feed-ico awx" aria-hidden="true">⇄</span><div><b>${html(e.what)}</b>${e.amount!=null?` <span class="wb-amount">${exact(e.amount)}</span>`:''}<span class="wb-feed-deal">${html(name(e.deal))}</span>
+      <div class="wb-feed-detail">${e.status?`<span class="wb-status-code ${e.ok?'ok':''}">${html(e.status)}</span>`:''}${e.id?`<code>${html(e.id)}</code>`:''}${e.detail?html(e.detail.slice(0,140)):''}</div></div><span class="wb-feed-at">${html(H.when(e.at))}</span></div>`).join('')
+      || '<p class="wb-empty">No payments yet. The first one appears when a buyer pays a deposit.</p>';
+  }
+  function awxTotals(all) {
+    const sum=f=>all.reduce((n,d)=>n+(f(d)||0),0), po=d=>d.payout && d.payout.status!=='not_due' ? d.payout : null;
+    const t={collected:sum(d=>d.finance?.received), refunded:sum(d=>d.finance?.refunded), hotel:sum(d=>po(d)?.hotel_net), fee:sum(d=>po(d)?.platform_fee)};
+    return `<div class="wb-awx-totals"><div><span>Collected</span><b>${exact(t.collected)}</b></div><div><span>Refunded</span><b>${exact(t.refunded)}</b></div><div><span>Paid to hotel</span><b>${exact(t.hotel)}</b></div><div><span>Platform fee</span><b>${exact(t.fee)}</b></div></div>`;
   }
   function renderPipeline(all) {
-    const moves=all.filter(d=>d.review).slice(0,6);
-    const activity=(actual()?.activity || []).map(a=>({at:a.real_at||a.at,text:a.text||a.kind,company:'Harbour House',id:a.deal_id})).sort((a,b)=>b.at.localeCompare(a.at)).slice(0,5);
-    const stages=[['New inquiries', NEW],['Internal approval',['approval']],['Proposal',['proposal']],['Confirmed',['confirmed']]];
-    $('wbBody').innerHTML=`<div class="wb-columns"><section class="wb-panel"><div class="wb-panel-head"><h2>Group inquiries <span class="muted small">${all.length}</span></h2><span class="muted small">${all.filter(d=>d.review||(window.Vendors?.pendingIds()||[]).includes(d.id)).length} pending action</span></div>
-      <div class="wb-toolbar"><div class="wb-filters" aria-label="Pipeline filters">${[['new','New'],['all','All inquiries'],['approval','Internal approval'],['proposal','Proposal'],['confirmed','Confirmed']].map(([key,label])=>`<button data-filter="${key}" aria-pressed="${filter===key}">${label}</button>`).join('')}</div><label class="wb-search"><span class="small muted" hidden>Search inquiries</span><input id="wbSearch" type="search" aria-label="Search inquiries" placeholder="⌕  Search inquiries" value="${html(search)}"></label></div><div id="wbTable">${table(all)}</div></section>
-      <section class="wb-panel"><div class="wb-panel-head"><h2>Your next moves</h2><span class="muted small">↗</span></div><div class="wb-moves">${moves.map(d=>`<button class="wb-move" data-open="${html(d.id)}"><span class="wb-move-icon" aria-hidden="true">${d.status==='approval'?'✓':'↗'}</span><span><b>${html(d.next)}</b><small>${html(d.company)}</small></span></button>`).join('') || '<p class="wb-empty">You’re all caught up.<br>We’ll keep an eye on the inbox.</p>'}</div></section></div>
-      <div class="wb-bottom-grid"><section class="wb-panel"><div class="wb-panel-head"><h2>Pipeline at a glance</h2><span class="muted small">Current inquiries</span></div><div class="wb-summary">${stages.map(([label,statuses])=>{const count=all.filter(d=>statuses.includes(d.status)).length;return `<div class="wb-summary-row"><span>${label}</span><b>${count}</b></div><div class="wb-track"><span style="width:${all.length?count/all.length*100:0}%"></span></div>`;}).join('')}</div></section>
-      <section class="wb-panel"><div class="wb-panel-head"><h2>Recent activity</h2><span class="muted small">Latest updates</span></div><div class="wb-summary">${activity.map(a=>`<div class="wb-summary-row"><span>${html(a.text)}<span class="wb-source">${html(a.company)}</span></span><span class="muted">${time(a.at)}</span></div>`).join('') || '<p class="wb-empty">New activity will appear here.</p>'}</div></section></div>`;
+    const ag=agentStatus(all), s=actual();
+    $('wbBody').innerHTML=`${attention(all)}<div class="wb-columns"><section class="wb-panel"><div class="wb-panel-head"><h2>Group inquiries <span class="muted small">${all.length}</span></h2><span class="muted small">Sorted by whose turn it is</span></div>
+      <div class="wb-toolbar"><div class="wb-filters" aria-label="Filter inquiries">${FILTERS.map(([key,label])=>{const c=key==='all'?all.length:all.filter(d=>d.turn===key||key==='you'&&d.turn==='bad').length;return `<button data-filter="${key}" aria-pressed="${filter===key}">${label}<span class="wb-count">${c}</span></button>`;}).join('')}</div><label class="wb-search"><span class="small muted" hidden>Search inquiries</span><input id="wbSearch" type="search" aria-label="Search inquiries" placeholder="⌕  Search inquiries" value="${html(search)}"></label></div><div id="wbTable">${table(all)}</div></section>
+      <section class="wb-panel"><div class="wb-panel-head"><h2>Your next moves</h2></div><div class="wb-moves"></div></section></div>
+      <div class="wb-bottom-grid"><section class="wb-panel"><div class="wb-panel-head"><h2>Seller agent</h2><span class="wb-agent ${ag.cls}"><span class="wb-pulse"></span>${html(ag.cls==='working'?'Working…':ag.cls==='waiting'?'Waiting on you':'Watching the inbox')}</span></div><div class="wb-feed">${agentFeed(6)}</div></section>
+      <section class="wb-panel wb-awx"><div class="wb-panel-head"><h2><span class="wb-awx-badge">Airwallex</span> Payments</h2><button class="wb-link" data-wb-view="payments">All payments →</button></div>${awxTotals(all)}<div class="wb-feed">${awxEvents(5)}</div></section></div>`;
     // Update only the table while typing so keyboard focus and selection stay intact.
     if(window.Vendors)document.querySelector('.wb-moves').innerHTML=window.Vendors.nextMoves(all);
     $('wbSearch').oninput=e=>{search=e.target.value; $('wbTable').innerHTML=table(rows());};
   }
   function renderPayments(all) {
-    const src = actual()?.provider==='airwallex' ? 'Airwallex sandbox' : 'Harbour simulated provider';
-    $('wbBody').innerHTML=`<section class="wb-panel"><div class="wb-panel-head"><div><h2>Group deposits</h2><p class="wb-sub">Deposits are collected by the platform for Harbour House's Airwallex connected account; its share is paid out by funds split.</p></div></div><div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group</th><th>Deposit received (net)</th><th>Paid to hotel (net)</th><th>Platform fee</th><th>Source</th><th>Status</th></tr></thead><tbody>${all.map(d=>{const po=d.payout, paidOut=po && po.status!=='not_due';return `<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}</button></td><td>${money(d.paid)}</td><td>${paidOut?money(po.hotel_net):'—'}</td><td>${paidOut?money(po.platform_fee):'—'}</td><td>${src}</td><td>${d.paid>0?(paidOut?({paid:'Paid to hotel',failed:'Payout refused',unknown:'Payout unknown',no_account:'No hotel account',pending:'Payout pending'})[po.status]||'Received':'Received'): 'Not received'}</td></tr>`}).join('') || '<tr><td colspan="6" class="wb-empty">No group deposits yet.</td></tr>'}</tbody></table></div></section>`;
+    const src = actual()?.provider==='airwallex' ? 'Airwallex sandbox' : 'Simulated Airwallex';
+    $('wbBody').innerHTML=`<section class="wb-panel wb-awx"><div class="wb-panel-head"><div><h2><span class="wb-awx-badge">Airwallex</span> Group deposits</h2><p class="wb-sub">The platform collects each deposit for Harbour House's Airwallex connected account, then pays the hotel its share by funds split. Refunds take the hotel's share back the same way.</p></div></div>${awxTotals(all)}<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group</th><th>Deposit received (net)</th><th>Paid to hotel (net)</th><th>Platform fee</th><th>Source</th><th>Status</th></tr></thead><tbody>${all.map(d=>{const po=d.payout, paidOut=po && po.status!=='not_due';return `<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}</button></td><td>${exact(d.paid)}</td><td>${paidOut?exact(po.hotel_net):'—'}</td><td>${paidOut?exact(po.platform_fee):'—'}</td><td>${src}</td><td>${d.paid>0?(paidOut?({paid:'Paid to hotel',failed:'Payout refused',unknown:'Payout unknown',no_account:'No hotel account',pending:'Payout pending'})[po.status]||'Received':'Received'): 'Not received'}</td></tr>`}).join('') || '<tr><td colspan="6" class="wb-empty">No group deposits yet.</td></tr>'}</tbody></table></div></section>
+      <section class="wb-panel" style="margin-top:22px"><div class="wb-panel-head"><h2>Airwallex activity</h2><span class="muted small">Every payment, refund, payout and notification</span></div><div class="wb-feed">${awxEvents(50)}</div></section>`;
   }
   function navigate(next) {
     view=next; location.hash=''; $('workbench').hidden=false;
     $('wbBreadcrumb').textContent=next==='overview'?'Overview':'Payments';
-    $('wbTitle').textContent=next==='overview'?'A little more room to grow.':'Every deposit, accounted for.';
+    if(next==='payments'){$('wbTitle').textContent='Every deposit, accounted for.';$('wbTitle').classList.remove('attention');$('wbLede').textContent='Payments, refunds and hotel payouts through Airwallex.';}
     document.querySelectorAll('[data-wb-view]').forEach(b=>{if(b.dataset.wbView===next)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
     refresh();
   }
@@ -199,6 +256,7 @@
     dialog.addEventListener('close',()=>{if(trigger?.isConnected)trigger.focus();else $('wbSimulate').focus();});
   }
   $('wbSimulate').onclick=simulator;
+  $('wbAgent').onclick=()=>{if(view!=='overview'||location.hash)navigate('overview');setTimeout(()=>document.querySelector('.wb-bottom-grid')?.scrollIntoView({behavior:'smooth',block:'start'}),50);};
   $('wbAvailability').onclick=()=>{location.hash='availability';}; $('wbRules').onclick=()=>{location.hash='rules';};
   // Preserve focus while Harbour polls, including keyboard search and draft entry.
   window.OpenFlow={refresh:()=>{if(document.activeElement?.closest('#workbench'))return;refresh();}};

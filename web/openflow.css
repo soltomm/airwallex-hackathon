@@ -1,5 +1,5 @@
 /* OpenFlow workbench shell. Existing Harbour detail controls retain their contracts. */
-:root, :root:not([data-theme="light"]) { color-scheme: light; --bg:#f5f6f8; --panel:#fff; --sunk:#f7f9f8; --fg:#18232e; --muted:#71807f; --line:#e1e6e6; --accent:#1f6650; --accent-soft:#e9f3ed; --ok:#246649; --ok-soft:#edf6f0; --warn:#8a5a00; --warn-soft:#fff5df; --bad:#b04444; --bad-soft:#fff1f0; --buyer:#536f7b; --buyer-soft:#eff4f6; --on-accent:#fff; }
+:root, :root:not([data-theme="light"]) { color-scheme: light; --awx:#4b44d6; --awx-soft:#eeedfc; --agent:#1d6f80; --agent-soft:#e6f3f5; --bg:#f5f6f8; --panel:#fff; --sunk:#f7f9f8; --fg:#18232e; --muted:#71807f; --line:#e1e6e6; --accent:#1f6650; --accent-soft:#e9f3ed; --ok:#246649; --ok-soft:#edf6f0; --warn:#8a5a00; --warn-soft:#fff5df; --bad:#b04444; --bad-soft:#fff1f0; --buyer:#536f7b; --buyer-soft:#eff4f6; --on-accent:#fff; }
 body { font:13px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 button,a,input,select,textarea { outline-offset:3px; }
 button:focus-visible,a:focus-visible { outline:2px solid #347a64; }
@@ -65,7 +65,7 @@ a { color:var(--accent); }
 .wb-move-icon { flex:none; width:28px; height:28px; background:#f4f0e7; border-radius:7px; display:grid; place-items:center; color:#8b7855; }
 .wb-move b { font-size:11px; font-weight:550; display:block; }
 .wb-move small { font-size:10px; color:var(--muted); display:block; margin-top:4px; }
-.wb-bottom-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:22px; }
+.wb-bottom-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:22px; align-items:start; }
 .wb-summary { padding:0 20px 20px; }
 .wb-summary-row { display:flex; justify-content:space-between; gap:10px; font-size:11px; padding:10px 0; border-bottom:1px solid #edf0ec; }
 .wb-summary-row:last-child { border-bottom:0; }
@@ -104,7 +104,8 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 .wb-missing legend { font-size:11px; margin-bottom:8px; padding:0; }
 #liveDrawer .layout { display:block; padding:24px; }
 #liveDrawer aside { display:none; }
-#liveDrawer .tabs { flex-wrap:wrap; overflow:visible; }
+#liveDrawer .tabs { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; }
+#liveDrawer .tabs button { flex:none; }
 #avail,#rules { margin-left:224px; max-width:none; padding:32px 36px; }
 @media(min-width:1600px) { .wb-content { padding-top:42px; } }
 @media(max-width:1150px) { .wb-columns { grid-template-columns:1fr; } .wb-moves { display:grid; grid-template-columns:1fr 1fr; gap:0 20px; } .wb-kpi { padding:15px; } }
@@ -163,3 +164,64 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 #vendorPage td.r { white-space:nowrap; }
 #vendorPage .wb-heading > div { min-width:0; }
 #vendorPage h1 { overflow-wrap:anywhere; }
+
+/* Whose turn it is: one vocabulary for the table, the drawer header, the filters and the next moves.
+   Amber always means "needs you"; indigo is Airwallex; teal is the seller agent. */
+.wb-heading h1.attention { color:var(--warn); }
+.wb-kpi.attention { background:var(--warn-soft); border-color:#f0d9a8; }
+.wb-kpi.attention dt { color:var(--warn); font-weight:600; }
+.wb-kpi.attention dd { color:var(--warn); }
+.wb-kpi.attention p { color:#7a6236; }
+.wb-attention { background:var(--warn-soft); border:1px solid #efd29a; border-left:4px solid var(--warn); border-radius:11px; padding:14px 18px 6px; margin-bottom:22px; }
+.wb-attention-head { font-size:10px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; color:var(--warn); margin-bottom:4px; }
+.wb-attention-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px 0; border-top:1px solid #f1dfb8; font-size:13px; }
+.wb-attention-row:first-of-type { border-top:0; }
+.wb-attention-why { font-size:12px; color:#6c5a37; margin-top:3px; }
+.wb-attention-why b { color:var(--warn); }
+.wb-review { background:var(--warn); border-color:var(--warn); flex:none; }
+.wb-turn { display:inline-block; font-size:10px; font-weight:600; padding:3px 8px; border-radius:99px; background:#f0f3f3; color:#5f716f; white-space:nowrap; }
+.wb-turn.you,.wb-turn.bad { background:var(--warn-soft); color:var(--warn); box-shadow:inset 0 0 0 1px #ecd2a0; }
+.wb-turn.bad { background:var(--bad-soft); color:var(--bad); box-shadow:inset 0 0 0 1px #f0c9c6; }
+.wb-turn.buyer { background:var(--buyer-soft); color:var(--buyer); }
+.wb-turn.wait { background:var(--agent-soft); color:var(--agent); }
+.wb-turn.done { background:var(--ok-soft); color:var(--ok); }
+.wb-turn.closed { background:#f2f3f2; color:#8c958f; }
+.wb-table tbody tr.needs-you td { background:#fffaf0; }
+.wb-table tbody tr.needs-you td:first-child { box-shadow:inset 3px 0 0 var(--warn); }
+.wb-filters .wb-count { margin-left:5px; color:#9aa5a0; font-variant-numeric:tabular-nums; }
+.wb-filters button[data-filter="you"] .wb-count { color:var(--warn); font-weight:700; }
+.wb-tag { color:#5f716f; background:#f0f3f3; border-radius:4px; padding:1px 5px; }
+.wb-move.you b { color:var(--warn); }
+.wb-move.you .wb-move-icon { background:var(--warn); color:#fff; font-weight:700; }
+.wb-move.buyer .wb-move-icon { background:var(--buyer-soft); color:var(--buyer); }
+
+/* Seller agent status: top bar pill and the activity panel. */
+.wb-agent { display:inline-flex; align-items:center; gap:8px; border:0; border-radius:99px; padding:6px 12px; font-size:11.5px; font-weight:600; background:var(--agent-soft); color:var(--agent); white-space:nowrap; }
+.wb-agent.waiting { background:var(--warn-soft); color:var(--warn); }
+.wb-pulse { width:8px; height:8px; border-radius:50%; background:currentColor; animation:wbRing 1.8s infinite; flex:none; }
+.wb-agent.working .wb-pulse { animation-duration:.8s; }
+@keyframes wbRing { 0% { box-shadow:0 0 0 0 color-mix(in srgb, currentColor 45%, transparent); } 100% { box-shadow:0 0 0 7px transparent; } }
+@media (prefers-reduced-motion: reduce) { .wb-pulse { animation:none; } }
+.wb-feed { padding:0 20px 12px; }
+.wb-feed-row { display:grid; grid-template-columns:26px minmax(0,1fr) auto; gap:10px; padding:11px 0; border-top:1px solid #edf0ec; font-size:12px; align-items:start; }
+.wb-feed-row:first-child { border-top:0; }
+.wb-feed-ico { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; font-size:12px; }
+.wb-feed-ico.agent { background:var(--agent-soft); color:var(--agent); }
+.wb-feed-ico.awx { background:var(--awx-soft); color:var(--awx); }
+.wb-feed-row b { font-weight:600; }
+.wb-feed-deal { color:#89968e; margin-left:6px; font-size:11px; }
+.wb-feed-detail { color:#6a7873; margin-top:2px; overflow-wrap:anywhere; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; }
+.wb-feed-detail code { font-size:10.5px; background:#f3f5f4; border-radius:4px; padding:1px 5px; color:#5d6b66; overflow-wrap:anywhere; }
+.wb-feed-at { color:#8c978f; font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.wb-amount { font-variant-numeric:tabular-nums; font-weight:600; }
+.wb-status-code { font:600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing:.3px; padding:2px 6px; border-radius:4px; background:var(--awx-soft); color:var(--awx); }
+.wb-status-code.ok { background:var(--ok-soft); color:var(--ok); }
+
+/* Airwallex panels */
+.wb-awx-badge { display:inline-block; font-size:9px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:var(--awx); background:var(--awx-soft); border-radius:4px; padding:3px 6px; margin-right:6px; vertical-align:2px; }
+.wb-awx-totals { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; padding:0 20px 14px; }
+.wb-awx-totals div { background:#f7f8fb; border:1px solid #ecebf7; border-radius:8px; padding:9px 11px; min-width:0; }
+.wb-awx-totals span { display:block; font-size:10px; color:#76807d; }
+.wb-awx-totals b { font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; }
+.wb-link { border:0; background:none; color:var(--accent); font-size:11px; padding:0; }
+@media(max-width:760px) { .wb-awx-totals { grid-template-columns:1fr 1fr; } .wb-top > div:first-child,.wb-top .wb-demo-badge,.wb-top .wb-avatar { display:none; } .wb-top { justify-content:flex-start; } .wb-top .wb-agent { max-width:100%; overflow:hidden; text-overflow:ellipsis; } .wb-attention-row { flex-wrap:wrap; } }

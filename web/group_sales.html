@@ -62,9 +62,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .steps { display: flex; gap: 4px; margin: 12px 0 2px; flex-wrap: wrap; }
 .steps span { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--sunk); color: var(--muted); }
 .steps span.done { background: var(--ok-soft); color: var(--ok); } .steps span.now { background: var(--accent); color: var(--on-accent); }
+.steps span.now.you { background: var(--warn); }
 
 .next { border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--line); background: var(--panel); }
-.next.you { border-color: var(--warn); background: var(--warn-soft); } .next.buyer { border-color: var(--buyer); background: var(--buyer-soft); }
+.next.you { border: 2px solid var(--warn); background: var(--warn-soft); box-shadow: 0 6px 24px color-mix(in srgb, var(--warn) 18%, transparent); } .next.buyer { border-color: var(--buyer); background: var(--buyer-soft); }
 .next.wait { background: var(--sunk); } .next.done { border-color: var(--ok); background: var(--ok-soft); } .next.bad { border-color: var(--bad); background: var(--bad-soft); }
 .next .who { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700; margin-bottom: 4px; }
 .next.you .who { color: var(--warn); } .next.buyer .who { color: var(--buyer); } .next.done .who { color: var(--ok); } .next.bad .who { color: var(--bad); }
@@ -205,9 +206,9 @@ dl.outcomes { margin-top: 8px; }
       <div class="row"><button id="resetYes">Yes, reset</button><button id="resetNo">Cancel</button></div></div>
   </details>
 </aside>
-<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
+<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><button class="wb-agent" id="wbAgent" aria-live="polite"><span class="wb-pulse"></span>Seller agent</button><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
 <main class="wb-content" id="workbench">
-  <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ New inquiry</button></div>
+  <div class="wb-heading"><div><h1 id="wbTitle">Group sales</h1><p id="wbLede">Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ New inquiry</button></div>
   <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
   <div id="wbBody"><p class="wb-empty" role="status">Loading Harbour House inquiries…</p></div>
   <p class="wb-note" id="wbConnection" role="status">Connecting to Harbour House…</p>
@@ -255,6 +256,11 @@ const STATUS = {
   refund_pending: ['Refund pending', 'acc'], refund_failed: ['Refund failed', 'bad'], expired: ['Lapsed', 'bad'], handoff: ['With staff', 'bad'], dates_proposed: ['Dates offered', 'buyer'],
   declined: ['Declined', ''], lost: ['Closed', ''], payment_received_booking_exception: ['Booking exception', 'bad']};
 const chip = st => { const [l, c] = STATUS[st] || [st, '']; return `<span class="chip ${c}">${esc(l)}</span>`; };
+// What a hotel-manager decision is about, in a few words ("Approve offer v2", "Approve £528 refund").
+const apTitle = a => ({offer: `Approve offer v${a.version}`, acceptance: `Approve acceptance of v${a.version}`, refund: `Approve ${gbp(a.amount)} refund`,
+  reduction: a.amount ? `Approve ${gbp(a.amount)} waiver` : `Approve change v${a.version}`})[a.subject] || 'Approve request';
+const TURN = {you: 'warn', buyer: 'buyer', done: 'ok', bad: 'bad', wait: 'acc'};
+const turnChip = n => `<span class="chip ${TURN[n.cls] || ''}">${esc(n.short)}</span>`;
 const curVersion = d => d.versions.length ? d.versions[d.versions.length - 1] : null;
 const pendingFor = d => S.approvals.filter(a => a.deal_id === d.id && a.status === 'pending');
 const ROLE = {hotel_manager: 'Hotel manager'};
@@ -315,7 +321,7 @@ const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
 function nextOf(d) {
   const ap = pendingFor(d)[0], st = d.status, busy = S.runner.busy, v = curVersion(d), co = esc(d.company);
   if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
-  if (ap) return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
+  if (ap) return {cls: 'you', short: apTitle(ap), who: 'Needs your decision · Hotel manager', ap};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
     return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
       staff: st === 'handoff' && !d.booking, handoff: d.handoff};
@@ -404,8 +410,10 @@ function stepsOf(d) {
     s.push(['Change', am.some(v => v.status === 'accepted')]);
     if (am.some(v => v.reduction && v.reduction.refund_due > 0)) s.push(['Refund', f.refunded > 0 && !f.refund_owed]);
   }
+  // A decision waiting for the hotel manager is the current step, shown in the "needs you" colour.
+  if (pendingFor(d).length) { const i = s.findIndex(x => !x[1]); s.splice(i < 0 ? s.length : i, 0, ['Your approval', false, 'you']); }
   const now = ['handoff', 'lost', 'declined'].includes(d.status) ? -1 : s.findIndex(x => !x[1]);
-  return '<div class="steps">' + s.map(([l, ok], i) => `<span class="${ok ? 'done' : i === now ? 'now' : ''}">${ok ? '✓ ' : ''}${l}</span>`).join('') + '</div>';
+  return '<div class="steps">' + s.map(([l, ok, c], i) => `<span class="${ok ? 'done' : i === now ? 'now ' + (c || '') : ''}">${ok ? '✓ ' : ''}${l}</span>`).join('') + '</div>';
 }
 function offerCard(d) {
   const v = curVersion(d);
@@ -445,7 +453,7 @@ function payoutCard(d) {
     <p class="small muted" style="margin:10px 0 0">The platform collects the card payment for the hotel's connected account ${p.connected_account ? `<code>${esc(p.connected_account)}</code>` : '(none set)'}; a funds split pays the hotel its share, and a funds split reversal takes back its share of any refund.</p>
     ${warn ? `<div class="row" style="margin-top:10px"><button class="btn-p" data-act="retryPayout">Retry payout</button></div>` : ''}</div>`;
 }
-const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
+const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off']];
 function tabBody(d) {
   if (tab === 'conv') {
     // Newest first. The latest two messages are shown in full; earlier ones are folded away.
@@ -488,7 +496,7 @@ function renderDeal(d) {
   const r = d.requirements || {};
   const sub = [r.rooms && `${r.rooms} ${r.room_type || ''} rooms`, r.guests && `${r.guests} guests`, r.arrival && r.departure && `${day(r.arrival)}–${day(r.departure)}`,
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
-  $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
+  $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${turnChip(nextOf(d))}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}</div>
     ${nextCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
@@ -786,6 +794,7 @@ window.Harbour = {
   state: () => S,
   open: id => { sel = id; form = null; convOpen = false; render(); $('desk').hidden = false; $('liveDrawer').showModal(); },
   next: d => nextOf(d),
+  tool: t => TOOL[t] || String(t).replaceAll('_', ' '), isRead: t => AG_READS.has(t), tidy: t => tidy(String(t || '')), when: iso => when(iso),
   reload: load,
   // A new inquiry for the seller agent: the same intake as an email to Harbour House.
   // Resolves to {deal_id, duplicate, ref}: an email already received (same sender and text) opens its existing deal.
