@@ -2270,6 +2270,51 @@ class Engine:
                                                       "commission_returned", "provider_id", "created_at", "error")}
                                for o in pays + revs]}
 
+    # ================================================================ money trail
+    TRAIL_KINDS = {
+        "deposit": ("Deposit from the buyer", "Payment intent", 1),
+        "payout": ("Hotel's share paid out", "Funds split", 0),
+        "refund": ("Refund to the buyer", "Refund", -1),
+        "payout_reversal": ("Hotel's share of the refund taken back", "Funds split reversal", 0),
+    }
+
+    def money_trail(self, d) -> dict:
+        """Every provider object behind this deal's money, in order, with the provider's id and status, the
+        notifications that arrived for them, and whether the money reconciles: what the buyer paid net of refunds
+        equals the hotel's net share plus the platform fee. For the hotel dashboard only; it reads, never moves."""
+        # Scenario time can stand still across several calls, so ties keep the order the operations were created in.
+        ops = [o for _, o in sorted(((i, o) for i, o in enumerate(self.s["operations"].values())
+                                     if o["deal_id"] == d["id"] and o["kind"] in self.TRAIL_KINDS
+                                     and o["status"] != "superseded"),
+                                    key=lambda x: (x[1].get("created_at") or "", x[0]))]
+        rows = []
+        for o in ops:
+            label, obj, sign = self.TRAIL_KINDS[o["kind"]]
+            pid = o.get("payment_intent_id") if o["kind"] == "deposit" else o.get("provider_id")
+            if o["kind"] == "deposit":
+                note = ("checked with the provider before the booking was confirmed" if o["status"] == "succeeded"
+                        else "waiting for the buyer to pay")
+            elif o["kind"] == "refund":
+                note = ("checked with the provider; recorded once" if o["status"] == "completed"
+                        else "created; waiting for the provider to accept it")
+            elif o["kind"] == "payout":
+                dest = o.get("destination")
+                note = (f"to the hotel's connected account{' ' + dest if dest else ''}; "
+                        f"{gbp(o.get('commission', 0))} kept as the platform fee")
+            else:
+                note = f"{gbp(o.get('commission_returned', 0))} of the platform fee returned with it"
+            rows.append({"at": o.get("created_at"), "kind": o["kind"], "label": label, "object": obj, "id": pid,
+                         "provider_status": o.get("provider_status"), "status": o["status"], "amount": o["amount"],
+                         "sign": sign, "note": note, "error": o.get("error") or None})
+        fin, pv = self.finance(d), self.payout_view(d)
+        payouts = pv["status"] not in ("not_due", "no_account")
+        totals = {"buyer_paid": fin["received"], "refunded": fin["refunded"], "net_received": fin["net_received"],
+                  "hotel_net": pv["hotel_net"] if payouts else None, "platform_fee": pv["platform_fee"] if payouts else None,
+                  "reconciles": (pv["hotel_net"] + pv["platform_fee"] == fin["net_received"]) if payouts else None}
+        events = [{k: x.get(k) for k in ("at", "event", "name", "result", "object_id")}
+                  for x in self.s["reconcile_log"] if x.get("deal_id") == d["id"]]
+        return {"provider": self.provider.name, "rows": rows, "totals": totals, "events": events[-20:]}
+
     # ================================================================ webhooks
     def handle_event(self, event: dict, verified: bool) -> dict:
         """A provider notification (already signature-verified by the server). Used only as a trigger."""
@@ -2278,7 +2323,10 @@ class Engine:
                 raise Refused("unverified event")
             eid = str(event.get("id"))
             if eid in self.s["events_seen"]:
-                self.s["reconcile_log"].append({"at": self.now(), "event": eid, "result": "duplicate ignored"})
+                first = next((x for x in reversed(self.s["reconcile_log"]) if x.get("event") == eid and x.get("deal_id")), {})
+                self.s["reconcile_log"].append({"at": self.now(), "event": eid, "name": first.get("name", ""),
+                                                "result": "duplicate ignored",
+                                                **{k: first[k] for k in ("deal_id", "object_id", "operation") if k in first}})
                 self._save()
                 return {"event": eid, "result": "duplicate ignored"}
             self.s["events_seen"].append(eid)
@@ -2287,6 +2335,7 @@ class Engine:
             name = event.get("name", "")
             run = meta.get("run_id")
             result = "ignored"
+            op = None
             if run and run != self.s["run_id"]:
                 result = f"belongs to earlier run {run}: kept for reconciliation, not applied to current hotel state"
             elif name.startswith("payment_intent."):
@@ -2301,7 +2350,10 @@ class Engine:
                     self._apply_refund_status(op, self.provider.get_refund(op["provider_id"]))
                     result = f"re-read refund: {op.get('provider_status')}" + (" (already reconciled; ledger unchanged)"
                                                                                if before == "completed" else "")
-            self.s["reconcile_log"].append({"at": self.now(), "event": eid, "name": name, "result": result})
+            entry = {"at": self.now(), "event": eid, "name": name, "result": result}
+            if op:
+                entry.update(deal_id=op["deal_id"], object_id=obj.get("id"), operation=op["id"])
+            self.s["reconcile_log"].append(entry)
             self.log(None, "system", "webhook", f"Provider event {name} {eid}: {result}")
             self._save()
         if result != "ignored" and "earlier run" not in result:
@@ -2534,6 +2586,7 @@ class Engine:
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
                 x["payout_view"] = self.payout_view(d)
+                x["money_trail"] = self.money_trail(d)
                 x["ops"] = self.ops_instructions(d)
                 x["hold"] = self._hold_public(d)
                 x["pay_url"] = self.pay_url(d) if self._deposit_op(d) else None

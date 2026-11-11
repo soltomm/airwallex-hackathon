@@ -101,7 +101,7 @@ table.t th, table.t td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--
 .neg .ask { margin: 2px 0 10px; } .neg .ask q { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; quotes: none; }
 .neg table.t tr.chosen td { background: var(--accent-soft); font-weight: 600; } .neg table.t tr.chosen td:first-child { box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
 .neg .why { margin: 10px 0 0; font-size: 13px; } .neg .reason { font-weight: 400; color: var(--muted); font-size: 12px; }
-.neg .scroll { overflow-x: auto; }
+.neg .scroll, .trail .scroll { overflow-x: auto; } .trail .reason { color: var(--muted); font-size: 12px; } .trail td code { word-break: break-all; }
 @media (max-width: 560px) { .neg table.t .tot, .neg table.t .rel { display: none; } .neg table.t td:first-child { min-width: 120px; } }
 details { border-bottom: 1px solid var(--line); padding: 8px 0; } summary { cursor: pointer; }
 .next details { border: 0; padding: 0; }
@@ -463,6 +463,30 @@ function negotiationCard(d) {
     ${negRound(d, last)}
     ${older.length ? `<details><summary class="small">Earlier rounds (${older.length})</summary>${older.map(r => `<div style="margin-top:10px">${negRound(d, r)}</div>`).join('')}</details>` : ''}</div>`;
 }
+// Every provider object behind the deal's money, in order, and whether it reconciles. Hotel only.
+function trailCard(d) {
+  const m = d.money_trail;
+  if (!m || !m.rows.length) return '';
+  const live = m.provider === 'airwallex';
+  const st = r => {
+    const s = (r.provider_status || r.status || '').replaceAll('_', ' ');
+    const cls = ['failed', 'unknown'].includes(r.status) ? 'bad' : ['submitting', 'created', 'pending'].includes(r.status) ? 'warn' : 'ok';
+    return `<span class="chip ${cls}">${esc(s)}</span>`;
+  };
+  const amt = r => `${r.sign > 0 ? '+' : r.sign < 0 ? '−' : ''}${gbp(r.amount)}`;
+  const rows = m.rows.map(r => `<tr><td>${when(r.at)}</td><td><b>${esc(r.label)}</b><div class="reason">${esc(r.note)}${r.error ? ' · ' + esc(r.error) : ''}</div></td>
+    <td>${esc(r.object)}<div><code class="small">${esc(r.id || 'not created yet')}</code></div></td><td>${st(r)}</td><td class="r">${amt(r)}</td></tr>`).join('');
+  const t = m.totals;
+  const sum = t.reconciles == null
+    ? `Buyer paid ${gbp(t.buyer_paid)}${t.refunded ? ` − refunded ${gbp(t.refunded)} = <b>${gbp(t.net_received)} net</b>` : ''}`
+    : `Buyer paid ${gbp(t.buyer_paid)}${t.refunded ? ` − refunded ${gbp(t.refunded)}` : ''} = <b>${gbp(t.net_received)}</b> = hotel ${gbp(t.hotel_net)} + platform fee ${gbp(t.platform_fee)}
+       <span class="chip ${t.reconciles ? 'ok' : 'warn'}">${t.reconciles ? '✓ reconciles' : 'settling'}</span>`;
+  const ev = m.events.length ? `<details><summary class="small">Notifications from ${live ? 'Airwallex' : 'the provider'} (${m.events.length})</summary>${m.events.map(x =>
+    `<div class="small" style="margin-top:6px">${when(x.at)} · <code>${esc(x.name || x.event)}</code> · ${esc(x.result)}</div>`).join('')}</details>` : '';
+  return `<div class="card trail"><div class="label"><span>Money trail · ${live ? 'Airwallex sandbox' : 'simulated Airwallex'}</span><span class="chip">${m.rows.length} movement${m.rows.length === 1 ? '' : 's'}</span></div>
+    <div class="scroll"><table class="t"><tr><th>When</th><th>Movement</th><th>Airwallex object</th><th>Status</th><th class="r">Amount</th></tr>${rows}</table></div>
+    <p class="small" style="margin:10px 0 0">${sum}</p>${ev}</div>`;
+}
 function payoutCard(d) {
   const p = d.payout_view;
   if (!p || p.status === 'not_due') return '';
@@ -522,7 +546,7 @@ function renderDeal(d) {
     d.reply_by && !d.booking && `reply by ${when(d.reply_by)}`].filter(Boolean).join(' · ');
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}</div>
-    ${nextCard(d)}${negotiationCard(d)}${offerCard(d)}
+    ${nextCard(d)}${negotiationCard(d)}${trailCard(d)}${offerCard(d)}
     <div class="card"><div class="tabs">${TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.FX) window.FX.mount(d);
