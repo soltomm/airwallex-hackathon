@@ -1,5 +1,8 @@
 # Harbour House group sales agent
 
+Internal pricing decisions and the revenue-manager demo are documented in
+[Revenue pricing review](docs/REVENUE_REVIEW.md).
+
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are
@@ -10,11 +13,11 @@ booking, deposit, amendment and refund. It works against simulated hotel systems
 sandbox payments. This is the build for product spec v2 (Airwallex hackathon).
 
 ```
-data/groupsales/scenario.json        hotel, PMS/RMS/CRM/policy data, the two RFPs, buyer mandates
+data/groupsales/scenario.json        hotel, PMS/RMS/CRM/policy data, the two RFPs, buyer briefs
 src/agentbank/groupsales/
   calc.py       pricing, deposits, attrition allowance, contribution margin, reductions, schedules
   bookable.py   expands the scenario's bookable window (defaults + per-night overrides) into a calendar
-  policy.py     hotel authority (seller vs manager vs hard limits) and buyer mandate checks
+  policy.py     hotel authority (seller vs manager vs hard limits)
   engine.py     shared hotel state + every enforced operation (intake, holds, versions, approvals,
                 payments, amendments, refunds, webhooks, reset); saved to var/groupsales (or Postgres)
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
@@ -58,9 +61,9 @@ through the seller's `check_payment`/`check_refund`, and when a hold expires.
 The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
 hotel manager. There is no button to run it. The buyer answers by email, in its own **mailbox** page
-outside the dashboard (`/inbox/<ref>`): open it from the deal's card or from **Demo controls → Buyer
-mailboxes**. Replies, acceptances, the buyer's organizer sign-off and the payment link are all there.
+outside the dashboard (`/inbox/<ref>`): open it from the deal's card. Replies, acceptances and the payment link are all there.
 
+Inquiries are rows in the overview table; clicking one opens its deal page in a side drawer.
 Each deal page has a coloured **next step** card:
 - amber: your decision, as hotel manager
 - purple: waiting for the buyer, with a link to the buyer's mailbox
@@ -71,41 +74,42 @@ The card also shows the seller's last action. The **AI Agent** tab shows each se
 actions it took, one line each; click an action for its inputs, result and what it caused (a refused
 action is marked in red). The **Activity** tab lists what each agent and person did, newest first. The
 **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
-Presenter tools (clock, edge cases, reset, paste an RFP, seller and buyer modes) are under **Demo
-controls**. Under the inquiries list, **Availability** opens rooms, the Thames Room and breakfast by
-night, and **Seller rules** opens the rules the seller works within (see below).
+The sidebar's property tools (on a phone, expand **Property tools** first) hold **Room availability**
+(rooms, the Thames Room and breakfast by night), **Seller rules** (the rules the seller works within, see
+below), **Hotel payout account** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
+hand-written RFP and sets who answers for the buyer.
 
-1. **Demo controls → Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
+1. **↻ Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
    seller moved to Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
 2. Open **Maya's mailbox ↗** from Northstar's card and click **Send answers**. The seller quotes v1:
    **£9,600**, 30% deposit, 10% attrition. It arrives in the mailbox with the offer attached.
 3. In the mailbox, **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a
    **40% deposit (£3,840)** in return. On the dashboard, click **Approve** as the hotel manager.
-4. In the mailbox, **Accept v2.** The deposit is over Northstar's own limits, so its organizer signs off:
-   **Approve as organizer**, still in the mailbox. The dashboard only shows that the buyer is signing off.
+4. In the mailbox, **Accept v2.**
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
    When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
    shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
-6. **Jump to 20 Jan**, from Northstar's card or Demo controls. Summit's quote lapses. In the mailbox,
+6. **Jump to 20 Jan (demo)**, on Northstar's card. Summit's quote lapses. In the mailbox,
    **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
-8. **Demo controls → Deliver held notifications.** The late notice is ignored as a duplicate. Final
-   state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
-   back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**.
+8. Final state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
+   back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
+   back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
+   button) changes nothing, and `scripts/e2e_demo.js` checks that.
 
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
 
-Other things to show: **Paste a new RFP…** with dates the hotel can't sell (for example 11–14 May).
+Other things to show: **＋ New inquiry → Write your own** with dates the hotel can't sell (for example 11–14 May).
 The seller doesn't hand it off: it replies that those dates aren't available and offers dates that
 are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 March 2027** (or type a
 reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
-back to seller**, with an optional instruction the seller follows, or **Close inquiry**. **Fail the next booking commit** before paying (payment received – booking
-exception). **Reject** on the refund (the reduction stands and £528 stays owed). **Buyer replies →
-Buyer agent** in Demo controls, to let the buyer side answer on its own.
+back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
+payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed). **＋ New inquiry → Buyer replies →
+Automatically (buyer agent)**, to let the buyer side answer on its own.
 
 ### Seller rules
 
@@ -182,11 +186,15 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   `rms.displacement.demand_by_night_pct` states its demand: a busy week (the nights before it are
   sold out). Rooms released before the cutoff are counted 50% resold. On the demo dates (80% / 80% / 64%)
   the floor bites: £205 passes with 10% attrition but not 20%, and £200 or less is refused; on a
-  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide.
+  quiet January weekend the whole manager band down to £195 passes. Only the named approver can decide. Every approval names each rule it
+  crosses (what the seller, or the buyer, could agree alone and what is asked) and what approving and
+  rejecting each do, and the card shows exactly that. The engine refuses a manager request that names no
+  crossed rule, so the manager is only asked when a seller rule is broken. A hand-off to a person is not
+  an approval: it says what stops the seller (`why`) and what a person should do (`todo`).
 - **Versions.** Every offer or amendment is an immutable version with a hash of its terms. Approvals
   and acceptance name the version and hash; drafting a changed version makes earlier approvals stale.
-- **Buyer mandate.** Accepting above the budget or the deposit limits creates an organizer approval
-  bound to that version. Buyer actions need the deal's buyer token.
+- **Buyer actions** need the deal's buyer token. The engine enforces the hotel's rules only: buyer briefs
+  carry no budget or deposit limits, and accepting a sent offer needs no approval from the buyer's side.
 - **Inventory.** available = capacity − held − booked, per night and room type, plus the Thames Room
   and breakfast covers (60 a day). The first sent offer creates a 24-hour hold. Negotiated versions
   reuse that hold and its expiry. A hold becomes a booking only after a verified payment, in one
@@ -202,13 +210,22 @@ These rules are in code; prompts don't enforce them, and nothing in an RFP can c
   authorization covers one exact amount, payment and amendment. Ledger entries have unique keys, and
   refund statuses only move forward (RECEIVED → ACCEPTED → SETTLED), so repeated or out-of-order
   events change nothing.
-- **Reductions.** Within the allowance (counted cumulatively), before the release deadline and
-  before 8 Feb, the deposit is recalculated and the excess refunded. From 8 Feb on, the amendment is
-  recorded and the manager reconciles payments. Going over the allowance or past the deadline goes to
-  manager review, and the existing agreement stays in effect until a change is accepted.
+- **Reductions.** The contract prices every release, so none is escalated for judgement. Room-nights
+  within the allowance (counted cumulatively) and before the release deadline come off the total;
+  any beyond the allowance, or released after the deadline, go back to inventory but stay payable at
+  the contracted rate as an attrition charge, itemised on the change. Before 8 Feb the deposit is
+  recalculated on the new total and the excess refunded; from 8 Feb on, the amendment is recorded and
+  the manager reconciles payments if the total changed. The only concession is a waiver of the
+  attrition charge: it gives away hotel money, so it needs the hotel manager's approval of that exact
+  version and amount, and a declined waiver leaves the change to be offered with the full charge. The
+  existing agreement stays in effect until the buyer accepts a change.
 - **Other dates.** The seller can only offer dates inside the group calendar (11 January to 31 December
   2027), arriving at least 31 days after the scenario clock, with the rooms free at that moment
-  (`offer_dates` refuses anything else), and it can't quote dates that aren't available.
+  (`offer_dates` refuses anything else), and it can't quote dates that aren't available. When the
+  requested dates are open but the full block isn't free on every night, the seller doesn't cut the
+  block on its own: it offers dates where the whole block fits (with the meeting room free on the
+  meeting day), and the smaller block on the buyer's dates as a last option. If the buyer takes the
+  smaller block, the offer says how many guests it sleeps.
 - **Hand-offs.** Only an inquiry handed to staff with no booking can be handed back or closed. A staff
   instruction stays in front of the seller until it next writes to the buyer.
 - **Reset.** A reset creates a new run id and restores the hotel data. Airwallex is not reset.
@@ -262,7 +279,7 @@ approved refund.
 - cumulative attrition (including releasing nine room-nights, releases after the deadline and after
   the first installment);
 - privacy in both directions: the seller's tools and the shared thread never show the buyer's
-  mandate, deposit limits or organizer reasons (only that buyer-side authorization is pending), and
+  private brief, and
   the buyer view never shows floors, costs, margins, hotel checks, records, flags, unsent versions or
   manager approval summaries;
 - authority: stale approvals and wrong approvers, hard limits, a 20-29% deposit needing the manager
@@ -312,7 +329,6 @@ After every step it checks:
 
 - inventory adds up to the holds and bookings on file, and is never oversold;
 - every sent offer is within the hard limits and carries the manager approval it needs;
-- an acceptance beyond a buyer's mandate has the organizer's approval;
 - every booking has a verified payment and a ledger receipt;
 - there is one payment intent per checkout, and refunds never exceed receipts or the capture;
 - refunds above £500 are authorized, and at most one refund is unresolved at a time;
@@ -332,8 +348,6 @@ bugs, now fixed with regression tests:
 
 - a change request for more rooms than were booked crashed the seller, and blocked it for every deal;
 - the rules seller crashed if questions had gone out before the inquiry was read;
-- an organizer approving after the offer had lapsed left the approval marked approved in memory but
-  not on disk, with no acceptance recorded; it is now refused as stale before anything changes.
 
 Last full runs: 1,000 of 1,000 cases passed (500 per seller, 80 steps each, about 8 minutes),
 ending with 772 confirmed bookings, 91 refunds and 82 changes in manager review. Then 5,000 of
@@ -355,8 +369,8 @@ An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_s
 | Preset | Path with the rules seller |
 |---|---|
 | `straight_booking` | quote, accept, deposit paid |
-| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, organizer sign-off, paid |
-| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), organizer sign-off, paid, fewer rooms, partial refund, hotel payout reversed |
+| `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, paid |
+| `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
 | `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
 

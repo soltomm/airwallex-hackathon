@@ -6,6 +6,7 @@ Everything runs against the simulated provider; no network, no API keys.
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
 import pytest
 
@@ -64,9 +65,8 @@ def run_to_confirmed(e):
     appr = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
-    r = buyer_turn(e, "Northstar")           # accept v2 -> organizer needed
-    assert r["accepted"] is False
-    e.decide_approval(r["approval_id"], "approve", "organizer")
+    r = buyer_turn(e, "Northstar")           # accept v2
+    assert r["accepted"] is True
     s.run()
     pay(e, n)
     return s, n
@@ -115,7 +115,8 @@ def test_reduction_deadlines_follow_the_contract_arrival():
     assert r["before_release_deadline"] and r["before_first_installment"] and not r["needs_manager_review"]
     assert r["refund_mode"] == "automatic"
     r = calc.evaluate_reduction(june_terms(), {"2027-06-10": 2}, "2027-05-28", H, POL, RMS, 384000)
-    assert not r["before_release_deadline"] and "after the room-release deadline (2027-05-27)" in r["review_reasons"]
+    assert not r["before_release_deadline"] and "released after the room-release deadline (2027-05-27)" in r["charge_reasons"]
+    assert r["charged_room_nights"] == 2 and not r["needs_manager_review"]
 
 
 def test_summit_offer():
@@ -130,16 +131,161 @@ def test_cumulative_attrition_and_rules():
     t = northstar_terms()
     first = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
     later = calc.evaluate_reduction(first["new_terms"], {"2027-03-10": 2}, "2027-01-25", H, POL, RMS, 331200)
-    assert later["already_released"] == 6 and not later["within_allowance"] and later["needs_manager_review"]
+    assert later["already_released"] == 6 and not later["within_allowance"] and not later["needs_manager_review"]
+    assert (later["free_room_nights"], later["charged_room_nights"]) == (1, 1)    # 1 left of the 7 allowed
     nine = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
-    assert not nine["within_allowance"] and nine["refund_due"] == 0
+    assert not nine["within_allowance"] and nine["charged_room_nights"] == 2
     late = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-02-25", H, POL, RMS, 384000)
-    assert not late["before_release_deadline"] and late["needs_manager_review"]
+    assert not late["before_release_deadline"] and late["charged_room_nights"] == 6 and late["total_change"] == 0
+    assert late["refund_mode"] == "none" and not late["needs_manager_review"]
     after_inst = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-02-10", H, POL, RMS, 384000)
     assert after_inst["refund_mode"] == "manager reconciliation" and after_inst["refund_due"] == 0
 
 
+def test_releases_beyond_the_allowance_are_charged_not_waived():
+    # Northstar: 36 room-nights at £220, 7 free. Releasing 3 a night (9) frees 7 and charges 2 at the rate.
+    t = northstar_terms()
+    r = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
+    assert (r["free_room_nights"], r["charged_room_nights"], r["attrition_charge"]) == (7, 2, 44000)
+    assert "2 room-night(s) beyond the 7 room-night allowance (0 already used)" in r["charge_reasons"]
+    p = r["new_pricing"]
+    assert p["room_nights"] == 27 and p["total"] == 960000 - 7 * 22000           # only the free part comes off
+    assert any(l["item"].startswith("Attrition charge") and l["amount"] == 44000 for l in p["lines"])
+    assert r["refund_due"] == 384000 - calc.pct_of(p["total"], 40) == 61600      # deposit on £8,060
+    assert r["remaining_after"] == 0 and p["allowance_remaining"] == 0
+    # The allowance is used up: the next release is charged in full and changes nothing owed.
+    nxt = calc.evaluate_reduction(r["new_terms"], {"2027-03-11": 1}, "2027-01-21", H, POL, RMS, 322400)
+    assert nxt["charged_room_nights"] == 1 and nxt["total_change"] == 0 and nxt["refund_due"] == 0
+    # Within the allowance nothing is charged and the spec figures stand.
+    two = calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000)
+    assert two["charged_room_nights"] == 0 and two["new_pricing"]["total"] == 828000 and two["refund_due"] == 52800
+
+
+def test_a_waiver_is_bounded_and_needs_review():
+    t = northstar_terms()
+    r = calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000, waive=22000)
+    assert r["needs_manager_review"] and r["review_reasons"] == ["waives £220 of the £440 attrition charge"]
+    assert r["new_pricing"]["total"] == 960000 - 7 * 22000 - 22000 and r["new_pricing"]["waived"] == 22000
+    with pytest.raises(ValueError, match="waiver"):
+        calc.evaluate_reduction(t, {n: 3 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000, waive=44001)
+    with pytest.raises(ValueError, match="waiver"):                 # nothing charged, nothing to waive
+        calc.evaluate_reduction(t, {n: 2 for n in MARCH}, "2027-01-20", H, POL, RMS, 384000, waive=100)
+
+
+def test_over_allowance_change_goes_to_the_buyer_with_the_charge(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    r = e.prepare_reduction(n["id"], rooms_per_night=3)
+    assert r["status"] == "sent" and not any(a["subject"] == "reduction" for a in e.s["approvals"].values())
+    v = n["versions"][-1]
+    assert "beyond your attrition allowance" in v["message"] and "under your attrition allowance (" not in v["message"]
+    buyer = e.deal_view(n["id"], for_="buyer")["versions"][-1]
+    assert buyer["reduction"]["attrition_charge"] == 44000 and buyer["pricing"]["attrition_charge"] == 44000
+    e.buyer_action(n["id"], n["buyer_token"], "accept", payload={"version": r["version"]})
+    assert e.inventory_at("2027-03-10")["twin"]["booked"] == 9                  # all 9 room-nights released
+    assert n["finance"]["refund_owed"] == 61600 and n["status"] == "refund_due"
+    assert not any("reconciled manually" in f for f in n["flags"])
+
+
+def test_a_waiver_waits_for_the_manager_and_binds_its_amount(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=44000, justification="long-standing client")
+    assert r["status"] == "pending_approval" and n["status"] == "amendment_review"
+    appr = e.s["approvals"][r["approval_id"]]
+    assert appr["amount"] == 44000 and "long-standing client" in appr["summary"]
+    with pytest.raises(Refused):
+        e.send_amendment(n["id"], r["version"])                     # not before the manager decides
+    with pytest.raises(Refused, match="only the hotel manager"):
+        e.decide_approval(appr["id"], "approve", "seller")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    e.send_amendment(n["id"], r["version"])
+    e.buyer_action(n["id"], n["buyer_token"], "accept", payload={"version": r["version"]})
+    assert n["finance"]["refund_owed"] == 384000 - calc.pct_of(960000 - 9 * 22000, 40)   # as if all were free
+
+
+def test_a_declined_waiver_leaves_the_change_to_be_offered_with_the_charge(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please reduce by 3 rooms a night.",
+                   {"rooms_per_night": 3})
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=44000)
+    e.decide_approval(r["approval_id"], "reject", "hotel_manager")
+    assert n["status"] == "confirmed" and n["booking"]["rooms"]["2027-03-10"] == 12
+    assert any("attrition charge stands" in f for f in n["flags"])
+    s.run()                                                          # the rules seller re-offers it, charged
+    v = n["versions"][-1]
+    assert v["status"] == "sent" and v["reduction"]["charged_room_nights"] == 2 and not v["reduction"]["waived"]
+
+
 # ------------------------------------------------------------------------------ the demo story
+def test_every_approval_names_the_rule_it_crosses_and_what_each_decision_does(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    offer = next(a for a in e.s["approvals"].values() if a["subject"] == "offer")
+    assert offer["rules"] == [{"rule": "Free release (attrition)", "alone": "up to 10%", "asked": "20%"}]
+    assert "send v2" in offer["if_approved"] and "terms it can agree alone" in offer["if_rejected"]
+    assert not any(a["subject"] == "acceptance" for a in e.s["approvals"].values())   # no buyer-side approvals
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    refund = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    assert refund["rules"] == [{"rule": "Refunds the seller can make alone", "alone": "up to £500 in total",
+                                "asked": "£528 in total"}]
+    assert "exactly £528" in refund["if_approved"] and "stays owed" in refund["if_rejected"]
+    # The reduction itself (6 of 7 free room-nights) needed no approval at all.
+    assert not any(a["subject"] == "reduction" for a in e.s["approvals"].values())
+
+
+def test_a_waiver_approval_says_what_keeping_the_charge_means(eng):
+    e = eng
+    s, n = _confirmed_after_jump(e)
+    r = e.prepare_reduction(n["id"], rooms_per_night=3, waive=22000)
+    a = e.s["approvals"][r["approval_id"]]
+    assert a["rules"] == [{"rule": "Attrition charge", "alone": "charged in full", "asked": "waive £220 of £440"}]
+    assert "full £440 charge" in a["if_rejected"] and "£7,840" in a["if_approved"]
+
+
+def test_the_manager_is_never_asked_unless_a_seller_rule_is_crossed(eng):
+    e = eng
+    s = RulesSeller(e)
+    s.run()
+    n = deal_by(e, "Northstar")
+    buyer_turn(e, "Northstar")                                      # answers
+    s.run()
+    # Standard terms (rate at the floor, 30% deposit, 10% attrition) go straight to the buyer.
+    r = e.propose_offer(n["id"], 22000, 30, 10, "Our offer.")
+    assert r["status"] == "sent" and not any(a["approver"] == "hotel_manager" for a in e.s["approvals"].values())
+    # A manager request that names no crossed rule is refused rather than shown as an unexplained card.
+    with pytest.raises(Refused, match="no seller rule is crossed"):
+        e._request_approval(n, "hotel_manager", "offer", "please look", ["just checking"], version=r["version"])
+    # A crossed rule is named on the card, with what the seller could agree alone.
+    r = e.propose_offer(n["id"], 20500, 40, 10, "Our offer.")
+    a = e.s["approvals"][r["approval_id"]]
+    assert a["rules"] == [{"rule": "Twin rate", "alone": "£210 or more", "asked": "£205"}]
+
+
+def test_every_handoff_says_why_a_person_and_what_to_do(eng):
+    e = eng
+    s, n = run_to_confirmed(e)
+    e.advance_clock(to="2027-01-20T09:00:00+00:00")
+    buyer_turn(e, "Northstar")
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    e.provider.knobs["fail_next_refund"] = True
+    appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
+    e.decide_approval(appr["id"], "approve", "hotel_manager")
+    s.run()
+    h = n["handoff"]
+    assert n["status"] == "refund_failed" and "never retries" in h["why"] and "£528" in h["todo"]
+
+
 def test_full_story(eng):
     e = eng
     s, n = run_to_confirmed(e)
@@ -194,7 +340,7 @@ def test_stale_approval_and_hard_limits(eng):
     n = deal_by(e, "Northstar")
     old = next(a for a in e.s["approvals"].values() if a["deal_id"] == n["id"] and a["status"] == "pending")
     with pytest.raises(Refused):
-        e.decide_approval(old["id"], "approve", "organizer")          # wrong approver
+        e.decide_approval(old["id"], "approve", "seller")             # wrong approver
     e.propose_offer(n["id"], 22000, 40, 15, "revised")                # materially changed offer
     assert e.s["approvals"][old["id"]]["status"] == "stale"
     with pytest.raises(Refused):
@@ -220,8 +366,10 @@ def test_no_overselling(eng):
                    "January at noon.", wake=False)
     s.run()
     other = deal_by(e, "other.example")
-    v = other["versions"][-1]
-    assert v["terms"]["rooms"]["2027-03-10"] == 2 and v["unmet"]     # alternative: only 2 left
+    # Only 2 twins left on 10 March: no short offer, but dates with the full block and the 2 on these dates.
+    assert other["status"] == "dates_proposed" and not other["versions"]
+    assert {"arrival": "2027-03-10", "departure": "2027-03-13", "room_type": "twin",
+            "rooms_per_night": 2} in other["thread"][-1]["date_options"]
     for night in MARCH:
         inv = e.inventory_at(night)["twin"]
         assert inv["held"] + inv["booked"] <= inv["capacity"]
@@ -363,7 +511,7 @@ def test_refund_limit_and_unresolved_refund(eng):
     s.run()
     appr = next(a for a in e.s["approvals"].values() if a["subject"] == "refund")
     with pytest.raises(Refused):
-        e.decide_approval(appr["id"], "approve", "organizer")
+        e.decide_approval(appr["id"], "approve", "seller")
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     r = e.refund_excess(n["id"])
     assert r["status"] == "RECEIVED"
@@ -417,9 +565,9 @@ def test_reduction_after_installment_and_beyond_allowance(eng):
     e.advance_clock(to="2027-02-10T09:00:00+00:00")
     r = e.prepare_reduction(n["id"], rooms_per_night=2)
     assert r["status"] == "sent" and r["evaluation"]["refund_mode"] == "manager reconciliation"
-    r = e.prepare_reduction(n["id"], rooms_per_night=3)              # 9 room-nights > 7
-    assert r["status"] == "pending_approval"
-    assert n["booking"]["rooms"]["2027-03-10"] == 12                 # existing agreement still in effect
+    r = e.prepare_reduction(n["id"], rooms_per_night=3)              # 9 room-nights > 7: priced, not escalated
+    assert r["status"] == "sent" and r["evaluation"]["charged_room_nights"] == 2
+    assert n["booking"]["rooms"]["2027-03-10"] == 12                 # existing agreement in effect until accepted
 
 
 def _accept_amendment(e, n, version):
@@ -427,19 +575,19 @@ def _accept_amendment(e, n, version):
     return n["flags"][-1]
 
 
-def test_manual_reconciliation_flag_names_the_real_reason(eng):
-    # Over the allowance, weeks before the first installment (8 Feb): the flag must not blame the installment date.
+def test_over_allowance_before_installment_is_priced_not_flagged(eng):
+    # Over the allowance, weeks before the first installment (8 Feb): the extra room-nights are charged at the
+    # contracted rate, the refund runs automatically, and nothing is left for manual reconciliation.
     e = eng
     s, n = run_to_confirmed(e)
     e.advance_clock(to="2027-01-20T09:00:00+00:00")
     r = e.prepare_reduction(n["id"], rooms_per_night=3)              # 9 room-nights > 7
-    assert r["status"] == "pending_approval" and r["evaluation"]["before_first_installment"]
-    e.decide_approval(r["approval_id"], "approve", "hotel_manager")
-    e.send_amendment(n["id"], r["version"])
-    flag = _accept_amendment(e, n, r["version"])
-    assert "first installment" not in flag
-    assert "releases 9 room-nights in total, above the 7 allowed" in flag and "reconciled manually" in flag
-    assert n["status"] == "confirmed" and n["finance"]["refund_owed"] == 0      # money unchanged: no refund
+    ev = r["evaluation"]
+    assert r["status"] == "sent" and ev["before_first_installment"] and ev["charged_room_nights"] == 2
+    assert ev["refund_mode"] == "automatic" and not ev["review_reasons"]
+    e.buyer_action(n["id"], n["buyer_token"], "accept", payload={"version": r["version"]})
+    assert not any("reconciled manually" in f for f in n["flags"])
+    assert n["status"] != "handoff" and n["finance"]["refund_owed"] == ev["refund_due"]
 
 
 def test_manual_reconciliation_flag_after_the_first_installment(eng):
@@ -483,7 +631,6 @@ def test_hold_expiry_during_checkout(eng):
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
     r = buyer_turn(e, "Northstar")
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     assert n["status"] == "awaiting_payment"
     e.advance_clock(hours=30)                                       # unpaid: intent cancelled, hold released
@@ -506,7 +653,6 @@ def test_payment_then_commit_failure(eng):
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
     r = buyer_turn(e, "Northstar")
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     e.s["sim"]["fail_next_commit"] = True
     pay(e, n)
@@ -554,7 +700,6 @@ def test_persistence_across_restart(eng, tmp_path):
 
 # ------------------------------------------------------------------------------ privacy between the two sides
 from agentbank.groupsales.calc import gbp  # noqa: E402
-from agentbank.groupsales.policy import buyer_check  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller  # noqa: E402
 
 
@@ -575,7 +720,7 @@ def _seller_surface(e, d):
                        [m["text"] for m in d["thread"]]], default=str)
 
 
-def _to_organizer(e):
+def _to_accepted(e):
     s = RulesSeller(e)
     s.run()
     buyer_turn(e, "Northstar")
@@ -587,37 +732,36 @@ def _to_organizer(e):
     e.decide_approval(appr["id"], "approve", "hotel_manager")
     s.run()
     r = buyer_turn(e, "Northstar")
-    assert r["accepted"] is False
-    return s, n, r
+    assert r["accepted"] is True
+    return s, n
 
 
 def test_seller_never_sees_buyer_mandate(eng):
     e = eng
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
     mandate = S["buyers"]["northstar.example"]
-    v = n["versions"][-1]
-    reasons = buyer_check(v["terms"], v["pricing"], mandate)
-    assert reasons                                                  # the organizer approval is really needed
-    organizer = e.s["approvals"][r["approval_id"]]
-    forbidden = reasons + [organizer["summary"], gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit",
-                           "limit", "authority", mandate["organizer"], mandate["flexibility"]]
-    assert gbp(mandate["deposit_limit"]) not in n["thread"][0]["text"]   # not something the RFP disclosed
+    forbidden = ["authority", mandate["organizer"], mandate["flexibility"]]
+    s.run()
+    assert n["status"] == "awaiting_payment"
     surface = _seller_surface(e, n)
     for f in forbidden:
         assert f not in surface, f
-    for k in ("deposit_limit", "deposit_limit_pct", "budget_mandate", "objectives", "known_answers"):
+    for k in ("objectives", "known_answers", "opening_deposit_pct"):
         assert k not in set(_keys(json.loads(surface)))
-    view = e.deal_view(n["id"], for_="seller")
-    org = next(a for a in view["approvals"] if a["approver"] == "organizer")
-    assert org["status"] == "pending" and "reasons" not in org and "pending buyer-side authorization" in org["summary"]
-    assert view["status"] == "acceptance_pending_organizer"
-    assert "organizer" in view["waiting_on"]                          # the seller may know it is pending
-    # Still private after the organizer decides, and the seller can carry on to checkout.
-    e.decide_approval(r["approval_id"], "approve", "organizer", note="fine, within the offsite budget")
+
+
+def test_buyer_acceptance_needs_no_buyer_side_approval(eng):
+    """The engine enforces only the hotel's rules: a buyer accepting a sent offer is an accepted offer, with
+    no approval from the buyer's side and no wait before checkout. Briefs carry no buyer-side limits."""
+    e = eng
+    assert not any({"budget_total", "deposit_limit", "deposit_limit_pct"} & set(b) for b in S["buyers"].values())
+    s, n = _to_accepted(e)
+    v = n["versions"][-1]
+    assert v["pricing"]["deposit"] == 384000                            # the £3,840 deposit, accepted as sent
+    assert n["status"] == "accepted" and n["accepted_version"] == v["n"]
+    assert all(a["approver"] == "hotel_manager" for a in e.s["approvals"].values())
+    assert not (e.waiting_on(n) or "").startswith("buyer")
     s.run()
-    surface = _seller_surface(e, n)
-    for f in forbidden + ["within the offsite budget"]:
-        assert f not in surface, f
     assert n["status"] == "awaiting_payment"
 
 
@@ -652,7 +796,6 @@ def test_buyer_never_sees_hotel_internals(eng):
     check(view)
     assert view["versions"][-1]["n"] == 2 and view["versions"][-1]["pricing"]["deposit"] == 384000
     r = buyer_turn(e, "Northstar")
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     pay(e, n)
     e.advance_clock(to="2027-01-20T09:00:00+00:00")
@@ -671,8 +814,7 @@ def test_buyer_never_sees_hotel_internals(eng):
 
 # ------------------------------------------------------------------------------ holds and expiry
 def _to_checkout(e):
-    s, n, r = _to_organizer(e)
-    e.decide_approval(r["approval_id"], "approve", "organizer")
+    s, n = _to_accepted(e)
     s.run()
     assert n["status"] == "awaiting_payment"
     return s, n
@@ -706,9 +848,8 @@ def test_hold_expiry_with_payment_outcome_open_keeps_inventory(eng, outcome):
 
 def test_deposit_intent_timeout_recovers_by_lookup(eng):
     e = eng
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
     e.provider.knobs["timeout_next_create"] = True
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()                                                          # seller opens checkout; the create times out
     op = e._deposit_op(n)
     assert op["status"] == "created" and op["payment_intent_id"]
@@ -902,6 +1043,27 @@ def test_rules_seller_keeps_standard_release_when_margin_cannot_carry_more(tmp_p
     assert len(n["versions"]) == 2 and v["terms"]["attrition_pct"] == 10 and v["terms"]["rate"] == 22000
     assert "demand on your dates is high" in v["message"].lower()
     assert not any("Engine refused" in a["text"] for a in e.s["activity"])
+
+
+def test_a_withdrawn_concession_never_leaves_the_buyer_worse_off(tmp_path):
+    """Busy dates: the seller can't give the 20% attrition asked for. It must not keep the 40% deposit that
+    only pays for that concession: the buyer gets the terms they already had, and isn't told it's an exchange."""
+    e = _busier(tmp_path, full_demand={"twin": 9000, "king": 6000}, resale_pct=0)
+    s = RulesSeller(e)
+    s.run()
+    buyer_turn(e, "Northstar")
+    s.run()
+    n = deal_by(e, "Northstar")
+    v1 = n["versions"][0]
+    assert (v1["terms"]["attrition_pct"], v1["terms"]["deposit_pct"]) == (10, 30)
+    buyer_turn(e, "Northstar")                                       # counter: 20% attrition, 25% deposit
+    s.run()
+    v = n["versions"][-1]
+    assert (v["terms"]["attrition_pct"], v["terms"]["deposit_pct"], v["terms"]["rate"]) == (10, 30, 22000)
+    assert v["pricing"]["deposit"] == v1["pricing"]["deposit"]
+    assert "in exchange" not in v["message"].lower()
+    assert "demand on your dates is high" in v["message"].lower()
+    assert not [a for a in e.s["approvals"].values() if a["deal_id"] == n["id"]]   # nothing for the manager
 
 
 def test_rules_seller_hands_off_when_even_the_target_rate_misses_the_margin(tmp_path):
@@ -1254,7 +1416,7 @@ def test_access_token_gate(server, monkeypatch):
     code, _, body = _req(mod, "/api/buyer/GS-1001/view?t=wrong")
     assert code == 400 and "buyer" in body
     assert _req(mod, f"/api/buyer/GS-1001/view?t={d['buyer_token']}")[0] == 200
-    for path in ("/api/buyer/GS-1001", "/api/buyer/GS-1001/organizer"):
+    for path in ("/api/buyer/GS-1001",):
         code, _, body = _req(mod, path, {"token": "wrong", "action": "message", "text": "hi"},
                              {"Content-Type": "application/json"})
         assert code == 400 and "buyer" in body, path
@@ -1364,6 +1526,7 @@ def test_change_request_beyond_the_booking_is_handed_to_a_person(eng):
     e.buyer_action(n["id"], n["buyer_token"], "change_request", "Please drop 99 rooms a night.", {"rooms_per_night": 99})
     s.run()                                                          # no crash
     assert n["handoff"] and "cannot be applied" in n["handoff"]["reason"]
+    assert n["handoff"]["why"] and n["handoff"]["todo"]                 # says why a person, and what to do
     assert n["status"] == "confirmed" and n["booking"]["rooms"] == {night: 12 for night in MARCH}
     assert n["thread"][-1]["from"] == "seller" and "current booking stays as agreed" in n["thread"][-1]["text"]
     assert not n["unread"]                                            # the next run does not trip on it again
@@ -1454,20 +1617,6 @@ def test_buyer_agent_takes_a_turn_for_questions_its_drafts_cannot_answer(eng):
     assert suggest(e, n["id"]) is None and wants_reply(e, n["id"])
 
 
-def test_organizer_approval_for_a_lapsed_offer_is_stale_and_changes_nothing(eng):
-    """Found by the randomized scenarios: approving after the offer lapsed left a half-made decision in memory."""
-    e = eng
-    s, n, r = _to_organizer(e)
-    appr = e.s["approvals"][r["approval_id"]]
-    e.advance_clock(hours=25)                                         # the offer and its hold expire
-    assert n["versions"][-1]["status"] == "expired"
-    with pytest.raises(Refused, match="stale"):
-        e.decide_approval(appr["id"], "approve", "organizer")
-    assert appr["status"] == "stale" and not n.get("accepted_version")
-    reloaded = Engine(e.var, e.provider)                               # what is on disk matches memory
-    assert reloaded.s["approvals"][appr["id"]]["status"] == "stale"
-
-
 # ------------------------------------------------------------------------------ seller rules
 def test_rules_view_lists_editable_and_fixed_rules(eng):
     v = eng.rules_view()
@@ -1529,7 +1678,7 @@ def test_lower_refund_limit_sends_the_refund_to_the_manager_sooner(eng):
 def test_provider_refusal_pauses_the_seller_until_staff_retry(eng):
     from agentbank.groupsales.provider import AirwallexError
     e = eng
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
     calls = []
     real = e.provider.create_intent
 
@@ -1537,7 +1686,6 @@ def test_provider_refusal_pauses_the_seller_until_staff_retry(eng):
         calls.append(1)
         raise AirwallexError(403, "non_json_response", "403 Forbidden")
     e.provider.create_intent = refuse
-    e.decide_approval(r["approval_id"], "approve", "organizer")
     s.run()
     s.run()
     RulesSeller(e).run()
@@ -1563,28 +1711,22 @@ def test_reset_wakes_the_seller(eng):
 
 
 # ------------------------------------------------------------------------------ buyer mailbox (server)
-def test_buyer_mailbox_and_organizer_sign_off(server):
+def test_buyer_mailbox(server):
     mod = server
     e = mod.engine
     e.reset()
-    s, n, r = _to_organizer(e)
+    s, n = _to_accepted(e)
+    s.run()
     tok = n["buyer_token"]
     st, _, body = _req(mod, f"/inbox/{n['ref']}?t={tok}")
     assert st == 200 and n["id"] in body
     assert _req(mod, f"/inbox/{n['ref']}?t=wrong")[0] == 403
     st, _, body = _req(mod, f"/api/buyer/{n['id']}/view?t={tok}")
     v = json.loads(body)
-    assert st == 200 and v["organizer"] and v["organizer"][0]["id"] == r["approval_id"]
+    assert st == 200 and v["pay_url"] and "organizer" not in v
     for secret in ("margin", "autonomous_floor", "delivery_costs", "hotel_check"):
         assert secret not in body                        # the buyer's view carries no hotel internals
     assert _req(mod, f"/api/buyer/{n['id']}/view?t=wrong")[0] == 400
-    st, _, _ = _req(mod, f"/api/buyer/{n['id']}/organizer", {"token": "wrong", "approval_id": r["approval_id"],
-                                                             "decision": "approve"})
-    assert st == 400
-    st, _, body = _req(mod, f"/api/buyer/{n['id']}/organizer", {"token": tok, "approval_id": r["approval_id"],
-                                                                "decision": "approve"})
-    assert st == 200, body
-    assert e.s["approvals"][r["approval_id"]]["status"] == "approved"
 
 
 def test_generated_inquiry_endpoint(server):
@@ -1831,9 +1973,8 @@ def test_new_inquiry_samples_are_quoted_without_approval(eng):
     bennett = e.ingest_email(*_BENNETT)["deal_id"]
     s.run()
     b = e.deal(bennett)
-    assert b["status"] in ("offer_sent", "handoff", "declined")
-    if b["status"] == "offer_sent":
-        assert max(b["versions"][-1]["terms"]["rooms"].values()) < 20 and b["versions"][-1]["unmet"]
+    # The full block isn't free, so the seller offers dates (never a quietly smaller block).
+    assert b["status"] in ("dates_proposed", "handoff", "declined") and not b["versions"]
 
 
 # ------------------------------------------------------------------------------ short rooms, then a counter
@@ -1851,9 +1992,15 @@ def _short_rooms(tmp_path):
     d = e.deal(a["deal_id"])
     s = RulesSeller(e)
     s.run()
+    assert d["status"] == "dates_proposed" and not d["versions"]
+    smaller = d["thread"][-1]["date_options"][-1]
+    assert (smaller["arrival"], smaller["rooms_per_night"]) == ("2027-03-07", 14)
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "The smaller block on our dates works.",
+                   {"dates": {"arrival": "2027-03-07", "departure": "2027-03-11"}})
+    s.run()
     v1 = d["versions"][-1]
     assert d["status"] == "offer_sent" and set(v1["terms"]["rooms"].values()) == {14}
-    assert any("only 14 twin rooms" in u for u in v1["unmet"])
+    assert any("14 twin rooms sleep up to 28 of your 34 guests" in u for u in v1["unmet"])
     return e, s, d
 
 
@@ -1879,7 +2026,6 @@ def test_rules_seller_counters_on_the_rooms_it_offered_not_the_rooms_first_asked
     _counter_and_run(e, s, d)
     v = d["versions"][-1]
     assert len(d["versions"]) == 2 and set(v["terms"]["rooms"].values()) == {14}
-    assert any("only 14 twin rooms" in u for u in v["unmet"])
     assert e.inventory_at("2027-03-10")["twin"]["held"] == 14       # the same hold, not a second one
 
 
@@ -1915,3 +2061,239 @@ def test_rules_seller_never_goes_quiet_when_the_engine_refuses_its_reply(tmp_pat
     s.run()
     assert d["status"] == "handoff" and "did not anticipate" in d["handoff"]["reason"]
     assert d["thread"][-1]["from"] == "seller" and "reply to you directly" in d["thread"][-1]["text"]
+
+
+# ------------------------------------------------------------------------- full block not free on the dates
+_FIELDNOTE = ("Sam Whitaker <sam@fieldnote-labs.example>", "RFP | Leadership Retreat | 12 guests | 23-25 May 2027",
+              "Hello Group Sales, please quote 6 king rooms for 12 colleagues arriving 23 May and departing 25 May 2027, "
+              "with breakfast each morning. We need a private meeting room for 12 people on 24 May, 09:00-17:00 in "
+              "classroom layout, with projector and Wi-Fi. Our target is £210 per room/night including breakfast, and our "
+              "total budget is £3,200 inclusive of taxes. The package is billed to Fieldnote Labs Demo Pte Ltd, from our "
+              "office in Singapore; guests cover incidentals. Please reply by 22 January at noon London time.")
+
+
+def _fieldnote(e):
+    assert e.inventory_at("2027-05-24")["king"]["capacity"] == 5     # 6 kings asked for; 5 free on 24 May
+    d = e.deal(e.ingest_email(*_FIELDNOTE)["deal_id"])
+    RulesSeller(e).run()
+    return d
+
+
+def test_short_block_offers_dates_instead_of_a_smaller_offer(eng):
+    d = _fieldnote(eng)
+    assert d["status"] == "dates_proposed" and not d["versions"]
+    m = d["thread"][-1]
+    assert "only 5 are free on 24 May 2027" in m["text"]
+    *full, smaller = m["date_options"]
+    assert full and all(o["rooms_per_night"] == 6 for o in full)
+    assert smaller == {"arrival": "2027-05-23", "departure": "2027-05-25", "room_type": "king", "rooms_per_night": 5}
+    for o in full:                                                   # the meeting (2nd day) moves to a weekday
+        day = (date.fromisoformat(o["arrival"]) + timedelta(days=1)).isoformat()
+        assert eng._slot(day) and eng._slot(day)["status"] == "free"
+
+
+def _pick(e, d, o):
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "Those dates work.",
+                   {"dates": {"arrival": o["arrival"], "departure": o["departure"]}})
+    RulesSeller(e).run()
+    assert d["status"] == "offer_sent"
+    return d["versions"][-1]
+
+
+def test_full_block_dates_quote_the_whole_group(eng):
+    d = _fieldnote(eng)
+    v = _pick(eng, d, d["thread"][-1]["date_options"][0])
+    pr = v["pricing"]
+    assert set(v["terms"]["rooms"].values()) == {6} and not v["unmet"]
+    assert pr["total"] <= 320000 and pr["per_room_night_incl_breakfast"] == 21000
+
+
+def test_smaller_block_is_priced_on_that_block_and_says_who_it_sleeps(eng):
+    d = _fieldnote(eng)
+    v = _pick(eng, d, d["thread"][-1]["date_options"][-1])
+    rate = eng.rms["rates"]["king"]
+    # 5 kings at the target rate fit the budget, so there is no reason to drop to the floor.
+    assert set(v["terms"]["rooms"].values()) == {5} and v["terms"]["rate"] == rate["target"]
+    assert "5 king rooms sleep up to 10 of your 12 guests" in v["unmet"]
+    # Breakfast for guests without a room doesn't make the room dearer: £190 + 2 x £15.
+    assert v["pricing"]["per_room_night_incl_breakfast"] == rate["target"] + 3000
+
+
+def test_per_room_night_counts_breakfast_up_to_the_room_occupancy():
+    hotel, rms = S["hotel"], S["rms"]
+    terms = {"room_type": "king", "rate": 19000, "rooms": {"2027-05-23": 5, "2027-05-24": 5},
+             "released": {"2027-05-23": 0, "2027-05-24": 0}, "breakfast": {"2027-05-24": 12, "2027-05-25": 12},
+             "meeting": None, "attrition_pct": 10, "deposit_pct": 30, "currency": "GBP"}
+    assert calc.price(terms, hotel, rms)["per_room_night_incl_breakfast"] == 19000 + 2 * 1500
+    terms["breakfast"] = {"2027-05-24": 5, "2027-05-25": 5}         # one guest a room: one breakfast
+    assert calc.price(terms, hotel, rms)["per_room_night_incl_breakfast"] == 19000 + 1500
+
+
+# The inquiry from a real session that looped (40 rooms there; 6 here so the block fits the September calendar): the seller asked twice for details the buyer had given.
+GROUPIE_RFP = ("Hello Group Sales, please quote {r} rooms for{r} colleagues arriving 12th of September and departing "
+               "15th September 2027, with breakfast each morning. We need a meeting room for {n} people. Our total "
+               "budget is $20,000 inclusive of taxes. The package is billed to Groupie LLC; guests cover incidentals. "
+               "Please reply by 22 January at noon London time. Best regards, Owen")
+GROUPIE_REPLY = ("any room type is fine, i've already said the number of rooms and the dates, any meeting room layout "
+                 "is fine as long as it can fit {n} people. the meeting date is 13th September")
+
+
+def test_inquiry_with_untyped_rooms_and_ordinal_dates_is_read():
+    r = extract("Group inquiry", GROUPIE_RFP.format(r=40, n=50))
+    assert (r["rooms"], r["guests"], r["arrival"], r["departure"]) == (40, 40, "2027-09-12", "2027-09-15")
+    assert r["meeting"]["attendees"] == 50 and r["payer"] == "Groupie LLC" and r["contact"] == "Owen"
+
+
+def _groupie(e, n):
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=n), wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    first = d["thread"][-1]
+    assert d["status"] == "needs_info"
+    # Only what is really missing; never the rooms or dates the buyer gave.
+    assert first["questions"] == ["room type (king or twin)", "meeting room layout (classroom)",
+                                  "meeting date"]
+    e.buyer_action(d["id"], d["buyer_token"], "message", GROUPIE_REPLY.format(n=n))
+    RulesSeller(e).run()
+    return deal_by(e, "groupie.example")
+
+
+def test_free_text_answers_and_any_preferences_complete_the_request(eng):
+    d = _groupie(eng, 30)
+    req = d["requirements"]
+    assert req["room_type"] == "king" and req["meeting"]["layout"] == "classroom"
+    assert req["meeting"]["date"] == "2027-09-13" and not d["missing"]
+    assert d["status"] == "offer_sent"
+    assert sum(1 for m in d["thread"] if m["from"] == "seller" and m.get("questions")) == 1
+
+
+SIZE_Q = ("whether to quote the Thames Room for 32 people or leave the meeting room out "
+          "(it seats 32 in classroom layout, not 50)")
+
+
+def _too_big(e):
+    """Owen's inquiry and reply with a 50-person meeting: the Thames Room seats 32."""
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=50), wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    assert d["thread"][-1]["questions"][-1] == SIZE_Q             # said in the first reply, not after dates
+    e.buyer_action(d["id"], d["buyer_token"], "message", GROUPIE_REPLY.format(n=50))
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    assert d["status"] == "needs_info" and d["thread"][-1]["questions"] == [SIZE_Q]   # only what's left
+    return d
+
+
+def test_a_meeting_too_big_for_the_room_is_offered_at_the_room_size(eng):
+    d = _too_big(eng)
+    eng.buyer_action(d["id"], d["buyer_token"], "message", "OK, 32 is fine then.")
+    RulesSeller(eng).run()
+    d = deal_by(eng, "groupie.example")
+    assert d["status"] == "offer_sent" and not d["handoff"]
+    assert d["versions"][-1]["terms"]["meeting"]["attendees"] == 32
+
+
+def test_a_meeting_too_big_for_the_room_can_be_left_out(eng):
+    d = _too_big(eng)
+    eng.buyer_action(d["id"], d["buyer_token"], "message", "We'll go without the meeting room.")
+    RulesSeller(eng).run()
+    d = deal_by(eng, "groupie.example")
+    assert d["status"] == "offer_sent" and d["requirements"]["meeting"] is None
+    assert not d["versions"][-1]["terms"].get("meeting")
+
+
+def test_a_budget_in_another_currency_is_read_and_never_compared_with_gbp_prices(eng):
+    r = extract("Group inquiry", GROUPIE_RFP.format(r=40, n=50))
+    assert (r["budget_total"], r["budget_currency"], r["budget_includes_taxes"]) == (2000000, "USD", True)
+    d = _groupie(eng, 30)
+    v = d["versions"][-1]
+    assert v["terms"]["rate"] == S["rms"]["rates"]["king"]["target"]   # not cut to the floor on a $ figure
+    assert any("$20,000 (USD)" in u and "priced in GBP" in u for u in v["unmet"])
+    assert "above your" not in v["message"]
+
+
+def test_a_reply_that_answers_nothing_is_not_met_with_the_same_questions(eng):
+    e = eng
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    e.buyer_action(d["id"], d["buyer_token"], "message", "I already told you everything.")
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    assert d["status"] == "handoff" and "did not answer" in d["handoff"]["reason"]
+    assert sum(1 for m in d["thread"] if m["from"] == "seller" and m.get("questions")) == 1
+
+
+def test_a_block_that_does_not_fit_is_described_night_by_night_and_never_promised(eng):
+    """The 40-room Groupie inquiry: 10, 9 and 6 kings are free on its three nights."""
+    e = eng
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=40, n=30), wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    first = d["thread"][-1]["text"]
+    assert "can hold your rooms" not in first and "can't hold the full block" in first
+    e.buyer_action(d["id"], d["buyer_token"], "message", GROUPIE_REPLY.format(n=30))
+    RulesSeller(e).run()
+    d = deal_by(e, "groupie.example")
+    m = d["thread"][-1]
+    assert d["status"] == "dates_proposed" and m["date_options"]
+    assert m["text"].startswith("Thank you for your reply.")         # a follow-up, not a new inquiry
+    assert ("only 10 are free on 12 September 2027, 9 on 13 September 2027 and 6 on 14 September 2027"
+            in m["text"])
+
+
+def test_a_block_that_fits_is_still_promised(eng):
+    e = eng
+    e.ingest_email("Owen <owen@groupie.example>", "Group inquiry", GROUPIE_RFP.format(r=6, n=30), wake=False)
+    RulesSeller(e).run()
+    assert "can hold your rooms once we quote" in deal_by(e, "groupie.example")["thread"][-1]["text"]
+
+
+# The mailbox's answer form sends one structured answer per question the hotel asked.
+VAGUE_RFP = ("Hi, I need 6 rooms for 6 employees traveling from 12th Nov to 15th Novemeber, breakfast included. "
+             "We also need a meeting room on the 13th Nov. Billed to Vague Demo Ltd.")
+
+
+def test_answer_form_answers_complete_the_request_without_the_model(eng):
+    e = eng
+    e.ingest_email("Vic <vic@vague.example>", "Offsite", VAGUE_RFP, wake=False)
+    RulesSeller(e).run()                            # read by patterns (no model): rooms only, no dates
+    d = deal_by(e, "vague.example")
+    asked = d["thread"][-1]["questions"]
+    assert "arrival and departure dates" in asked and "room type (king or twin)" in asked
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "King rooms. Arriving 2027-03-10, departing 2027-03-13. ...",
+                   {"answers": {"room_type": "king", "arrival": "2027-03-10", "departure": "2027-03-13",
+                                "meeting_date": "2027-03-11", "meeting_layout": "classroom"}})
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    req = d["requirements"]
+    assert (req["room_type"], req["arrival"], req["departure"]) == ("king", "2027-03-10", "2027-03-13")
+    assert req["meeting"]["date"] == "2027-03-11" and req["meeting"]["layout"] == "classroom"
+    assert not d["missing"] and d["status"] == "offer_sent"
+
+
+def test_answer_form_values_are_validated(eng):
+    e = eng
+    e.ingest_email("Vic <vic@vague.example>", "Offsite", VAGUE_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    e.buyer_action(d["id"], d["buyer_token"], "reply", "...",
+                   {"answers": {"room_type": "penthouse", "rooms": -4, "arrival": "2027-03-13",
+                                "departure": "2027-03-10", "meeting_layout": "ballroom", "meeting_date": "soon"}})
+    RulesSeller(e).run()
+    req = deal_by(e, "vague.example")["requirements"]
+    assert req.get("room_type") is None and req["rooms"] == 6 and req.get("arrival") is None
+    assert req["meeting"].get("layout") is None and req["meeting"].get("date") is None
+
+
+def test_buyer_can_still_write_after_a_handoff(eng):
+    e = eng
+    e.ingest_email("Vic <vic@vague.example>", "Offsite", VAGUE_RFP, wake=False)
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    e.escalate(d["id"], "test hand-off")
+    e.buyer_action(d["id"], d["buyer_token"], "message", "Any news? We could also do 8 rooms.")
+    RulesSeller(e).run()
+    d = deal_by(e, "vague.example")
+    assert d["status"] == "handoff" and d["unread"]                       # with staff, flagged for them
+    assert d["thread"][-1]["from"] == "buyer"                              # the seller agent doesn't answer it

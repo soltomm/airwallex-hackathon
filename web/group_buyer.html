@@ -66,10 +66,16 @@ main { max-width: 780px; margin: 0 auto; padding: 18px 18px 60px; }
 .box.warn .who { color: var(--warn); } .box.ok .who { color: var(--ok); }
 .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 10px 0 8px; }
 .form label { display: grid; gap: 3px; font-size: 12.5px; color: var(--muted); }
+.form label { min-width: 0; }
+.form input, .form select { width: 100%; min-width: 0; box-sizing: border-box; }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }
 .pulse { animation: pulse 1.1s infinite; } @keyframes pulse { 50% { opacity: .35; } }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 90vw; }
 details.older > summary { color: var(--muted); font-size: 12.5px; cursor: pointer; margin: 0 0 10px; }
+table.why { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size: 13px; }
+table.why th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+table.why td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+dl.outcomes { margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -124,7 +130,8 @@ function asked(m) {
   const qs = (m.questions || []).filter(q => q && String(q).trim()), ds = m.date_options || [];
   const said = (m.text || '').toLowerCase();
   let h = '';
-  if (qs.length && !qs.every(q => said.includes(String(q).trim().toLowerCase()))) h += `<ol class="qs">${qs.map(q => `<li>${esc(q)}</li>`).join('')}</ol>`;
+  // The hotel's questions are in its email; m.questions only drives the Answer form. Listing them again under the
+  // email showed every question twice once the Claude seller wrote them in its own words.
   if (ds.length) h += `<ol class="qs">${ds.map(o => `<li>${esc(span(o.arrival, o.departure))}</li>`).join('')}</ol>`;
   return h;
 }
@@ -155,11 +162,6 @@ const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 
 const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send'};
 function actions() {
   let h = '';
-  for (const a of V.organizer) {
-    h += `<div class="box warn"><div class="who">Your organizer · sign-off needed</div><h3>Authorize accepting v${a.version}?</h3>
-      <p>${esc((a.reasons || []).map(r => r[0].toUpperCase() + r.slice(1)).join('. '))}${a.reasons && a.reasons.length ? '.' : ''} This is outside what you can agree alone.</p>
-      <div class="row"><button class="btn-ok" data-org="${a.id}" data-d="approve">Approve as organizer</button><button class="btn-bad" data-org="${a.id}" data-d="reject">Reject</button></div></div>`;
-  }
   if (V.pay_url) {
     const v = V.accepted_version && ver(V.accepted_version);
     h += `<div class="box warn"><div class="who">Payment</div><h3>Pay the ${gbp(v && v.pricing.deposit)} deposit</h3><p>On Airwallex's hosted page. Sandbox test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
@@ -171,10 +173,15 @@ function actions() {
       ${f.refund_owed ? `<p>${gbp(f.refund_owed)} is owed back to you.</p>` : ''}${f.still_due ? `<p class="small muted">${gbp(f.still_due)} still due on the payment schedule.</p>` : ''}</div>`;
   }
   if (V.hotel_busy) h += `<p class="small muted"><span class="dot pulse"></span>${esc(V.hotel)} is replying…</p>`;
-  if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. Switch the buyer to "You" in the hotel's Demo controls to reply here.</p></div>`;
+  if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. Choose Buyer replies: "By you, in the buyer's mailbox" in the hotel's New inquiry drawer to reply here.</p></div>`;
   const v = cur(), s = V.suggestion, open = v && v.status === 'sent', booked = V.booking && V.booking.status === 'confirmed';
-  const canWrite = !['lost', 'declined', 'handoff'].includes(V.status);
-  if (!canWrite) return h;
+  if (['lost', 'declined'].includes(V.status)) return h;
+  if (V.status === 'handoff') {
+    // A person at the hotel has the request. The buyer can still add details or ask something: the message goes to
+    // the hotel's team (the deal shows it as unread), not to the seller agent.
+    return h + `<div class="box"><div class="who">Reply</div><p class="small muted">${esc(V.hotel)}'s group sales team has your request and will reply here. You can still write to them.</p>
+      <div class="row"><button class="btn-p" data-form="msg">Write to the team…</button></div>${formHtml(null)}</div>`;
+  }
   h += `<div class="box"><div class="who">Reply</div>`;
   if (s) {
     h += `<p class="small muted">Draft from ${esc(V.company)}'s private brief. Edit it if you like.</p>
@@ -183,14 +190,64 @@ function actions() {
   } else {
     h += `<p class="small muted">${V.waiting_on === 'hotel' ? `Waiting for ${esc(V.hotel)}. You can still write to them.` : booked ? 'Nothing needed from you right now.' : 'Nothing drafted from your brief right now.'}</p><div class="row">`;
   }
-  if (open && !V.organizer.length && !(s && s.action === 'accept')) h += `<button class="${s ? '' : 'btn-p'}" data-act="accept">Accept v${v.n}</button>`;
+  if (open && !(s && s.action === 'accept')) h += `<button class="${s ? '' : 'btn-p'}" data-act="accept">Accept v${v.n}</button>`;
   if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
   if (V.status === 'needs_info' && !s) h += `<button data-form="answers">Answer…</button>`;
   const opts = V.status === 'dates_proposed' ? ((V.thread.slice().reverse().find(m => m.date_options) || {}).date_options || []) : [];
   opts.forEach((o, i) => { h += `<button class="${i ? '' : 'btn-p'}" data-act="dates" data-i="${i}">Take ${esc(span(o.arrival, o.departure))}</button>`; });
   if (booked && !(s && s.action === 'change_request')) h += `<button data-form="change">Request a change…</button>`;
-  h += `<button class="btn-ghost" data-form="msg">Message…</button></div>${formHtml(v)}</div>`;
+  h += `<button data-form="msg">Message…</button></div>${formHtml(v)}</div>`;
   return h;
+}
+// ---- answers to the hotel's questions: one field per question it asked ------------------------------------------
+function lastQuestions() {
+  const m = V.thread.slice().reverse().find(x => x.from === 'seller' && (x.questions || []).length);
+  return m ? m.questions.filter(q => q && String(q).trim()) : [];
+}
+function questionFields() {
+  const sel = (id, opts) => `<select id="${id}"><option value="">Choose…</option>${opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>`;
+  const lab = (text, input) => `<label>${esc(text)}${input}</label>`;
+  const types = [['king', 'King'], ['twin', 'Twin'], ['any', 'Either is fine']];
+  return lastQuestions().map((q, i) => {
+    const l = String(q).toLowerCase(), id = 'fq' + i;
+    // Matched by keywords, not exact wording: the rules seller asks in fixed phrases, the Claude seller in its own.
+    const roomType = l.startsWith('room type') || (l.includes('king') && l.includes('twin'));
+    if (l.startsWith('room type and number of rooms'))
+      return {q, kind: 'rooms_and_type', id, html: lab('Room type', sel(id + 't', types)) + lab('Rooms per night', `<input type="number" id="${id}n" min="1">`)};
+    if (roomType) return {q, kind: 'room_type', id, html: lab('Room type', sel(id, types))};
+    if (l.startsWith('number of rooms')) return {q, kind: 'rooms', id, html: lab('Rooms per night', `<input type="number" id="${id}" min="1">`)};
+    if (l.startsWith('arrival and departure') || (l.includes('arrival') && l.includes('departure'))) return {q, kind: 'dates', id, html: lab('Arrival', `<input type="date" id="${id}a">`) + lab('Departure', `<input type="date" id="${id}d">`)};
+    if (l.startsWith('meeting room layout')) {
+      const inside = (String(q).match(/\(([^)]*)\)/) || [, ''])[1];
+      const opts = inside.split(',').map(x => x.trim()).filter(x => x && x !== '...' && !x.endsWith('...'));
+      return {q, kind: 'layout', id, html: lab('Meeting room layout', sel(id, [...opts.map(o => [o, o[0].toUpperCase() + o.slice(1)]), ['any', 'Any layout is fine']]))};
+    }
+    if (l === 'meeting date') return {q, kind: 'meeting_date', id, html: lab('Meeting date', `<input type="date" id="${id}">`)};
+    if (l.startsWith('legal name') || l.includes('legal name') || l.includes('company paying')) return {q, kind: 'payer', id, html: lab('Company paying (legal name)', `<input type="text" id="${id}" placeholder="e.g. Acme Ltd">`)};
+    if (l.startsWith('whether the budget includes taxes')) return {q, kind: 'taxes', id, html: lab('Does your budget include taxes?', sel(id, [['true', 'Yes'], ['false', 'No']]))};
+    const size = String(q).match(/^whether to quote the (.+?) for (\d+) people/i);
+    if (size) return {q, kind: 'meeting_size', id, html: lab(`The ${size[1]} seats ${size[2]}`, sel(id, [['use_room_capacity', `Quote it for ${size[2]} people`], ['drop_meeting', 'Leave the meeting room out']]))};
+    return {q, kind: 'text', id, html: lab(q[0].toUpperCase() + q.slice(1), `<input type="text" id="${id}">`)};
+  });
+}
+function collectAnswers() {
+  const val = id => ($(id) && $(id).value || '').trim(), ans = {}, said = [], other = [];
+  const typeName = {king: 'King rooms', twin: 'Twin rooms', any: 'Any room type is fine'};
+  const day = x => new Date(x + 'T12:00:00Z').toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'});
+  for (const f of questionFields()) {
+    if (f.kind === 'rooms_and_type' || f.kind === 'room_type') {
+      const t = val(f.kind === 'room_type' ? f.id : f.id + 't'); if (t) { ans.room_type = t; said.push(typeName[t] + '.'); }
+      const n = f.kind === 'rooms_and_type' ? +val(f.id + 'n') : 0; if (n > 0) { ans.rooms = n; said.push(`${n} rooms a night.`); }
+    } else if (f.kind === 'rooms') { const n = +val(f.id); if (n > 0) { ans.rooms = n; said.push(`${n} rooms a night.`); } }
+    else if (f.kind === 'dates') { const a = val(f.id + 'a'), d = val(f.id + 'd'); if (a && d) { ans.arrival = a; ans.departure = d; said.push(`Arriving ${day(a)}, departing ${day(d)}.`); } }
+    else if (f.kind === 'layout') { const x = val(f.id); if (x) { ans.meeting_layout = x; said.push(x === 'any' ? 'Any meeting room layout is fine.' : `${x[0].toUpperCase() + x.slice(1)} layout.`); } }
+    else if (f.kind === 'meeting_date') { const x = val(f.id); if (x) { ans.meeting_date = x; said.push(`The meeting is on ${day(x)}.`); } }
+    else if (f.kind === 'payer') { const x = val(f.id); if (x) { ans.payer = x; said.push(`The payer is ${x}.`); } }
+    else if (f.kind === 'taxes') { const x = val(f.id); if (x) { ans.budget_includes_taxes = x === 'true'; said.push(`Our budget ${x === 'true' ? 'includes' : 'excludes'} taxes.`); } }
+    else if (f.kind === 'meeting_size') { const x = val(f.id); if (x) { ans.meeting_size = x; said.push(x === 'drop_meeting' ? "We'll go without the meeting room." : 'Please quote the meeting room at its capacity.'); } }
+    else { const x = val(f.id); if (x) { other.push(`${f.q}: ${x}`); } }
+  }
+  return {ans, text: [...said, ...other.map(x => x + '.')].join(' ')};
 }
 function formHtml(v) {
   const t = v && v.terms;
@@ -200,8 +257,7 @@ function formHtml(v) {
       <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send counteroffer')}`;
   if (form === 'change') return `<div class="form"><label>Fewer rooms per night<input type="number" id="fRooms" value="2" min="1"></label></div>
       <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send change request')}`;
-  if (form === 'answers') return `<div class="form"><label>Meeting layout<input type="text" id="fLayout" value="classroom"></label><label>Legal payer<input type="text" id="fPayer"></label>
-      <label>Budget includes taxes?<select id="fTax"><option value="true">Yes</option><option value="false">No</option></select></label></div>${go('Send answers')}`;
+  if (form === 'answers') return `<div class="form answers">${questionFields().map(f => f.html).join('')}</div>${go('Send answers')}`;
   if (form === 'msg') return `<textarea id="fText" rows="3" placeholder="Message to the hotel" style="margin-top:10px"></textarea>${go('Send')}`;
   return '';
 }
@@ -209,11 +265,6 @@ function refresh() { lastJSON = ''; draftDirty = false; load(); }
 function wire() {
   if ($('draft')) $('draft').oninput = () => { draftDirty = true; };
   document.querySelectorAll('[data-form]').forEach(b => b.onclick = () => { form = b.dataset.form || null; $('act').innerHTML = actions(); wire(); if (!form) refresh(); });
-  document.querySelectorAll('[data-org]').forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    try { await api(`/api/buyer/${CFG.id}/organizer`, {token: CFG.t, approval_id: b.dataset.org, decision: b.dataset.d}); toast(b.dataset.d === 'approve' ? 'Authorized' : 'Rejected'); }
-    catch (e) {} finally { refresh(); }
-  });
   const act = (action, text, payload) => api(`/api/buyer/${CFG.id}`, {token: CFG.t, action, text, payload});
   document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -226,8 +277,7 @@ function wire() {
         await act('reply', `${span(o.arrival, o.departure)} works for us. Please send the offer for those dates.`, {dates: {arrival: o.arrival, departure: o.departure}});
       }
       else if (a === 'accept') {
-        const r = await act('accept', `We accept version ${v.n}.`, {version: v.n});
-        if (r.accepted === false) note = 'Over your own limits: your organizer needs to sign off';
+        await act('accept', `We accept version ${v.n}.`, {version: v.n});
       } else if (a === 'sendForm') {
         const text = $('fText') ? $('fText').value.trim() : '';
         if (form === 'counter') {
@@ -236,8 +286,9 @@ function wire() {
         } else if (form === 'change') {
           const n = +$('fRooms').value; await act('change_request', text || `Please reduce our block by ${n} rooms per night.`, {rooms_per_night: n});
         } else if (form === 'answers') {
-          const ans = {meeting_layout: $('fLayout').value, payer: $('fPayer').value, budget_includes_taxes: $('fTax').value === 'true'};
-          await act('reply', `Layout: ${ans.meeting_layout}. Payer: ${ans.payer}. Our budget ${ans.budget_includes_taxes ? 'includes' : 'excludes'} taxes.`, {answers: ans});
+          const {ans, text: said} = collectAnswers();
+          if (!said) { toast('Fill in at least one answer'); b.disabled = false; return; }
+          await act('reply', said, {answers: ans});
         } else if (form === 'msg') { if (!text) { toast('Write a message first'); b.disabled = false; return; } await act('message', text, {}); }
         form = null;
       }

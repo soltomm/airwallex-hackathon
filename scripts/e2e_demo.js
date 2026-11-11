@@ -8,6 +8,11 @@
 // Needs Playwright for Node (npm i playwright; npx playwright install chromium). It resets the
 // scenario first, so don't point it at a demo someone is presenting. The buyer's moves are made in
 // the buyer's mailbox page (/inbox/<ref>), as in the demo; the hotel's in the dashboard. Exit code 1 if any check fails.
+//
+// The dashboard is the OpenFlow workbench: inquiries are rows in its table and open Harbour's deal controls
+// in a side drawer (#liveDrawer, a modal dialog); Reset scenario, Seller rules and Room availability are under
+// the property tools in the sidebar. The page behind an open drawer can't be clicked, so page-level steps
+// close it first.
 const { chromium } = require('playwright');
 
 const BASE = (process.env.BASE || 'http://localhost:8010').replace(/\/$/, '');
@@ -36,13 +41,25 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     }
     throw new Error(`${name} stuck in ${d && d.status}, expected ${statuses}`);
   };
-  const open = async name => { await page.click(`#queue >> text=${name}`); await page.waitForTimeout(400); };
+  const closeDrawers = async () => {
+    for (const b of await page.$$('dialog[open] [data-wb-close]')) await b.click();
+    await page.waitForTimeout(200);
+  };
+  const open = async name => {                                       // a deal's controls, in the drawer
+    await closeDrawers();
+    await page.click(`#wbTable .wb-inquiry:has-text("${name}")`);
+    await page.waitForSelector('#liveDrawer[open] #deal .title', { timeout: 10000 });
+    await page.waitForTimeout(400);
+  };
+  const tools = async () => {                                        // property tools fold away on phones
+    if (!(await page.$eval('.wb-bottom', el => el.open))) await click('.wb-bottom > summary');
+  };
   const tab = async key => { await page.click(`[data-tab=${key}]`); await page.waitForTimeout(300); };
   const card = () => page.innerText('#deal');
   const click = async (sel) => { await page.click(sel); await page.waitForTimeout(500); };
-  const demo = async on => {                                         // open or close Demo controls
-    if ((await page.$eval('#demo', el => el.classList.contains('open'))) !== on) await click('#demoBtn');
-  };
+  // Presenter-only moves with no dashboard button (the demo script's held refund notification).
+  const post = (path, body = {}) => page.evaluate(([p, b]) => fetch(p, {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(b)}).then(r => r.json()), [path, body]);
   const shot = async n => SHOTS && page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
 
   // The buyer side lives in each buyer's mailbox page, outside the hotel dashboard.
@@ -58,11 +75,16 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
 
   try {
     await page.goto(`${BASE}/${TOKEN ? '?k=' + encodeURIComponent(TOKEN) : ''}`);
-    await page.waitForSelector('#queue .q', { timeout: 60000 });   // a sleeping free server can take a minute
+    await page.waitForSelector('#wbTable .wb-inquiry', { timeout: 60000 });   // a sleeping free server can take a minute
 
     // 1. Reset: the seller starts on its own. Northstar gets questions, Summit a quote.
-    await demo(true); await click('#reset'); await click('#resetYes'); await demo(false);
+    await closeDrawers(); await tools();
+    check('Reset scenario is in the property tools', await page.isVisible('#reset') && !(await page.isVisible('#resetAsk')));
+    await click('#reset');
+    check('reset asks inline before it resets', await page.isVisible('#resetYes') && await page.isVisible('#resetNo'));
+    await click('#resetYes');
     check('reset asks inline, no browser dialog', dialogs.length === 0);
+    check('the confirmation closes after the reset', await page.isVisible('#reset') && !(await page.isVisible('#resetAsk')));
     let n = await settle('Northstar', ['needs_info']);
     const s1 = await settle('Summit', ['offer_sent']);
     check('the seller started by itself after the reset', !!n && s1.status === 'offer_sent');
@@ -99,17 +121,12 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await click('#deal [data-ap][data-d=approve]');                  // hotel manager, on the dashboard
     n = await settle('Northstar', ['offer_sent']);
 
-    // 4. Accept v2 in the mailbox: over Northstar's limits, so its organizer signs off there too.
+    // 4. Accept v2 in the mailbox; the seller opens checkout.
     await mb.waitForSelector('button:has-text("Accept v2")', { timeout: 10000 });
     await mclick(mb, 'button:has-text("Accept v2")');
-    n = await settle('Northstar', ['acceptance_pending_organizer']);
+    n = await settle('Northstar', ['awaiting_payment']);
     const accMsg = n.thread.filter(m => m.from === 'buyer').pop().text;
     check('the accept message states no limits', !/£3,000|30% limit|budget/.test(accMsg), accMsg);
-    check('the dashboard only says the buyer is signing off', /organizer is signing off/.test(await page.innerText('#deal .next'))
-          && (await page.$$('#deal [data-ap]')).length === 0);
-    await mb.waitForSelector('[data-org][data-d=approve]', { timeout: 10000 });
-    await mclick(mb, '[data-org][data-d=approve]');                  // organizer, in the mailbox
-    n = await settle('Northstar', ['awaiting_payment']);
 
     // 5. Pay from the mailbox on the (simulated) hosted page; returning confirms the booking.
     await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
@@ -156,7 +173,8 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
 
     // 8. Deliver the held notification: a duplicate, nothing changes. Final figures.
     const ledgerBefore = s.ledger.length;
-    await demo(true); await click('#releaseN'); await demo(false);
+    check('the refund notification was held back', s.delayed_notifications > 0);
+    await post('/api/notifications/release');
     s = await state(); n = s.deals.find(d => d.company.startsWith('Northstar'));
     check('late notification changes nothing', s.ledger.length === ledgerBefore);
     check('£3,312 net received, £4,968 still due', n.finance_view.net_received === 331200 && n.finance_view.still_due === 496800,
@@ -164,7 +182,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     check('10 twins a night', Object.values(n.booking.rooms).every(r => r === 10));
     await mb.reload(); await mb.waitForSelector('.box.ok', { timeout: 10000 });
     check('the mailbox shows the booking and £3,312 paid', /£3,312 paid/.test(await mb.innerText('#act')));
-    await tab('money');
+    await open('Northstar'); await tab('money');
     txt = await card();
     check('Payments tab shows £3,312 and £4,968', /£3,312/.test(txt) && /£4,968/.test(txt));
     await tab('agent');
@@ -172,8 +190,9 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await shot('3-final');
 
     // Seller rules page: lists the rules, refuses an inconsistent change, saves and restores one.
-    await click('#rulesBtn'); await page.waitForSelector('#rules table', { timeout: 10000 });
-    check('Seller rules page opens from the left column', await page.isVisible('#rules') && !(await page.isVisible('#desk')));
+    await closeDrawers(); await tools();
+    await click('#wbRules'); await page.waitForSelector('#rules table', { timeout: 10000 });
+    check('Seller rules page opens from the property tools', await page.isVisible('#rules') && !(await page.isVisible('#workbench')));
     txt = await page.innerText('#rules');
     check('rules page shows who decides, with the current figures', /who decides/i.test(txt) && /£210 or more/.test(txt) && /£195 to £209/.test(txt));
     await page.fill('[data-path="rms.rates.twin.autonomous_floor"]', '230'); await click('#rulesSave');
@@ -188,8 +207,8 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await click('#rulesBack');
 
     // 9. Availability button under the inquiries, and back.
-    await click('#availBtn');
-    check('Availability page opens from the left column', await page.isVisible('#avail') && !(await page.isVisible('#desk')));
+    await tools(); await click('#wbAvailability');
+    check('Availability page opens from the property tools', await page.isVisible('#avail') && !(await page.isVisible('#workbench')));
     check('availability opens on the demo stay month', (await page.innerText('#availMonth')) === 'March 2027'
       && /10 Mar night/.test(await page.innerText('#availDay')));
     check('the year strip offers every month of the bookable window', (await page.$$('#availMonths button')).length === 12);
@@ -203,7 +222,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     check('the chosen month survives a refresh of the data', (await page.innerText('#availMonth')) === 'May 2027');
     await shot('5-availability');
     await click('#availBack');
-    check('Back to deals returns', await page.isVisible('#desk'));
+    check('Back to deals returns to the overview', await page.isVisible('#workbench'));
 
     // 10. Phone width: no sideways scroll on any tab of either deal.
     await page.setViewportSize({ width: 375, height: 800 });
@@ -215,7 +234,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
         if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) wide.push(`${name}/${k}`);
       }
     }
-    await click('#rulesBtn');
+    await closeDrawers(); await tools(); await click('#wbRules');
     if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) wide.push('rules');
     await click('#rulesBack');
     await mb.setViewportSize({ width: 375, height: 800 }); await mb.waitForTimeout(300);

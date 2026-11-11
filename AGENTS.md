@@ -8,12 +8,12 @@ deposit, an amendment and a partial refund. Read [README.md](README.md) and
 ## Where things are
 
 - `src/agentbank/groupsales/`: the product. `engine.py` enforces every rule (authority, versions,
-  inventory, money, privacy); `calc.py` prices; `policy.py` holds authority and mandates;
+  inventory, money, privacy); `calc.py` prices; `policy.py` holds the hotel's authority rules;
   `seller.py` / `rules.py` are the sellers; `provider.py` talks to Airwallex (or its simulated twin).
   `generator.py` writes generated inquiries (an RFP plus a private buyer brief) for automated runs.
 - `scripts/group_sales.py`: the server (dashboard, buyer mailbox, payment page, webhooks, API).
 - `web/group_sales.html` (hotel dashboard), `web/group_buyer.html` (buyer mailbox), `web/group_pay.html`.
-- `data/groupsales/scenario.json`: the hotel data, the two RFPs and the buyers' private mandates.
+- `data/groupsales/scenario.json`: the hotel data, the two RFPs and the buyers' private briefs.
 - `tests/`: unit and server tests; `tests/fuzz_group_sales.py` randomized scenarios;
   `scripts/e2e_demo.js` browser walk-through of the demo script.
 - Other files (`hotel_*`, `offer_desk`, `metal/`, `payee_check`, ...) are the earlier Hotel
@@ -62,7 +62,7 @@ variables or GitHub settings, and don't trigger deploys. Ask a person.
 
 - Money, prices, authority, inventory and approvals are enforced in `engine.py`, not in prompts.
   Never move a rule into a prompt, loosen a limit, or let RFP text change behaviour.
-- Privacy: the seller never sees a buyer's mandate (budget, deposit limits, organizer notes); the
+- Privacy: the seller never sees a buyer's private brief (objectives, prepared answers, notes); the
   buyer never sees hotel floors, costs, margins, flags or unsent versions.
 - Money calls: save the operation before calling the provider, look up on timeout instead of
   resubmitting, one unresolved refund at a time, ledger entries keyed so repeats change nothing.

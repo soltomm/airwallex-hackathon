@@ -10,7 +10,7 @@ its own private brief.
 The model negotiates and explains. Prices, authority, inventory, approvals and money movement are
 enforced in code (`src/agentbank/groupsales/engine.py`), so nothing an agent writes and nothing inside
 an RFP can change them. Each side sees only its own private constraints: the seller never sees the
-buyer's budget mandate or deposit limits, and the buyer never sees the hotel's floors, costs or
+buyer's private brief (its goals and prepared answers), and the buyer never sees the hotel's floors, costs or
 margins. The presenter dashboard shows both sides.
 
 Money follows the Airwallex Payments for Platforms model: the platform collects each deposit for the
@@ -27,7 +27,7 @@ Offline, with no keys (simulated Airwallex twin, rules seller):
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[agent]' pytest
 PAYMENTS=simulated SELLER_MODE=rules PYTHONPATH=src .venv/bin/python scripts/group_sales.py
-# open http://localhost:8010, then Demo controls → Reset scenario → Yes, reset; the seller starts on its own
+# open http://localhost:8010, then ↻ Reset scenario (sidebar) → Yes, reset; the seller starts on its own
 ```
 
 With the Airwallex sandbox and the Claude seller, copy `.env.example` to `.env` and fill in
@@ -48,7 +48,7 @@ AWX_WEBHOOK_SECRET=             # optional: accept signed webhooks at POST /webh
 `/pay/…`, `/webhooks/…` and `/healthz` stay open when `GS_ACCESS_TOKEN` is set; the payment page
 checks the deal's own buyer token and webhooks check their signature.
 
-## Hotel data and buyer mandates
+## Hotel data and buyer briefs
 
 Everything the scenario needs is in [`data/groupsales/scenario.json`](data/groupsales/scenario.json):
 
@@ -59,7 +59,7 @@ Everything the scenario needs is in [`data/groupsales/scenario.json`](data/group
 | `policy` | Deposit (30% standard, up to 40%, 20–29% with the manager), attrition (10%, up to 20% with the manager), installments, cancellation, 24-hour quotes and holds, arrivals at least 31 days ahead (for shorter notice, or dates outside the calendar, the seller offers dates it can sell), £500 seller refund limit |
 | `crm` | What the hotel knows about each sender |
 | `inbox` | The two RFPs: Northstar Analytics (12 twins, meeting room, £10,000 budget) and Summit Robotics (8 kings) |
-| `buyers` | Each buyer's private mandate: budget, deposit limit (£ and %), objectives (e.g. Northstar wants 20% attrition), known answers, and Northstar's later change request |
+| `buyers` | Each buyer's private brief: objectives (e.g. Northstar wants 20% attrition), known answers, and Northstar's later change request |
 
 Expected figures (tested): Northstar £9,600 with a 40% deposit of £3,840 and a 7 room-night
 allowance, margin 45.0% / 43.1% after displacement; after the two-room reduction £8,280, revised deposit £3,312, refund

@@ -29,6 +29,9 @@ def d(s: str) -> date:
 #   "room_type": "twin", "rate": 22000,
 #   "rooms": {"2027-03-10": 12, ...},            # contracted rooms per night
 #   "released": {"2027-03-10": 0, ...},          # cumulative rooms released per night (amendments)
+#   "charged_room_nights": 0,                    # released room-nights still paid at the rate (beyond the
+#                                                #   allowance or after the release deadline), cumulative
+#   "waived": 0,                                 # pence of those charges waived by the manager, cumulative
 #   "breakfast": {"2027-03-11": 24, ...},        # guests per morning (guaranteed)
 #   "meeting": {"room": "thames", "date": "2027-03-11", "layout": "classroom", "attendees": 24,
 #               "hours": "09:00-17:00"} | None,
@@ -41,6 +44,15 @@ def contracted_room_nights(terms: dict) -> int:
 
 def released_room_nights(terms: dict) -> int:
     return sum(int(n) for n in (terms.get("released") or {}).values())
+
+
+def charged_room_nights(terms: dict) -> int:
+    return int(terms.get("charged_room_nights") or 0)
+
+
+def free_released_room_nights(terms: dict) -> int:
+    """Released room-nights that used the attrition allowance (released and not charged)."""
+    return released_room_nights(terms) - charged_room_nights(terms)
 
 
 def attrition_allowance(terms: dict) -> int:
@@ -59,6 +71,9 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     contracted = contracted_room_nights(terms)
     released = released_room_nights(terms)
     used_rn = contracted - released
+    charged = charged_room_nights(terms)
+    waived = int(terms.get("waived") or 0)
+    attrition_charge = charged * rate
     bf_unit = hotel["breakfast"]["price_per_person"]
     bf_count = sum(int(n) for n in (terms.get("breakfast") or {}).values())
     meeting = terms.get("meeting")
@@ -67,7 +82,13 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
     lines = [{"item": f"{hotel['room_types'][rt]['label']} room-nights", "qty": used_rn, "unit": rate,
               "amount": used_rn * rate}]
     if released:
-        lines[0]["note"] = f"{contracted} contracted, {released} released under attrition"
+        lines[0]["note"] = f"{contracted} contracted, {released} released"
+    if charged:
+        lines.append({"item": "Attrition charge (released room-nights beyond the allowance or after the release "
+                              "deadline, at the contracted rate)", "qty": charged, "unit": rate,
+                      "amount": attrition_charge})
+    if waived:
+        lines.append({"item": "Attrition charge waived", "qty": 1, "unit": -waived, "amount": -waived})
     if bf_count:
         lines.append({"item": "Breakfast (guests x mornings, guaranteed)", "qty": bf_count, "unit": bf_unit,
                       "amount": bf_count * bf_unit})
@@ -77,13 +98,14 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
                               f"{', '.join(mr['includes'])})", "qty": 1, "unit": meeting_price,
                       "amount": meeting_price})
     accommodation = used_rn * rate
+    charges_net = attrition_charge - waived
     vendor_lines = terms.get('vendor_lines', [])
     vendor_total = sum(line['total'] for line in vendor_lines)
     vendor_cost = sum(line['cost'] for line in vendor_lines)
     for line in vendor_lines:
         lines.append({'item': line['label'] + ' (third-party service)', 'qty': line['quantity'],
                       'unit': None, 'amount': line['total'], 'note': f"{line['start']} to {line['end']}; {line['location']}; bundled price"})
-    total = accommodation + bf_count * bf_unit + meeting_price + vendor_total
+    total = accommodation + charges_net + bf_count * bf_unit + meeting_price + vendor_total
     deposit = pct_of(total, int(terms["deposit_pct"]))
 
     costs = rms["delivery_costs"]
@@ -92,7 +114,7 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
         # Delivery costs follow the rooms used. Displacement is carried on every contracted room-night;
         # released rooms get the resale share back (actual releases night by night, the rest of the
         # allowance at the average for the stay). Third-party vendor services pass through at their cost.
-        revenue = room_nights * rate + bf_count * bf_unit + meeting_price + vendor_total
+        revenue = room_nights * rate + charges_net + bf_count * bf_unit + meeting_price + vendor_total
         more = used_rn - room_nights
         resold = disp["resold_released"] + (disp["blocked"] * more * disp["resale_pct"]) // (contracted * 100 or 1)
         cost = (room_nights * costs[rt] + disp["blocked"] - resold + bf_count * costs["breakfast"]
@@ -102,13 +124,16 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
                 "margin_pct": round(100 * contrib / revenue, 1) if revenue else 0.0}
 
     allowance = attrition_allowance(terms)
-    remaining_allowance = max(0, allowance - released)
+    remaining_allowance = max(0, allowance - (released - charged))
     return {
         "currency": "GBP",
         "lines": lines,
         "room_nights": used_rn,
         "contracted_room_nights": contracted,
         "released_room_nights": released,
+        "charged_room_nights": charged,
+        "attrition_charge": attrition_charge,
+        "waived": waived,
         "breakfasts": bf_count,
         "accommodation": accommodation,
         "breakfast_total": bf_count * bf_unit,
@@ -119,7 +144,11 @@ def price(terms: dict, hotel: dict, rms: dict) -> dict:
         "attrition_pct": int(terms["attrition_pct"]),
         "attrition_allowance": allowance,
         "allowance_remaining": remaining_allowance,
-        "per_room_night_incl_breakfast": rate + (bf_unit * bf_count // used_rn if used_rn else 0),
+        # Breakfast per room-night counts at most a full room (max occupancy): guests beyond the block's beds
+        # don't make the room itself dearer.
+        "per_room_night_incl_breakfast": rate + (min(bf_unit * bf_count // used_rn,
+                                                     bf_unit * int(hotel["room_types"][rt].get("max_occupancy") or 2))
+                                                 if used_rn else 0),
         "displacement": disp,
         "margin_all_rooms": contribution(used_rn),
         "margin_full_release": contribution(used_rn - remaining_allowance),
@@ -215,8 +244,15 @@ def cancellation_terms(policy: dict) -> str:
 # ---- reductions ----------------------------------------------------------------------------
 
 def evaluate_reduction(terms: dict, release: dict, today: str, hotel: dict, policy: dict, rms: dict,
-                       net_received: int) -> dict:
-    """What happens if the buyer releases `release` ({night: rooms}) on `today` under `terms`."""
+                       net_received: int, waive: int = 0) -> dict:
+    """What happens if the buyer releases `release` ({night: rooms}) on `today` under `terms`.
+
+    The contract prices every outcome, so no release is refused or left to judgement: room-nights
+    released within the attrition allowance and before the release deadline come off the total;
+    any others are released to inventory but still charged at the contracted rate (the attrition
+    charge). `waive` (pence) gives back part of this change's charge; only the hotel manager can grant
+    it, so a waiver is the one thing that makes a reduction need review.
+    """
     dates = key_dates(arrival_of(terms), policy)
     new_released = dict(terms.get("released") or {n: 0 for n in terms["rooms"]})
     for night, n in release.items():
@@ -228,34 +264,52 @@ def evaluate_reduction(terms: dict, release: dict, today: str, hotel: dict, poli
     requested = sum(int(n) for n in release.values())
     allowance = attrition_allowance(terms)
     already = released_room_nights(terms)
-    within_allowance = already + requested <= allowance
+    free_used = free_released_room_nights(terms)
     before_deadline = today[:10] <= dates["release_deadline"]
     before_installment = today[:10] < dates["first_installment_due"]
-    new_terms = {**terms, "released": new_released}
+    free = min(requested, max(0, allowance - free_used)) if before_deadline else 0
+    charged = requested - free
+    rate = int(terms["rate"])
+    charge = charged * rate
+    waive = int(waive or 0)
+    if waive < 0 or waive > charge:
+        raise ValueError(f"a waiver must be between £0 and this change's attrition charge ({gbp(charge)})")
+    new_terms = {**terms, "released": new_released,
+                 "charged_room_nights": charged_room_nights(terms) + charged,
+                 "waived": int(terms.get("waived") or 0) + waive}
+    old_price = price(terms, hotel, rms)
     new_price = price(new_terms, hotel, rms)
     new_deposit = new_price["deposit"]
-    auto_refund = within_allowance and before_deadline and before_installment
-    refund = max(0, net_received - new_deposit) if auto_refund else 0
-    reasons = []
-    if not within_allowance:
-        reasons.append(f"releases {already + requested} room-nights in total, above the {allowance} allowed")
-    if not before_deadline:
-        reasons.append(f"after the room-release deadline ({dates['release_deadline']})")
+    refund = max(0, net_received - new_deposit) if before_installment else 0
+    charge_reasons = []
+    if charged and before_deadline:
+        charge_reasons.append(f"{charged} room-night(s) beyond the {allowance} room-night allowance "
+                              f"({free_used} already used)")
+    if charged and not before_deadline:
+        charge_reasons.append(f"released after the room-release deadline ({dates['release_deadline']})")
+    review = [f"waives {gbp(waive)} of the {gbp(charge)} attrition charge"] if waive else []
+    total_change = new_price["total"] - old_price["total"]
     return {
         "requested_room_nights": requested,
         "allowance": allowance,
         "already_released": already,
-        "remaining_after": max(0, allowance - already - requested),
-        "within_allowance": within_allowance,
+        "free_room_nights": free,
+        "charged_room_nights": charged,
+        "attrition_charge": charge,
+        "waived": waive,
+        "charge_reasons": charge_reasons,
+        "remaining_after": max(0, allowance - free_used - free),
+        "within_allowance": charged == 0,
         "before_release_deadline": before_deadline,
         "before_first_installment": before_installment,
-        "needs_manager_review": bool(reasons),
-        "review_reasons": reasons,
+        "needs_manager_review": bool(review),
+        "review_reasons": review,
         "new_terms": new_terms,
         "new_pricing": new_price,
-        "accommodation_change": new_price["accommodation"] - price(terms, hotel, rms)["accommodation"],
+        "accommodation_change": new_price["accommodation"] - old_price["accommodation"],
+        "total_change": total_change,
         "revised_deposit": new_deposit,
         "refund_due": refund,
-        "refund_mode": ("automatic" if auto_refund else
-                        "manager reconciliation" if within_allowance and before_deadline else "manager review"),
+        "refund_mode": ("automatic" if before_installment else
+                        "none" if total_change == 0 else "manager reconciliation"),
     }

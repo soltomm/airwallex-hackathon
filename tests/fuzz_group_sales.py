@@ -41,13 +41,13 @@ from agentbank.groupsales import calc  # noqa: E402
 from agentbank.groupsales.buyer import suggest  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
-from agentbank.groupsales.policy import buyer_check, hotel_check  # noqa: E402
+from agentbank.groupsales.policy import hotel_check  # noqa: E402
 from agentbank.groupsales.provider import SimulatedProvider  # noqa: E402
 from agentbank.groupsales.seller import TOOLS, ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.groupsales.trace import TOOLS as TRACE_TOOLS  # noqa: E402
 
 STATUSES = {"new", "intake", "needs_info", "dates_proposed", "pending_approval", "approved_to_send", "revise", "offer_sent",
-            "acceptance_pending_organizer", "accepted", "awaiting_payment", "confirmed", "amendment_sent",
+            "accepted", "awaiting_payment", "confirmed", "amendment_sent",
             "amendment_review", "amendment_approved", "refund_due", "refund_awaiting_approval", "refund_pending",
             "refund_failed", "expired", "handoff", "declined", "lost", "payment_received_booking_exception"}
 SENT_STATES = {"sent", "accepted", "superseded_by_amendment"}
@@ -172,11 +172,12 @@ class ChaosSeller:
                  "room_type": r.choice([None, "twin", "king"]), "rooms_per_night": r.choice([None, 0, 2, 12, 40])}
                 for _ in range(r.randint(0, 2))]}
         if name == "prepare_reduction":
-            return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": ""}
+            return {**a, "rooms_per_night": r.randint(0, 6), "message_to_buyer": "",
+                    "waive_gbp": r.choice([0, 0, 0, 50, 220, 440, 100000, -10]), "justification_for_manager": "client"}
         if name == "refund_excess":
             return {**a, "justification": "owed"}
         if name == "escalate":
-            return {**a, "reason": "chaos", "message_to_buyer": ""}
+            return {**a, "reason": "chaos", "message_to_buyer": "", "why_a_person": "", "what_a_person_should_do": ""}
         if name == "log_reasoning":
             return {"deal_id": None, "note": "thinking"}
         return a
@@ -285,7 +286,7 @@ class Case:
         if not pend:
             return
         a = self.rng.choice(pend)
-        actor = a["approver"] if self.rng.random() > 0.1 else self.rng.choice(["seller", "buyer", "hotel_manager", "organizer"])
+        actor = a["approver"] if self.rng.random() > 0.1 else self.rng.choice(["seller", "buyer", "hotel_manager"])
         decision = "approve" if self.rng.random() < 0.8 else "reject"
         try:
             self.e.decide_approval(a["id"], decision, actor)
@@ -495,11 +496,47 @@ def check(e: Engine, provider: SimulatedProvider):
         if h["status"] == "active" and h["expires_at"] <= now:
             _fail(f"hold {h['id']} still active after it expired")
 
+    # The hotel manager is only ever asked when a seller rule is crossed, and the card names that rule.
+    for a in s["approvals"].values():
+        if a["approver"] != "hotel_manager":
+            continue
+        d = s["deals"][a["deal_id"]]
+        if not a.get("rules") or not a.get("if_approved") or not a.get("if_rejected"):
+            _fail(f"{d['ref']} approval {a['id']} ({a['subject']}) doesn't name the rule it crosses or its outcomes")
+        if a["subject"] == "offer":
+            v = next(x for x in d["versions"] if x["n"] == a["version"])
+            if a["rules"] != hotel_check(v["terms"], v["pricing"], scen)["rules"]:
+                _fail(f"{d['ref']} v{v['n']}: approval rules {a['rules']} are not the rules its terms cross")
+        elif a["subject"] == "refund":
+            if not a["cumulative"] > a["limit"]:
+                _fail(f"{d['ref']} refund approval {a['id']} requested within the seller's {gbp(a['limit'])} limit")
+        elif a["subject"] == "reduction":
+            v = next(x for x in d["versions"] if x["n"] == a["version"])
+            if not v["reduction"]["waived"] or a["amount"] != v["reduction"]["waived"]:
+                _fail(f"{d['ref']} v{v['n']}: change sent for approval without a waiver")
+        else:
+            _fail(f"{d['ref']} approval {a['id']}: unexpected hotel-manager subject {a['subject']}")
+
     for d in s["deals"].values():
         if d["status"] not in STATUSES:
             _fail(f"{d['ref']} has unknown status {d['status']}")
         mandate = scen["buyers"].get(d.get("buyer_profile") or "")
         for v in d["versions"]:
+            if v["kind"] == "amendment":
+                # A change is priced by its contract; the only concession, a waiver of the attrition charge,
+                # never reaches the buyer without the manager's approval of that exact version.
+                if calc.price(v["terms"], hotel, e.rms) != v["pricing"]:
+                    _fail(f"{d['ref']} v{v['n']}: pricing does not match its terms")
+                base = next(x for x in d["versions"] if x["n"] == v["base_version"])
+                waived = int(v["terms"].get("waived") or 0) - int(base["terms"].get("waived") or 0)
+                if waived > v["reduction"]["attrition_charge"] or waived < 0:
+                    _fail(f"{d['ref']} v{v['n']}: waiver {waived} outside its charge")
+                if waived and (v.get("sent_at") or v["status"] in SENT_STATES) and not any(
+                        a["deal_id"] == d["id"] and a["subject"] == "reduction" and a["approver"] == "hotel_manager"
+                        and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
+                        for a in s["approvals"].values()):
+                    _fail(f"{d['ref']} v{v['n']} waived {gbp(waived)} without the manager's approval")
+                continue
             if v["kind"] != "offer":
                 continue
             # The price on a version is what the calculator says for its terms (nothing edited in between).
@@ -515,12 +552,6 @@ def check(e: Engine, provider: SimulatedProvider):
                     and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
                     for a in s["approvals"].values()):
                 _fail(f"{d['ref']} v{v['n']} was sent without the manager approval it needs: {chk['approvals']}")
-            if v["status"] in ("accepted", "superseded_by_amendment") and mandate:
-                if buyer_check(v["terms"], v["pricing"], mandate) and not any(
-                        a["deal_id"] == d["id"] and a["subject"] == "acceptance" and a["approver"] == "organizer"
-                        and a["version"] == v["n"] and a["hash"] == v["hash"] and a["status"] == "approved"
-                        for a in s["approvals"].values()):
-                    _fail(f"{d['ref']} v{v['n']} accepted beyond the buyer's mandate without the organizer")
 
         # A booking needs a verified payment of the accepted deposit.
         b = d.get("booking")
@@ -564,9 +595,7 @@ def check(e: Engine, provider: SimulatedProvider):
             _fail(f"{d['ref']} buyer view shows the seller's case to the manager")
         if mandate:
             seller_raw = json.dumps(e.deal_view(d["id"], for_="seller"), default=str)
-            for secret in [gbp(mandate["deposit_limit"]), f"{mandate['deposit_limit_pct']}% limit"] + [
-                    r for a in s["approvals"].values() if a["deal_id"] == d["id"] and a["approver"] == "organizer"
-                    for r in a["reasons"]]:
+            for secret in [mandate["flexibility"]]:
                 if secret in seller_raw and secret not in d["thread"][0]["text"]:
                     _fail(f"{d['ref']} seller view shows the buyer's mandate: {secret!r}")
 
@@ -608,7 +637,7 @@ def check(e: Engine, provider: SimulatedProvider):
     for x in s["activity"]:
         if x["kind"] in ("approval_approved", "approval_rejected"):
             a_actor = x["actor"]
-            if a_actor not in ("hotel_manager", "organizer"):
+            if a_actor != "hotel_manager":
                 _fail(f"approval decided by {a_actor}")
 
     # The AI Agent record is well formed.

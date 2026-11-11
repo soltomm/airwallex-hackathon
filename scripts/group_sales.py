@@ -6,7 +6,7 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
      PUBLIC_BASE_URL (for Airwallex return URLs)  AWX_WEBHOOK_SECRET (to accept Airwallex webhooks)
      GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
-     GS_MAX_CLAUDE_RUNS_PER_DAY (default 150): beyond this the seller falls back to rules.
+     GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -36,6 +36,7 @@ from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
 from agentbank.groupsales import vendors  # noqa: E402
+from agentbank.groupsales import understand  # noqa: E402
 from agentbank.groupsales.provider import make_provider  # noqa: E402
 from agentbank.groupsales.seller import ClaudeSeller, RulesSeller  # noqa: E402
 from agentbank.webhooks import signature_ok  # noqa: E402
@@ -44,12 +45,15 @@ PORT = int(os.environ.get("GS_PORT") or os.environ.get("PORT") or "8010")
 VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
 PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
-MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY", "150"))
+# No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
+# Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
+MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
+MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
 OPEN_PATHS = ("/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
 # token instead, so a buyer can use the link without the hotel's access token. Presenter tools
 # (/api/buyer/<id>/suggest and /agent) still need the dashboard token.
-BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view|/organizer)?)$")
+BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view)?)$")
 WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
@@ -99,7 +103,7 @@ class Runner:
                     if self.claude_runs["day"] != today:
                         self.claude_runs = {"day": today, "n": 0}
                     self.claude_runs["n"] += 1
-                    if self.claude_runs["n"] > MAX_CLAUDE_RUNS:
+                    if MAX_CLAUDE_RUNS and self.claude_runs["n"] > MAX_CLAUDE_RUNS:
                         mode = "rules"
                         engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
                                     "seller until tomorrow.", actor="system")
@@ -143,7 +147,7 @@ def inbox_path(d) -> str:
 
 def buyer_view(deal_id: str, token: str) -> dict:
     """What the buyer's mailbox shows: the buyer's own view of the deal (no floors, costs, margins or
-    hotel approvals), its organizer's pending sign-offs, the payment link and the brief's next move."""
+    hotel approvals), the payment link and the brief's next move."""
     import secrets as _s
     d = engine.deal(deal_id)
     if not _s.compare_digest(token or "", d["buyer_token"]):
@@ -152,10 +156,6 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["contact"] = (d.get("sender") or "").split("<")[0].strip() or d["company"]
     v["hotel"] = engine.hotel["name"]
     v["clock"] = engine.now()
-    v["organizer"] = [{"id": a["id"], "version": a["version"], "reasons": a.get("reasons") or [],
-                       "summary": a.get("summary", "")}
-                      for a in engine.s["approvals"].values()
-                      if a["deal_id"] == d["id"] and a["approver"] == "organizer" and a["status"] == "pending"]
     v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None
     v["suggestion"] = suggest(engine, d["id"])
     v["buyer_mode"] = runner.settings["buyer_mode"]
@@ -182,9 +182,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(n) if n else b""
-        return raw
+        """The request body, or None when it is refused (the response has then been sent): no request needs more
+        than MAX_BODY bytes, and reading whatever length a client claims let one request hold the server."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:
+            self._send(400, {"error": "invalid Content-Length"})
+            return None
+        if n > MAX_BODY:
+            self._send(413, {"error": f"request too large ({n:,} bytes; the limit is {MAX_BODY:,})"})
+            self.close_connection = True
+            return None
+        return self.rfile.read(n) if n else b""
 
     def _json(self, raw):
         try:
@@ -216,13 +227,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
-            assets = {"/assets/openflow.css": ("openflow.css", "text/css"),
+            assets = {"/assets/revenue.js": ("revenue.js", "text/javascript"),
+                      "/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
             if p in assets:
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                return self._send(200, engine.pricing_review(p.split('/')[3]))
             if p == "/api/state":
                 return self._send(200, state())
             if p.startswith('/api/vendors/') and p.endswith('/history'):
@@ -268,6 +282,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p = u.path.rstrip("/")
         raw = self._body()
+        if raw is None:
+            return
         b = self._json(raw)
         if not self._authorized(p, {}):
             return self._send(401, {"error": "access token required"})
@@ -296,6 +312,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.update_payer(p.split("/")[3], b.get('country_code'), b.get('currency')))
             if p.startswith("/api/deals/") and p.endswith("/fx_simulate"):
                 return self._send(200, engine.simulate_fx_receipt(p.split("/")[3]))
+            if p.startswith('/api/deals/') and p.endswith('/pricing_review'):
+                did=p.split('/')[3]
+                if b.get('action') == 'request':
+                    return self._send(200, engine.request_pricing_review(did,b.get('reason') or 'Sales requested a revenue pricing decision.',b.get('requested_rate'),actor='hotel staff'))
+                return self._send(200, engine.pricing_review_action(did,b.get('action'),b.get('payload') or {},actor='hotel_manager'))
             if p.startswith("/api/deals/") and p.endswith("/hand_back"):
                 return self._send(200, engine.hand_back(p.split("/")[3], b.get("instruction", ""), actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/close"):
@@ -306,13 +327,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.onboard_hotel_account(actor="hotel staff"))
             if p.startswith("/api/deals/") and p.endswith("/retry_payout"):
                 return self._send(200, engine.retry_payout(p.split("/")[3], actor="hotel staff"))
-            if p.startswith("/api/buyer/") and p.endswith("/organizer"):
-                did = p.split("/")[3]
-                buyer_view(did, b.get("token", ""))          # checks the buyer token
-                a = engine.s["approvals"].get(b.get("approval_id", ""))
-                if not a or a["deal_id"] != engine.deal(did)["id"] or a["approver"] != "organizer":
-                    return self._send(400, {"error": "no such organizer sign-off on this booking"})
-                return self._send(200, engine.decide_approval(a["id"], b.get("decision"), "organizer", b.get("note", "")))
             if p == "/api/seller/run":
                 threading.Thread(target=runner.run_once, args=("presenter asked the seller to run", True),
                                  daemon=True).start()
@@ -464,7 +478,9 @@ def main():
     threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
     print(f"Harbour House group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
-          f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']})")
+          f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']}, "
+          f"rules seller reads emails with: {'the model' if understand.available() else 'patterns (no Anthropic key)'})",
+          flush=True)
     srv.serve_forever()
 
 

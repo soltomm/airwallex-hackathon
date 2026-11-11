@@ -22,7 +22,7 @@
       const status=['confirmed','declined','expired'].includes(d.status) ? d.status : n.cls==='you' ? 'approval' : ['new','intake','needs_info'].includes(d.status) ? 'draft' : d.status==='handoff' ? 'unavailable' : 'proposal';
       const rooms = d.booking?.rooms || v?.terms.rooms;
       return {id:d.id, company:d.company, contact:d.sender, generated:d.generated, arrival:r.arrival, departure:r.departure, rooms:r.rooms || (rooms ? Math.max(...Object.values(rooms)) : 0),
-        payer:d.payer_fx, status, label:({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
+        payer:d.payer_fx, status, label:d.pricing_review?.status==='pending'?'Awaiting revenue review':({handoff:'Staff attention',declined:'Declined',expired:'Expired'})[d.status] || labels[status], total:v?.pricing.total || 0, paid:d.finance_view?.net_received || 0, payout:d.payout_view,
         nights:rooms ? Object.values(rooms).reduce((a,b)=>a+b,0)+(v?.terms.vendor_lines||[]).filter(l=>l.category==='rooms').reduce((n,l)=>n+l.quantity,0) : (r.arrival && r.departure ? Math.max(0,(Date.parse(r.departure)-Date.parse(r.arrival))/864e5)*(r.rooms||0) : 0),
         next:n.short, review:['you','bad'].includes(n.cls) || ['new','intake'].includes(d.status), open:!['confirmed','declined','expired'].includes(d.status)};
     });
@@ -80,8 +80,7 @@
   const COUNTRIES = [['', 'United Kingdom (GBP)'], ['DE', 'Germany (EUR)'], ['FR', 'France (EUR)'], ['NL', 'Netherlands (EUR)'],
     ['US', 'United States (USD)'], ['AU', 'Australia (AUD)'], ['SG', 'Singapore (SGD)'], ['JP', 'Japan (JPY)']];
   const TRAIT_LABEL = {fits:'Rooms free on the dates', short_rooms:'Fewer rooms free than asked', too_soon:'Too soon to sell to a group',
-    comfortable:'Comfortable budget', tight:'Tight: at the seller’s floor', below_floor:'Below the seller’s floor',
-    standard:'Standard deposit limit (40%)', low:'Low deposit limit (25%): organizer sign-off'};
+    comfortable:'Comfortable budget', tight:'Tight: at the seller’s floor', below_floor:'Below the seller’s floor'};
   const opts = (name, values, pick) => `<select id="wbT_${name}">${values.map(([v, l]) => `<option value="${html(v)}" ${String(v)===String(pick ?? '')?'selected':''}>${html(l)}</option>`).join('')}</select>`;
   function traitForm(c) {
     const d = c.defaults, t = c.traits, pairs = k => t[k].map(v => [v, TRAIT_LABEL[v] || v]);
@@ -90,7 +89,6 @@
       <div class="wb-terms">
         <label class="wb-field">Dates${opts('availability', pairs('availability'), d.availability)}</label>
         <label class="wb-field">Price pressure${opts('price', pairs('price'), d.price)}</label>
-        <label class="wb-field">Buyer’s deposit limit${opts('deposit', pairs('deposit'), d.deposit)}</label>
         <label class="wb-field">Attrition the buyer wants${opts('attrition', [['', 'Hotel standard'], ['20', '20% (traded for a bigger deposit)']], d.attrition)}</label>
         <label class="wb-field">Room type${opts('room_type', [['', 'Either'], ['twin', 'Twin'], ['king', 'King']], d.room_type)}</label>
         <label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>
@@ -102,7 +100,7 @@
       <button class="wb-primary" type="button" id="wbCustom">Send this inquiry to Harbour House</button></details>`;
   }
   function readTraits() {
-    const v = k => $('wbT_' + k).value, out = {availability: v('availability'), price: v('price'), deposit: v('deposit'),
+    const v = k => $('wbT_' + k).value, out = {availability: v('availability'), price: v('price'),
       change_rooms: Number(v('change_rooms')), meeting: v('meeting') === '1',
       missing: [...document.querySelectorAll('[name=wbMissing]:checked')].map(x => x.value)};
     if (v('attrition')) out.attrition = Number(v('attrition'));
@@ -124,7 +122,7 @@
     const S = actual(), b = S?.bookable;
     const cards = Object.keys(catalog.presets).map(k => { const i = catalog.info[k] || {title: k, shows: ''};
       return `<button class="wb-channel" data-preset="${html(k)}"><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry →</span></button>`; }).join('');
-    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Harbour House a generated group inquiry. Each one comes with a private brief for the buyer agent: its answers, goals and limits, which the seller never sees. From the email on, the seller agent, the buyer agent and the backend’s rules take over${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
+    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Harbour House a generated group inquiry. Each one comes with a private brief for the buyer agent: its answers and goals, which the seller never sees. From the email on, the seller agent, the buyer agent and the backend’s rules take over${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
       ${buyerToggle(catalog.buyer_mode)}
       ${thirdPartyForm()}
       <label class="wb-field wb-seed">Seed (optional)<input id="wbSeed" inputmode="numeric" pattern="[0-9]*" placeholder="Leave blank for a new inquiry each time"></label>
@@ -168,7 +166,15 @@
       const from=$('wbInquiryFrom').value.trim(), subject=$('wbInquirySubject').value.trim(), body=$('wbInquiryText').value.trim();
       if(!from||!body){notify('Add who it is from and the inquiry text.');return;}
       $('wbSend').disabled=true;
-      try { const id=await window.Harbour.inbound(from,subject||'Group inquiry',body,thirdPartyOptions()); $('wbDrawer').close(); refresh(); window.Harbour.open(id); }
+      try {
+        const r=await window.Harbour.inbound(from,subject||'Group inquiry',body,thirdPartyOptions());
+        if(r.duplicate){
+          const msg=`Harbour House already received this exact email from ${from} (${r.ref||'an earlier inquiry'}), so it wasn't sent again. To start a new inquiry, change the text or the sender.`;
+          $('wbSend').disabled=false; notify(msg);
+          setTimeout(()=>{ $('wbDrawer').close(); refresh(); window.Harbour.open(r.deal_id); notify(msg); }, 2500); return;
+        }
+        $('wbDrawer').close(); refresh(); window.Harbour.open(r.deal_id);
+      }
       catch(err){ notify(err.message); $('wbSend').disabled=false; }
     };
   }
