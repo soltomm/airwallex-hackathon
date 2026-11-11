@@ -173,7 +173,9 @@ def generate(engine: Engine, traits: dict | None = None, preset: str | None = No
     if t["price"] == "tight":
         target_rate = bands["autonomous_floor"]
     elif t["price"] == "below_floor":
-        target_rate = _round(bands["absolute_min"] + (bands["autonomous_floor"] - bands["absolute_min"]) // 2, 500)
+        # Under the prepayment floor too, so the price goes to revenue review rather than a prepayment trade.
+        low = bands.get("prepay_floor", bands["autonomous_floor"])
+        target_rate = _round(bands["absolute_min"] + (low - bands["absolute_min"]) // 2, 500)
 
     def estimate(rate: int) -> int:
         terms = {"room_type": rt, "rate": rate, "rooms": {n: rooms for n in nights}, "released": {n: 0 for n in nights},

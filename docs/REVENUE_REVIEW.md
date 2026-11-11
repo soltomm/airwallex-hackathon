@@ -3,12 +3,15 @@
 Pricing review adds an internal decision to the existing inquiry drawer and offer
 engine. It does not replace the dashboard, change rate bands, or waive margin rules.
 
-When the rules seller receives a buyer counteroffer in the manager's discretionary
-rate band (at/above the hard minimum, below the seller's floor), it pauses and routes
-an inquiry-owned task to the Revenue team. A package below the hard margin floor
-also routes to revenue for a higher counteroffer or an alternative scope. Ordinary
-bargaining at the seller's floor continues for requests below the absolute minimum;
-the agent cannot promise that such a request can be approved. The Claude seller
+When the rules seller receives a buyer counteroffer at or above the hard minimum but
+below the prepayment floor (£195-£199 twin, £170-£174 king), it pauses and routes an
+inquiry-owned task to the Revenue team. From the prepayment floor up to the seller's
+floor, the seller first offers its own prepayment trade (a lower rate for 50% paid on
+signing, see GROUP_SALES.md); only if that trade can't be offered (margin on busy dates,
+capacity) does the request go to revenue. A package below the hard margin floor
+also routes to revenue for a higher counteroffer or an alternative scope. Below the
+absolute minimum the seller answers with the prepayment trade at its floor, or ordinary
+bargaining at its own floor; the agent cannot promise that such a request can be approved. The Claude seller
 has a request-only tool and the same engine enforcement. Existing generic pricing
 handoffs also offer **Request revenue pricing review**.
 

@@ -488,7 +488,7 @@ function negRound(d, r) {
   const out = ch.version ? `Sent as v${ch.version}` + (ch.status === 'pending_approval' ? ', waiting for the manager' : '') : 'Still deciding';
   return `<div class="ask"><b>${esc(r.ask.summary)}</b>${r.ask.text ? `<q>“${esc(r.ask.text.length > 220 ? r.ask.text.slice(0, 220) + '…' : r.ask.text)}”</q>` : ''}</div>
     <div class="scroll"><table class="t"><tr><th>Package priced</th><th class="r tot">Total</th><th class="r">Deposit</th><th class="r">Margin</th><th>Hotel rules</th></tr>${rows}</table></div>
-    <p class="why"><b>${out}.</b>${ch.explanation ? ' ' + esc(ch.explanation) : ''}</p>`;
+    <p class="why"><b>${out}.</b>${ch.explanation ? ' ' + esc(ch.explanation[0].toUpperCase() + ch.explanation.slice(1)) : ''}</p>`;
 }
 function negotiationCard(d) {
   const rounds = (d.negotiation || []).filter(r => r.options && r.options.length);

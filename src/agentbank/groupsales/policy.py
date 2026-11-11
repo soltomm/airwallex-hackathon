@@ -34,6 +34,11 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     bands = rms["rates"][rt]
     rate, dep, att = int(terms["rate"]), int(terms["deposit_pct"]), int(terms["attrition_pct"])
     dep_pol, att_pol = policy["deposit"], policy["attrition"]
+    # Prepayment: a buyer who pays at least this share on signing may have a rate below the seller's floor, down
+    # to the prepayment floor, on standard attrition. It is a package of its own, not an exception: it needs no
+    # approval, and it can't be combined with a below-floor rate or extra attrition that does.
+    pp = policy.get("prepay") or {}
+    prepaid = bool(pp) and dep >= pp["min_deposit_pct"]
 
     if terms.get("currency", "GBP") != "GBP":
         hard.append("all charges are billed in GBP")
@@ -49,18 +54,30 @@ def hotel_check(terms: dict, pricing: dict, scenario: dict) -> dict:
     if rate < bands["absolute_min"]:
         hard.append(f"{rt} rate {gbp(rate)} is below the absolute minimum {gbp(bands['absolute_min'])}")
     exception_terms = False
+    pfloor = bands.get("prepay_floor", bands["autonomous_floor"])
     if rate < bands["autonomous_floor"]:
-        needs.append(f"{rt} rate {gbp(rate)} below the seller's floor {gbp(bands['autonomous_floor'])}")
-        rules.append(rule(f"{rt.capitalize()} rate", f"{gbp(bands['autonomous_floor'])} or more", gbp(rate)))
-        exception_terms = True
+        if prepaid:
+            if rate < pfloor:
+                hard.append(f"with {pp['min_deposit_pct']}%+ paid on signing the {rt} rate can go down to "
+                            f"{gbp(pfloor)}, not {gbp(rate)}")
+        else:
+            needs.append(f"{rt} rate {gbp(rate)} below the seller's floor {gbp(bands['autonomous_floor'])}")
+            rules.append(rule(f"{rt.capitalize()} rate", f"{gbp(bands['autonomous_floor'])} or more", gbp(rate)))
+            exception_terms = True
     if att > att_pol["max_pct_with_approval"]:
         hard.append(f"attrition {att}% exceeds the {att_pol['max_pct_with_approval']}% maximum")
     elif att > att_pol["standard_pct"]:
-        needs.append(f"attrition {att}% above the standard {att_pol['standard_pct']}%")
-        rules.append(rule("Free release (attrition)", f"up to {att_pol['standard_pct']}%", f"{att}%"))
-        exception_terms = True
-    if dep > dep_pol["max_pct"]:
-        hard.append(f"deposit {dep}% above the {dep_pol['max_pct']}% maximum")
+        if prepaid:
+            hard.append(f"prepayment terms come with the standard {att_pol['standard_pct']}% attrition, not {att}%")
+        else:
+            needs.append(f"attrition {att}% above the standard {att_pol['standard_pct']}%")
+            rules.append(rule("Free release (attrition)", f"up to {att_pol['standard_pct']}%", f"{att}%"))
+            exception_terms = True
+    if dep > 100:
+        hard.append(f"deposit {dep}% is more than the total")
+    elif dep > dep_pol["max_pct"] and not prepaid:
+        hard.append(f"deposit {dep}% above the {dep_pol['max_pct']}% maximum"
+                    + (f" (prepayment starts at {pp['min_deposit_pct']}% paid on signing)" if pp else ""))
     if dep < dep_pol["min_pct_with_approval"]:
         hard.append(f"deposit {dep}% below the {dep_pol['min_pct_with_approval']}% minimum")
     if exception_terms and dep != dep_pol["required_pct_for_exceptions"]:

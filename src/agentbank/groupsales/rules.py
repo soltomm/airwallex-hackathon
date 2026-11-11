@@ -18,12 +18,16 @@ EDITABLE = [
      "The rate per twin room-night the seller quotes first."),
     ("rms.rates.twin.autonomous_floor", "Twin floor for the seller", "gbp", "Room rates",
      "The lowest twin rate the seller may agree alone. Below it needs the hotel manager."),
+    ("rms.rates.twin.prepay_floor", "Twin floor with prepayment", "gbp", "Room rates",
+     "With the prepayment share paid on signing, the seller may go down to this twin rate alone."),
     ("rms.rates.twin.absolute_min", "Twin absolute minimum", "gbp", "Room rates",
      "No twin rate below this is possible, even with approval."),
     ("rms.rates.king.target", "King target rate", "gbp", "Room rates",
      "The rate per king room-night the seller quotes first."),
     ("rms.rates.king.autonomous_floor", "King floor for the seller", "gbp", "Room rates",
      "The lowest king rate the seller may agree alone. Below it needs the hotel manager."),
+    ("rms.rates.king.prepay_floor", "King floor with prepayment", "gbp", "Room rates",
+     "With the prepayment share paid on signing, the seller may go down to this king rate alone."),
     ("rms.rates.king.absolute_min", "King absolute minimum", "gbp", "Room rates",
      "No king rate below this is possible, even with approval."),
     ("policy.deposit.standard_pct", "Standard deposit", "pct", "Deposit",
@@ -34,6 +38,9 @@ EDITABLE = [
      "The seller may ask for up to this much without approval."),
     ("policy.deposit.required_pct_for_exceptions", "Deposit for exception terms", "pct", "Deposit",
      "A rate below the seller's floor, or attrition above the standard, must come with exactly this deposit."),
+    ("policy.prepay.min_deposit_pct", "Prepayment", "pct", "Deposit",
+     "Paid on signing, at least this share earns the prepayment floor (standard attrition only). "
+     "Must be above the highest deposit."),
     ("policy.attrition.standard_pct", "Standard attrition", "pct", "Attrition",
      "Share of room-nights the buyer may release free of charge on standard terms."),
     ("policy.attrition.max_pct_with_approval", "Highest attrition, with approval", "pct", "Attrition",
@@ -88,6 +95,9 @@ def validate(sc: dict) -> list[str]:
         if not b["absolute_min"] <= b["autonomous_floor"] <= b["target"]:
             out.append(f"{rt.capitalize()} rates must go absolute minimum ≤ seller's floor ≤ target "
                        f"(now {gbp(b['absolute_min'])}, {gbp(b['autonomous_floor'])}, {gbp(b['target'])})")
+        elif not b["absolute_min"] <= b.get("prepay_floor", b["autonomous_floor"]) <= b["autonomous_floor"]:
+            out.append(f"{rt.capitalize()} floor with prepayment must be between the absolute minimum and the seller's "
+                       f"floor (now {gbp(b['prepay_floor'])})")
         cost = sc["rms"]["delivery_costs"].get(rt)
         if cost is not None and b["absolute_min"] <= cost:
             out.append(f"{rt.capitalize()} absolute minimum must be above the {gbp(cost)} cost of a room-night")
@@ -98,6 +108,10 @@ def validate(sc: dict) -> list[str]:
     if not dep["standard_pct"] <= dep["required_pct_for_exceptions"] <= dep["max_pct"]:
         out.append(f"The deposit for exception terms must be between the standard ({dep['standard_pct']}%) "
                    f"and the highest deposit ({dep['max_pct']}%)")
+    pp = sc["policy"].get("prepay")
+    if pp and not dep["max_pct"] < pp["min_deposit_pct"] <= 100:
+        out.append(f"Prepayment ({pp['min_deposit_pct']}%) must be above the highest deposit ({dep['max_pct']}%) "
+                   "and at most 100%")
     if dep["max_pct"] > 100 or dep["min_pct_with_approval"] < 1:
         out.append("Deposits must be between 1% and 100%")
     if not att["standard_pct"] <= att["max_pct_with_approval"]:
@@ -186,6 +200,12 @@ def seller_brief(sc: dict) -> str:
         f"{dep['min_pct_with_approval']}-{dep['standard_pct'] - 1}% needs manager approval and a reason (high-value "
         f"repeat customer or large total spend). Attrition {att['standard_pct']}% standard; up to "
         f"{att['max_pct_with_approval']}% with manager approval.\n"
+        + (f"  Prepayment: if the buyer pays at least {sc['policy']['prepay']['min_deposit_pct']}% on signing (deposit_pct "
+           f"{sc['policy']['prepay']['min_deposit_pct']}-100), you may go below your floor alone, down to "
+           f"{gbp(t['prepay_floor'])} twin / {gbp(k['prepay_floor'])} king, on standard {att['standard_pct']}% attrition only "
+           "(a trade for a buyer pushing on price: lower rate, more cash up front). Deposits between "
+           f"{dep['max_pct'] + 1}% and {sc['policy']['prepay']['min_deposit_pct'] - 1}% aren't offered.\n"
+           if sc["policy"].get("prepay") else "") +
         f"  A rate below your floor or attrition above {att['standard_pct']}% requires a "
         f"{dep['required_pct_for_exceptions']}% deposit. Contribution margin must stay at least "
         f"{sc['rms']['min_contribution_margin_pct']}% with all rooms used and with the full free-release allowance "

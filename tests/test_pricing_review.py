@@ -93,9 +93,18 @@ def test_review_dedup_role_notes_rejection_and_buyer_privacy(eng):
 
 def test_rules_seller_routes_below_authority_counter_to_revenue(eng):
     d=inquiry(eng)
-    result=RulesSeller(eng)._counter(d['id'],{'rate':17900})
-    assert 'revenue' in result and d['pricing_review']['requested_rate']==17900
+    # King: absolute minimum £170, prepayment floor £175, seller's floor £180. Below the prepayment floor is revenue's call.
+    result=RulesSeller(eng)._counter(d['id'],{'rate':17200})
+    assert 'revenue' in result and d['pricing_review']['requested_rate']==17200
     assert d['status']=='handoff' and len(d['versions'])==1
+
+
+def test_rules_seller_trades_prepayment_between_the_prepay_floor_and_its_own(eng):
+    d=inquiry(eng)
+    result=RulesSeller(eng)._counter(d['id'],{'rate':17900})
+    assert 'prepayment' in result and not d.get('pricing_review')
+    t=d['versions'][-1]['terms']
+    assert (t['rate'],t['deposit_pct'])==(17900,eng.policy['prepay']['min_deposit_pct'])
 
 
 def test_revenue_routes_are_protected_and_preview_safe(server,monkeypatch):
