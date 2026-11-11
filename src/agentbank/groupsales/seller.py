@@ -620,6 +620,13 @@ class RulesSeller:
         d = e.deal(deal_id)
         cur = d["versions"][-1]
         t = cur["terms"]
+        # Price the buyer's ask exactly as written first: the hotel's negotiation record then shows what was
+        # asked, what the rules say about it, and the counter chosen instead. A dry run; it commits nothing.
+        try:
+            e.price_terms(deal_id, int(ask.get("rate") or t["rate"]), int(ask.get("deposit_pct") or t["deposit_pct"]),
+                          int(ask.get("attrition_pct") or t["attrition_pct"]), rooms_per_night=min(t["rooms"].values()))
+        except (Refused, ValueError, TypeError):
+            pass      # an ask the engine can't even price is still answered by the counter below
         att = min(int(ask.get("attrition_pct") or t["attrition_pct"]), e.policy["attrition"]["max_pct_with_approval"])
         dep = int(ask.get("deposit_pct") or t["deposit_pct"])
         rate = t["rate"]
@@ -848,7 +855,10 @@ How to work:
 - For pricing deadlocks, use request_pricing_review instead of a generic escalation. Revenue staff must decide; do not call this to override hard price or margin limits.
 - If read_deal shows a staff_instruction, hotel staff handed the deal back to you: act on it with your
   tools, within the hotel's rules, and reply to the buyer.
-- Price with price_terms before you commit. Then propose_offer with an itemized, plain message to the
+- Price with price_terms before you commit. When the buyer asks for different terms, price their ask as
+  written first, then the alternatives you would consider, so the hotel can see what you weighed (the
+  dashboard shows every package you price, with its margin and what the rules say about it). Pass the
+  reason for the package you choose as explanation. Then propose_offer with an itemized, plain message to the
   buyer and an explanation of any difference from their request (unmet list). The engine creates the
   version, the 24-hour hold and any approval request. If the requested package can't be held, propose
   a feasible alternative or explain why you can't quote.
