@@ -132,7 +132,7 @@ function asked(m) {
   let h = '';
   // The hotel's questions are in its email; m.questions only drives the Answer form. Listing them again under the
   // email showed every question twice once the Claude seller wrote them in its own words.
-  if (ds.length) h += `<ol class="qs">${ds.map(o => `<li>${esc(span(o.arrival, o.departure))}</li>`).join('')}</ol>`;
+  if (ds.length) h += `<ol class="qs">${ds.map(o => `<li>${esc(optLabel(o))}</li>`).join('')}</ol>`;
   return h;
 }
 function render() {
@@ -161,6 +161,8 @@ function render() {
 }
 const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 'T12:00:00Z'), m = d => d.toLocaleDateString('en-GB', {month: 'long', timeZone: 'UTC'});
   return x.getUTCMonth() === y.getUTCMonth() ? `${x.getUTCDate()} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}` : `${x.getUTCDate()} ${m(x)} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}`; };
+// A date option's label names its rooms too, so two options on the same dates can never look identical.
+const optLabel = o => span(o.arrival, o.departure) + (o.rooms_per_night ? ` · ${o.rooms_per_night} ${o.room_type ? o.room_type + ' ' : ''}room${o.rooms_per_night === 1 ? '' : 's'}` : '');
 const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send'};
 function actions() {
   let h = '';
@@ -196,7 +198,7 @@ function actions() {
   if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
   if (V.status === 'needs_info' && !s) h += `<button data-form="answers">Answer…</button>`;
   const opts = V.status === 'dates_proposed' ? ((V.thread.slice().reverse().find(m => m.date_options) || {}).date_options || []) : [];
-  opts.forEach((o, i) => { h += `<button class="${i ? '' : 'btn-p'}" data-act="dates" data-i="${i}">Take ${esc(span(o.arrival, o.departure))}</button>`; });
+  opts.forEach((o, i) => { h += `<button class="${i ? '' : 'btn-p'}" data-act="dates" data-i="${i}">Take ${esc(optLabel(o))}</button>`; });
   if (booked && !(s && s.action === 'change_request')) h += `<button data-form="change">Request a change…</button>`;
   h += `<button data-form="msg">Message…</button></div>${formHtml(v)}</div>`;
   return h;

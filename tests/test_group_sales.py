@@ -460,6 +460,12 @@ def test_offer_dates_cannot_offer_inventory_that_does_not_exist(eng):
             e.offer_dates(d["id"], [bad], "Other dates.")
     with pytest.raises(Refused):
         e.offer_dates(d["id"], [], "Other dates.")
+    # Options are alternatives: the same dates twice (a mixed king + twin block split in two) is refused.
+    with pytest.raises(Refused, match="offered twice"):
+        e.offer_dates(d["id"], [{"arrival": "2027-02-11", "departure": "2027-02-14", "room_type": "king", "rooms_per_night": 10},
+                                {"arrival": "2027-02-11", "departure": "2027-02-14", "room_type": "twin", "rooms_per_night": 6}],
+                      "Other dates.")
+    assert not any(m.get("date_options") for m in deal_by(e, "microshift.example")["thread"])
     sug = e.suggest_dates(d["id"])
     assert sug["options"][0]["arrival"] == "2027-02-11" and sug["options"][0]["fits_rooms"]
     assert all(o["arrival"] >= "2027-02-11" for o in sug["options"])          # never at short notice

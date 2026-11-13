@@ -909,7 +909,9 @@ How to work:
   do not hand the deal to a person and do not tell the buyer it is going to staff. Call suggest_dates,
   then offer_dates with the best one to three options, in a short email that says which dates are not
   available and which are, for example: "We are unable to offer 3 to 6 January. We can accommodate your
-  group from 11 to 14 February 2027." Ask any missing questions in the same email. When the buyer picks
+  group from 11 to 14 February 2027." Each option is an alternative date range the buyer picks one of,
+  with one room type: never offer the same dates twice, and never offer a block that mixes room types.
+  Ask any missing questions in the same email. When the buyer picks
   dates, record_requirements with them and carry on to a quote.
 - Services the hotel does not offer (anything beyond twin/king rooms, breakfast and the Thames Room):
   escalate to a person with a clear reason. If hotel staff later hand the deal back telling you to
@@ -1070,8 +1072,9 @@ TOOLS = [
                                                                  "message": _S}),
     _tool("suggest_dates", "When the requested dates can't be sold: dates in the group calendar with rooms free, nearest first.",
           {**_DEAL, "room_type": _RT}),
-    _tool("offer_dates", "Email the buyer available dates instead of the ones requested. Each option must be in the group "
-          "calendar with the rooms free; the engine checks.", {
+    _tool("offer_dates", "Email the buyer available dates instead of the ones requested. Each option is an alternative the "
+          "buyer picks one of: distinct dates, one room type, in the group calendar with the rooms free; the "
+          "engine checks.", {
         **_DEAL, "options": {"type": "array", "items": {"type": "object", "additionalProperties": False,
                              "required": ["arrival", "departure", "room_type", "rooms_per_night"], "properties": {
                                  "arrival": {"type": "string", "description": "YYYY-MM-DD"},

@@ -756,6 +756,13 @@ class Engine:
                     raise Refused(f"option {o} needs valid arrival and departure dates")
                 if not nights:
                     raise Refused(f"option {o['arrival']} to {o['departure']}: departure must be after arrival")
+                if any(c["arrival"] == o["arrival"] and c["departure"] == o["departure"] for c in clean):
+                    # Options are alternatives the buyer picks one of, and a deal has one room type. Two options
+                    # on the same dates (e.g. 10 king + 6 twin meant as one block) showed up as two identical
+                    # "Take" buttons, and picking either quoted only the first option's rooms.
+                    raise Refused(f"option {o['arrival']} to {o['departure']} is offered twice: options are "
+                                  "alternative dates the buyer picks one of, and a block can't mix room types. "
+                                  "Offer one room type per date range.")
                 if any(n not in self.hotel["capacity"] for n in nights):
                     raise Refused(f"option {o['arrival']} to {o['departure']} is outside the group calendar "
                                   f"({bookable.window_text(self.hotel)})")
