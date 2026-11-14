@@ -64,10 +64,6 @@ main { max-width: 780px; margin: 0 auto; padding: 18px 18px 60px; }
 .box h3 { margin: 0 0 4px; font-size: 15px; } .box p { margin: 4px 0 10px; }
 .box .who { font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700; margin-bottom: 4px; color: var(--muted); }
 .box.warn .who { color: var(--warn); } .box.ok .who { color: var(--ok); }
-.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 10px 0 8px; }
-.form label { display: grid; gap: 3px; font-size: 12.5px; color: var(--muted); }
-.form label { min-width: 0; }
-.form input, .form select { width: 100%; min-width: 0; box-sizing: border-box; }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }
 .pulse { animation: pulse 1.1s infinite; } @keyframes pulse { 50% { opacity: .35; } }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 90vw; }
@@ -97,7 +93,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/\bHarbour\s+House\b/gi, 'Groupy').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) / 100).toLocaleString('en-GB', {minimumFractionDigits: Math.abs(p) % 100 ? 2 : 0, maximumFractionDigits: 2});
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
-let V = null, form = null, lastJSON = '', opened = new Set(), draftDirty = false;
+let V = null, lastJSON = '', opened = new Set(), draftDirty = false;
 
 function toast(t) { document.querySelectorAll('.toast').forEach(x => x.remove()); const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 3500); }
 async function api(path, body) {
@@ -112,7 +108,7 @@ async function load() {
   V = v;
   $('clock').textContent = 'Scenario time ' + new Date(v.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
   const j = JSON.stringify(v);
-  if (j === lastJSON || form || draftDirty || busyTyping()) return;
+  if (j === lastJSON || draftDirty || busyTyping()) return;
   lastJSON = j;
   render();
 }
@@ -130,7 +126,7 @@ function asked(m) {
   const qs = (m.questions || []).filter(q => q && String(q).trim()), ds = m.date_options || [];
   const said = (m.text || '').toLowerCase();
   let h = '';
-  // The hotel's questions are in its email; m.questions only drives the Answer form. Listing them again under the
+  // The hotel's questions are already in its email text. Listing them again under the
   // email showed every question twice once the Claude seller wrote them in its own words.
   if (ds.length) h += `<ol class="qs">${ds.map(o => `<li>${esc(optLabel(o))}</li>`).join('')}</ol>`;
   return h;
@@ -163,7 +159,6 @@ const span = (a, b) => { const x = new Date(a + 'T12:00:00Z'), y = new Date(b + 
   return x.getUTCMonth() === y.getUTCMonth() ? `${x.getUTCDate()} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}` : `${x.getUTCDate()} ${m(x)} to ${y.getUTCDate()} ${m(y)} ${y.getUTCFullYear()}`; };
 // A date option's label names its rooms too, so two options on the same dates can never look identical.
 const optLabel = o => span(o.arrival, o.departure) + (o.rooms_per_night ? ` · ${o.rooms_per_night} ${o.room_type ? o.room_type + ' ' : ''}room${o.rooms_per_night === 1 ? '' : 's'}` : '');
-const SUG = {reply: 'Send answers', counter: 'Send counteroffer', accept: 'Accept', change_request: 'Send change request', message: 'Send'};
 function actions() {
   let h = '';
   if (V.pay_url) {
@@ -178,125 +173,31 @@ function actions() {
   }
   if (V.hotel_busy) h += `<p class="small muted"><span class="dot pulse"></span>${esc(V.hotel)} is replying…</p>`;
   if (V.buyer_mode === 'agent') return h + `<div class="box wait"><h3>The buyer agent is answering for you</h3><p class="small">It replies from ${esc(V.company)}'s brief on its own. Choose Buyer replies: "By you, in the buyer's mailbox" in the hotel's New inquiry drawer to reply here.</p></div>`;
-  const v = cur(), s = V.suggestion, open = v && v.status === 'sent', booked = V.booking && V.booking.status === 'confirmed';
   if (['lost', 'declined'].includes(V.status)) return h;
-  if (V.status === 'handoff') {
-    // A person at the hotel has the request. The buyer can still add details or ask something: the message goes to
-    // the hotel's team (the deal shows it as unread), not to the seller agent.
-    return h + `<div class="box"><div class="who">Reply</div><p class="small muted">${esc(V.hotel)}'s group sales team has your request and will reply here. You can still write to them.</p>
-      <div class="row"><button class="btn-p" data-form="msg">Write to the team…</button></div>${formHtml(null)}</div>`;
-  }
-  h += `<div class="box"><div class="who">Reply</div>`;
-  if (s) {
-    h += `<p class="small muted">Draft from ${esc(V.company)}'s private brief. Edit it if you like.</p>
-      <textarea id="draft" rows="4">${esc(s.text)}</textarea>
-      <div class="row" style="margin-top:8px"><button class="btn-p" data-act="sendSug">${s.action === 'accept' && v ? 'Accept v' + v.n : SUG[s.action] || 'Send'}</button>`;
-  } else {
-    h += `<p class="small muted">${V.waiting_on === 'hotel' ? `Waiting for ${esc(V.hotel)}. You can still write to them.` : booked ? 'Nothing needed from you right now.' : 'Nothing drafted from your brief right now.'}</p><div class="row">`;
-  }
-  if (open && !(s && s.action === 'accept')) h += `<button class="${s ? '' : 'btn-p'}" data-act="accept">Accept v${v.n}</button>`;
-  if (open && v.kind === 'offer') h += `<button data-form="counter">Counter…</button>`;
-  if (V.status === 'needs_info' && !s) h += `<button data-form="answers">Answer…</button>`;
-  const opts = V.status === 'dates_proposed' ? ((V.thread.slice().reverse().find(m => m.date_options) || {}).date_options || []) : [];
-  opts.forEach((o, i) => { h += `<button class="${i ? '' : 'btn-p'}" data-act="dates" data-i="${i}">Take ${esc(optLabel(o))}</button>`; });
-  if (booked && !(s && s.action === 'change_request')) h += `<button data-form="change">Request a change…</button>`;
-  h += `<button data-form="msg">Message…</button></div>${formHtml(v)}</div>`;
-  return h;
-}
-// ---- answers to the hotel's questions: one field per question it asked ------------------------------------------
-function lastQuestions() {
-  const m = V.thread.slice().reverse().find(x => x.from === 'seller' && (x.questions || []).length);
-  return m ? m.questions.filter(q => q && String(q).trim()) : [];
-}
-function questionFields() {
-  const sel = (id, opts) => `<select id="${id}"><option value="">Choose…</option>${opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>`;
-  const lab = (text, input) => `<label>${esc(text)}${input}</label>`;
-  const types = [['king', 'King'], ['twin', 'Twin'], ['any', 'Either is fine']];
-  return lastQuestions().map((q, i) => {
-    const l = String(q).toLowerCase(), id = 'fq' + i;
-    // Matched by keywords, not exact wording: the rules seller asks in fixed phrases, the Claude seller in its own.
-    const roomType = l.startsWith('room type') || (l.includes('king') && l.includes('twin'));
-    if (l.startsWith('room type and number of rooms'))
-      return {q, kind: 'rooms_and_type', id, html: lab('Room type', sel(id + 't', types)) + lab('Rooms per night', `<input type="number" id="${id}n" min="1">`)};
-    if (roomType) return {q, kind: 'room_type', id, html: lab('Room type', sel(id, types))};
-    if (l.startsWith('number of rooms')) return {q, kind: 'rooms', id, html: lab('Rooms per night', `<input type="number" id="${id}" min="1">`)};
-    if (l.startsWith('arrival and departure') || (l.includes('arrival') && l.includes('departure'))) return {q, kind: 'dates', id, html: lab('Arrival', `<input type="date" id="${id}a">`) + lab('Departure', `<input type="date" id="${id}d">`)};
-    if (l.startsWith('meeting room layout')) {
-      const inside = (String(q).match(/\(([^)]*)\)/) || [, ''])[1];
-      const opts = inside.split(',').map(x => x.trim()).filter(x => x && x !== '...' && !x.endsWith('...'));
-      return {q, kind: 'layout', id, html: lab('Meeting room layout', sel(id, [...opts.map(o => [o, o[0].toUpperCase() + o.slice(1)]), ['any', 'Any layout is fine']]))};
-    }
-    if (l === 'meeting date') return {q, kind: 'meeting_date', id, html: lab('Meeting date', `<input type="date" id="${id}">`)};
-    if (l.startsWith('legal name') || l.includes('legal name') || l.includes('company paying')) return {q, kind: 'payer', id, html: lab('Company paying (legal name)', `<input type="text" id="${id}" placeholder="e.g. Acme Ltd">`)};
-    if (l.startsWith('whether the budget includes taxes')) return {q, kind: 'taxes', id, html: lab('Does your budget include taxes?', sel(id, [['true', 'Yes'], ['false', 'No']]))};
-    const size = String(q).match(/^whether to quote the (.+?) for (\d+) people/i);
-    if (size) return {q, kind: 'meeting_size', id, html: lab(`The ${size[1]} seats ${size[2]}`, sel(id, [['use_room_capacity', `Quote it for ${size[2]} people`], ['drop_meeting', 'Leave the meeting room out']]))};
-    return {q, kind: 'text', id, html: lab(q[0].toUpperCase() + q.slice(1), `<input type="text" id="${id}">`)};
-  });
-}
-function collectAnswers() {
-  const val = id => ($(id) && $(id).value || '').trim(), ans = {}, said = [], other = [];
-  const typeName = {king: 'King rooms', twin: 'Twin rooms', any: 'Any room type is fine'};
-  const day = x => new Date(x + 'T12:00:00Z').toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'});
-  for (const f of questionFields()) {
-    if (f.kind === 'rooms_and_type' || f.kind === 'room_type') {
-      const t = val(f.kind === 'room_type' ? f.id : f.id + 't'); if (t) { ans.room_type = t; said.push(typeName[t] + '.'); }
-      const n = f.kind === 'rooms_and_type' ? +val(f.id + 'n') : 0; if (n > 0) { ans.rooms = n; said.push(`${n} rooms a night.`); }
-    } else if (f.kind === 'rooms') { const n = +val(f.id); if (n > 0) { ans.rooms = n; said.push(`${n} rooms a night.`); } }
-    else if (f.kind === 'dates') { const a = val(f.id + 'a'), d = val(f.id + 'd'); if (a && d) { ans.arrival = a; ans.departure = d; said.push(`Arriving ${day(a)}, departing ${day(d)}.`); } }
-    else if (f.kind === 'layout') { const x = val(f.id); if (x) { ans.meeting_layout = x; said.push(x === 'any' ? 'Any meeting room layout is fine.' : `${x[0].toUpperCase() + x.slice(1)} layout.`); } }
-    else if (f.kind === 'meeting_date') { const x = val(f.id); if (x) { ans.meeting_date = x; said.push(`The meeting is on ${day(x)}.`); } }
-    else if (f.kind === 'payer') { const x = val(f.id); if (x) { ans.payer = x; said.push(`The payer is ${x}.`); } }
-    else if (f.kind === 'taxes') { const x = val(f.id); if (x) { ans.budget_includes_taxes = x === 'true'; said.push(`Our budget ${x === 'true' ? 'includes' : 'excludes'} taxes.`); } }
-    else if (f.kind === 'meeting_size') { const x = val(f.id); if (x) { ans.meeting_size = x; said.push(x === 'drop_meeting' ? "We'll go without the meeting room." : 'Please quote the meeting room at its capacity.'); } }
-    else { const x = val(f.id); if (x) { other.push(`${f.q}: ${x}`); } }
-  }
-  return {ans, text: [...said, ...other.map(x => x + '.')].join(' ')};
-}
-function formHtml(v) {
-  const t = v && v.terms;
-  const go = label => `<div class="row" style="margin-top:6px"><button class="btn-p" data-act="sendForm">${label}</button><button class="btn-ghost" data-form="">Cancel</button></div>`;
-  if (form === 'counter') return `<div class="form"><label>Attrition %<input type="number" id="fAtt" value="20" min="0" max="30"></label>
-      <label>Deposit %<input type="number" id="fDep" value="25" min="0" max="100"></label><label>Room rate £ (optional)<input type="number" id="fRate" placeholder="${t ? t.rate / 100 : ''}"></label></div>
-      <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send counteroffer')}`;
-  if (form === 'change') return `<div class="form"><label>Fewer rooms per night<input type="number" id="fRooms" value="2" min="1"></label></div>
-      <textarea id="fText" rows="2" placeholder="Message to the hotel (optional)"></textarea>${go('Send change request')}`;
-  if (form === 'answers') return `<div class="form answers">${questionFields().map(f => f.html).join('')}</div>${go('Send answers')}`;
-  if (form === 'msg') return `<textarea id="fText" rows="3" placeholder="Message to the hotel" style="margin-top:10px"></textarea>${go('Send')}`;
-  return '';
+  // One reply box, like an email client. A draft from the buyer's brief prefills it and, when sent, carries the
+  // brief's structured move (answers, counteroffer, acceptance, change request) so the seller can act on it.
+  const s = V.status === 'handoff' ? null : V.suggestion, booked = V.booking && V.booking.status === 'confirmed';
+  const hint = s ? `Draft from ${esc(V.company)}'s private brief. Edit it if you like.`
+    : V.status === 'handoff' ? `${esc(V.hotel)}'s group sales team has your request and will reply here.`
+    : V.waiting_on === 'hotel' ? `Waiting for ${esc(V.hotel)}. You can still write to them.`
+    : booked ? 'Nothing needed from you right now.' : '';
+  return h + `<div class="box compose"><div class="who">Reply to ${esc(V.hotel)}</div>${hint ? `<p class="small muted">${hint}</p>` : ''}
+    <textarea id="draft" rows="5" placeholder="Write your reply…">${esc(s ? s.text : '')}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn-p" data-act="send">Send</button></div></div>`;
 }
 function refresh() { lastJSON = ''; draftDirty = false; load(); }
 function wire() {
   if ($('draft')) $('draft').oninput = () => { draftDirty = true; };
-  document.querySelectorAll('[data-form]').forEach(b => b.onclick = () => { form = b.dataset.form || null; $('act').innerHTML = actions(); wire(); if (!form) refresh(); });
   const act = (action, text, payload) => api(`/api/buyer/${CFG.id}`, {token: CFG.t, action, text, payload});
-  document.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
+  document.querySelectorAll('[data-act=send]').forEach(b => b.onclick = async () => {
+    const s = V.status === 'handoff' ? null : V.suggestion, text = $('draft').value.trim();
+    if (!text) { toast('Write a message first'); return; }
     b.disabled = true;
-    const v = cur(), s = V.suggestion, a = b.dataset.act;
-    let note = 'Sent to ' + V.hotel;
     try {
-      if (a === 'sendSug') await act(s.action, ($('draft') && $('draft').value.trim()) || s.text, s.payload);
-      else if (a === 'dates') {
-        const o = (V.thread.slice().reverse().find(m => m.date_options) || {}).date_options[+b.dataset.i];
-        await act('reply', `${span(o.arrival, o.departure)} works for us. Please send the offer for those dates.`, {dates: {arrival: o.arrival, departure: o.departure}});
-      }
-      else if (a === 'accept') {
-        await act('accept', `We accept version ${v.n}.`, {version: v.n});
-      } else if (a === 'sendForm') {
-        const text = $('fText') ? $('fText').value.trim() : '';
-        if (form === 'counter') {
-          const p = {attrition_pct: +$('fAtt').value, deposit_pct: +$('fDep').value}; if ($('fRate').value) p.rate = Math.round(+$('fRate').value * 100);
-          await act('counter', text || `We'd like ${p.attrition_pct}% attrition and a ${p.deposit_pct}% deposit${p.rate ? ` at £${p.rate / 100}` : ''}.`, p);
-        } else if (form === 'change') {
-          const n = +$('fRooms').value; await act('change_request', text || `Please reduce our block by ${n} rooms per night.`, {rooms_per_night: n});
-        } else if (form === 'answers') {
-          const {ans, text: said} = collectAnswers();
-          if (!said) { toast('Fill in at least one answer'); b.disabled = false; return; }
-          await act('reply', said, {answers: ans});
-        } else if (form === 'msg') { if (!text) { toast('Write a message first'); b.disabled = false; return; } await act('message', text, {}); }
-        form = null;
-      }
-      toast(note);
+      if (s) await act(s.action, text, s.payload);
+      // Free text: while the hotel is waiting on details or a date choice, the seller reads it as the reply.
+      else await act(['needs_info', 'dates_proposed'].includes(V.status) ? 'reply' : 'message', text, {});
+      toast('Sent to ' + V.hotel);
     } catch (e) {} finally { b.disabled = false; refresh(); }
   });
 }
