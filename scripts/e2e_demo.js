@@ -154,9 +154,15 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await page.waitForTimeout(500);
     await open('Northstar');
     const clock1 = await demoClock();
-    check('the demo clock lists Northstar\'s room reduction on 20 Jan and warns Summit\'s quote lapses',
-          /20 Jan 2027[\s\S]*Northstar Analytics: the buyer asks to release rooms/.test(clock1) && /Lapses the open quote for Summit/.test(clock1), clock1);
-    await jumpTo('2027-01-20T09:00:00+00:00');
+    check('the demo clock lists payment dates only, not the buyer\'s scripted change',
+          /payments coming up/i.test(clock1) && !/release rooms|20 Jan/.test(clock1), clock1);
+    await page.fill('#clockPick', '2027-01-20'); await page.waitForTimeout(300);
+    check('picking 20 Jan on the calendar warns that Summit\'s quote lapses',
+          /Moves to Wed, 20 Jan 2027, 09:00[\s\S]*Lapses the open quote for Summit/.test(await page.innerText('#clockPickNote')),
+          await page.innerText('#clockPickNote'));
+    await page.waitForTimeout(1700);                                      // a poll must not reset the picked day
+    check('the picked day survives a dashboard refresh', (await page.inputValue('#clockPick')) === '2027-01-20');
+    await click('#clockPickGo');
     await settle('Summit', ['expired']);
     check('Summit lapsed at the jump', (await deal('Summit')).status === 'expired');
     await mb.reload();
