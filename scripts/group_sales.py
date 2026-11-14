@@ -8,6 +8,7 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
      GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
      GS_VENDORS=1: show third-party vendor management (inquiry workspace, Directory). Off by default.
+     GS_FOLIO=1: show post-stay final folio reconciliation (Final folio tab, folio API and pages). Off by default.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -48,6 +49,8 @@ PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_U
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
 # Third-party vendor management stays in the engine but is off the demo path unless this is set.
 VENDORS = os.environ.get("GS_VENDORS", "").strip().lower() in ("1", "true", "yes", "on")
+# Post-stay folio reconciliation (folio.py) is manual and moves the shared demo clock; off the demo path unless set.
+FOLIO = os.environ.get("GS_FOLIO", "").strip().lower() in ("1", "true", "yes", "on")
 # No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
 # Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
@@ -166,7 +169,7 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["buyer_mode"] = runner.settings["buyer_mode"]
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
     v["finance_view"] = engine.finance(d)
-    if d.get("folio") and engine.folio_view(d["id"])["approved"]:
+    if FOLIO and d.get("folio") and engine.folio_view(d["id"])["approved"]:
         v["final_folio"] = engine.folio_view(d["id"],public=True)
     return v
 
@@ -175,12 +178,19 @@ def _vendor_route(p: str) -> bool:
     return p == '/api/vendor_directory' or p.startswith('/api/vendors/') or (p.startswith('/api/deals/') and p.endswith('/vendors'))
 
 
+def _folio_route(p: str) -> bool:
+    return p.startswith('/folio/') or (p.startswith('/api/deals/') and (p.endswith('/folio') or p.endswith('/folio/report')))
+
+
 def dashboard_html() -> str:
     page = (WEB / "group_sales.html").read_text()
     if not VENDORS:
         # Drop the Directory nav item and the vendor script; the rest of the dashboard checks window.Vendors.
         page = re.sub(r'\s*<button id="vendorDirectoryNav">.*?</button>', '', page, count=1)
         page = page.replace('<script src="/assets/vendors.js"></script>', '')
+    if not FOLIO:
+        # Without folio.js the dashboard hides the Final folio tab, its button and its post-stay card.
+        page = page.replace('<script src="/assets/folio.js"></script>', '')
     return page
 
 
@@ -253,9 +263,11 @@ class Handler(BaseHTTPRequestHandler):
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
-            if p in assets and (VENDORS or p != "/assets/vendors.js"):
+            if p in assets and (VENDORS or p != "/assets/vendors.js") and (FOLIO or p != "/assets/folio.js"):
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
+            if not FOLIO and _folio_route(p):
+                return self._send(404, {"error": "not found"})
             if p.startswith('/api/deals/') and p.endswith('/folio/report'):
                 view=engine.folio_view(p.split('/')[3])
                 if not view.get('document'):return self._send(409,{'error':'Final folio not issued yet.'})
@@ -343,6 +355,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.reset_rules(actor="hotel manager"))
             if p == "/api/fx/scan":
                 return self._send(200, engine.scan_fx())
+            if not FOLIO and _folio_route(p):
+                return self._send(404, {"error": "not found"})
             if p.startswith('/api/deals/') and p.endswith('/folio'):
                 return self._send(200, engine.folio_action(p.split('/')[3],b.get('command'),b.get('payload') or {}))
             if p.startswith("/api/deals/") and p.endswith("/payer"):

@@ -349,7 +349,7 @@ function nextOf(d) {
   if (d.pricing_review?.status==='pending') return {cls:'you',short:d.pricing_review.stale?'Refresh revenue review':'Awaiting revenue review',who:'Pricing decision · Revenue team',pricing:true};
   if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
   const f=d.folio_summary;
-  if(d.status==='confirmed'&&f?.checkout_reached&&f.status!=='finalized')return {cls:'you',short:({not_imported:'Import final PMS folio',review_required:'Review final folio',balance_due:'Collect final balance',credit_due:'Reconcile folio credit',guest_balances_open:'Reconcile guest balances',settled:'Issue final folio'})[f.status]||'Reconcile final folio',who:'Post-stay reconciliation',folio:f};
+  if(window.Folios&&d.status==='confirmed'&&f?.checkout_reached&&f.status!=='finalized')return {cls:'you',short:({not_imported:'Import final PMS folio',review_required:'Review final folio',balance_due:'Collect final balance',credit_due:'Reconcile folio credit',guest_balances_open:'Reconcile guest balances',settled:'Issue final folio'})[f.status]||'Reconcile final folio',who:'Post-stay reconciliation',folio:f};
   if (ap) return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
     return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
@@ -420,7 +420,7 @@ function nextCard(d) {
   } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
     h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
-    h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
+    if (window.Folios) h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
     if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
     if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
     h += mailLink(d);
@@ -553,7 +553,8 @@ function payoutCard(d) {
 }
 const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off'], ['folio','Final folio']];
 function tabBody(d) {
-  if(tab==='folio')return `<section id="folioWorkspace" data-folio-deal="${esc(d.id)}"><p>Loading final folio…</p></section>`;
+  if(tab==='folio'&&!window.Folios)tab='conv';   // a remembered Final folio tab while GS_FOLIO is off
+  if(tab==='folio'&&window.Folios)return `<section id="folioWorkspace" data-folio-deal="${esc(d.id)}"><p>Loading final folio…</p></section>`;
   if (tab === 'conv') {
     // Keep every message readable in full, newest first.
     const msg = m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Groupy'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
@@ -601,7 +602,7 @@ function renderDeal(d) {
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${d.pricing_review?.status==='pending'?'<span class="chip warn">Revenue review</span>':chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}${buyerMailboxCard(d)}</div>
     ${nextCard(d)}${negotiationCard(d)}${trailCard(d)}${offerCard(d)}
-    <div class="card"><div class="tabs">${TABS.filter(([k])=>k!=='folio'||d.booking?.status==='confirmed').map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
+    <div class="card"><div class="tabs">${TABS.filter(([k])=>k!=='folio'||(window.Folios&&d.booking?.status==='confirmed')).map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.Folios) window.Folios.mount(d);
   if (window.FX) window.FX.mount(d);

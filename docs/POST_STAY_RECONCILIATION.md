@@ -1,5 +1,10 @@
 # Post-stay reservation → final folio reconciliation
 
+Hidden by default: the dashboard shows the **Final folio** tab, its button and the post-stay card, and the server
+serves the folio API and buyer folio pages, only when `GS_FOLIO=1` is set. It is kept off the demo path because
+every step is manual and **Advance simulated demo to checkout** moves the clock for every inquiry. The engine code
+and its tests are unchanged.
+
 This extends a confirmed group booking beyond its signing deposit. Before this
 change, the application reconciled payment notifications, refunds and hotel payouts;
 it did not import a final PMS folio, allocate incidentals or collect the final balance.
