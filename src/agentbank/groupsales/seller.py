@@ -628,7 +628,8 @@ class RulesSeller:
                           int(ask.get("attrition_pct") or t["attrition_pct"]), rooms_per_night=min(t["rooms"].values()))
         except (Refused, ValueError, TypeError):
             pass      # an ask the engine can't even price is still answered by the counter below
-        att = min(int(ask.get("attrition_pct") or t["attrition_pct"]), e.policy["attrition"]["max_pct_with_approval"])
+        asked_att = int(ask["attrition_pct"]) if ask.get("attrition_pct") else None
+        att = min(asked_att or t["attrition_pct"], e.policy["attrition"]["max_pct_with_approval"])
         dep = int(ask.get("deposit_pct") or t["deposit_pct"])
         rate = t["rate"]
         bands = e.rms["rates"][t["room_type"]]
@@ -688,12 +689,22 @@ class RulesSeller:
             head = ((f"Thank you. We can't reach {gbp(int(ask['rate']))} a room-night; " if int(ask["rate"]) < rate else "Thank you. ")
                     + f"the best rate we can offer on your dates is {gbp(rate)}, with a {dep}% deposit and {release}. "
                     + (f"{prepay_blocked} " if prepay_blocked else ""))
+        elif asked_att is not None and asked_att > att:
+            # Above the hard maximum: no one can approve it, so say so and offer the most the hotel allows.
+            head = (f"Thank you for asking. We can't offer {asked_att}% attrition; the most we can release free "
+                    f"is {release}, in exchange for a {dep}% deposit. ")
+        elif att <= e.policy["attrition"]["standard_pct"]:
+            # Within the standard: nothing is traded, so don't word it as an exchange.
+            head = f"Thank you. We can set {release}, with a {dep}% deposit. "
         else:
             head = f"Thank you. We can offer {release} in exchange for a {dep}% deposit. "
         msg = (head + " ".join(w[0].upper() + w[1:] + "." for w in why) + " "
                + self._offer_message(d, p, unmet, short=True))
-        just = (f"Attendance uncertain; buyer asked for {ask.get('attrition_pct')}% attrition and a "
-                f"{ask.get('deposit_pct')}% deposit. Rate held at {gbp(rate)}; {dep}% deposit covers the extra flexibility; "
+        asked_text = " and ".join(x for x in (f"{asked_att}% attrition" if asked_att is not None else "",
+                                              f"a {ask['deposit_pct']}% deposit" if ask.get("deposit_pct") else "") if x)
+        just = ((f"Attendance uncertain; buyer asked for {asked_text}. " if asked_text else "")
+                + (f"Capped at the {att}% maximum. " if asked_att is not None and asked_att > att else "")
+                + f"Rate held at {gbp(rate)}; {dep}% deposit covers the extra flexibility; "
                 f"margin {pr['margin_full_release']['margin_pct']}% even if the full allowance is released.")
         try:
             r = e.propose_offer(deal_id, rate, dep, att, msg, explanation="; ".join(why), justification=just,

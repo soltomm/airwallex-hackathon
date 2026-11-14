@@ -1186,7 +1186,7 @@ class Engine:
                            + (f" Seller's case: {justification}" if justification else ""))
                 appr = self._request_approval(
                     d, "hotel_manager", "offer", summary, check["approvals"], version=n, obj_hash=v["hash"],
-                    rules=check["rules"],
+                    rules=check["rules"], extra={"buyer_asked": self._buyer_ask_differs(d, terms)},
                     if_approved=f"The seller can send v{n} to the buyer on these terms ({gbp(pricing['total'])}, "
                                 f"{terms['deposit_pct']}% deposit).",
                     if_rejected=f"v{n} is not sent. The seller revises the offer to terms it can agree alone.")
@@ -1198,6 +1198,29 @@ class Engine:
             self._negotiation_chose(rnd, key, n, v["status"], explanation, justification)
             self._save()
             return res
+
+    @staticmethod
+    def _buyer_ask_differs(d: dict, terms: dict) -> list[dict]:
+        """What the buyer's latest unanswered counter asked for, where this draft offers something else. Read
+        from the thread, not from the seller, so the manager sees the real ask even when the seller offers
+        less (e.g. 60% attrition asked, above the hard maximum, and 20% drafted)."""
+        ask = {}
+        for m in reversed(d["thread"]):
+            if m.get("from") == "seller":
+                break
+            if m.get("from") == "buyer" and m.get("action") == "counter":
+                ask = m.get("payload") or {}
+                break
+        out = []
+        for key, what, show in (("rate", "Rate", gbp), ("deposit_pct", "Deposit", lambda x: f"{x}%"),
+                                ("attrition_pct", "Free release (attrition)", lambda x: f"{x}%")):
+            try:
+                asked = int(ask[key]) if ask.get(key) is not None else None
+            except (TypeError, ValueError):
+                continue
+            if asked is not None and asked != int(terms[key]):
+                out.append({"what": what, "asked": show(asked), "offered": show(int(terms[key]))})
+        return out
 
     def send_offer(self, deal_id: str, version: int, actor: str = "seller") -> dict:
         with self.lock:

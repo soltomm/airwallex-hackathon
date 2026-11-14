@@ -283,6 +283,9 @@ function whyCard(a, alone = 'Seller alone') {
     ? `<div class="small muted" style="margin-top:6px">Why this needs you: ${rules.length > 1 ? 'these requests go' : 'this request goes'} beyond what the ${alone.split(' ')[0].toLowerCase()} can agree alone.</div>
        <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>This request</th></tr>${rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`
     : `<p>${esc(sentences(a.reasons))}</p>`;
+  // The buyer's own ask, where the draft offers something else (e.g. capped at the hard maximum).
+  const ba = a.buyer_asked || [];
+  if (ba.length) h += `<div class="small muted" style="margin-top:6px">Buyer asked: ${ba.map(x => `${esc(x.what)} <b>${esc(x.asked)}</b> (this draft: ${esc(x.offered)})`).join('; ')}</div>`;
   if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}</dl>`;
   return h;
 }
