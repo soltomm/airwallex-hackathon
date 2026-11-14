@@ -1863,6 +1863,7 @@ class Engine:
                     raise Refused("the last instalment payment didn't match its request: hotel staff must reconcile it")
                 if op["status"] in ("submitting", "unknown"):
                     self._recover(op)
+                    self._email_installment(d, op)
                     self._save()
                 return {"payment_url": self.balance_url(d), "operation": op["id"], "status": op["status"],
                         "amount": gbp(op["amount"]), "note": "existing instalment request reused; check it, don't ask again"}
@@ -1900,21 +1901,32 @@ class Engine:
                 self._pause_seller(d, "requesting an instalment", e)
                 self._save()
                 raise Refused(f"provider refused the payment intent: {e}")
-            total = v["pricing"]["total"]
-            paid_after = self.finance(d)["net_received"] + amount
             self._seller_acted(d)
-            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
-                                "installment_op": oid,
-                                "text": f"Your next payment for booking {d['ref']} is due: {gbp(amount)}. Under the "
-                                        f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
-                                        f"total is due by {self._long_date(st['due_by'])}; this payment brings what "
-                                        f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
-                                        f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
             self.log(d["id"], actor, "installment_requested", f"Instalment {gbp(amount)} requested for v{v['n']} "
-                     f"({', '.join(st['milestones_due'])}, due {st['due_by']}); payment page opened "
-                     f"(intent {op.get('payment_intent_id') or 'unknown'}).")
+                     f"({', '.join(st['milestones_due'])}, due {st['due_by']}); "
+                     + (f"payment page opened (intent {op['payment_intent_id']})." if op["status"] == "created" else
+                        "the provider's answer was lost and the intent isn't found yet: no email sent until "
+                        "check_balance_payment finds it."))
+            self._email_installment(d, op)
             self._save()
             return {"payment_url": self.balance_url(d), "operation": oid, "status": op["status"], "amount": gbp(amount)}
+
+    def _email_installment(self, d, op):
+        """Email the buyer the payment link, once, and only for an intent the provider has confirmed exists:
+        a link to a payment that may not exist would only show the buyer an error."""
+        if op["status"] != "created" or op.get("emailed_at"):
+            return
+        v = self._version(d, op["version"])
+        total = v["pricing"]["total"]
+        paid_after = self.finance(d)["net_received"] + op["amount"]
+        d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                            "installment_op": op["id"],
+                            "text": f"Your next payment for booking {d['ref']} is due: {gbp(op['amount'])}. Under the "
+                                    f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
+                                    f"total is due by {self._long_date(op['due_by'])}; this payment brings what "
+                                    f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
+                                    f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
+        op["emailed_at"] = self.now()
 
     def check_balance_payment(self, deal_id: str, source: str = "seller") -> dict:
         with self.lock:
@@ -1939,6 +1951,7 @@ class Engine:
             self._recover(op)
             if op["status"] in ("submitting", "unknown"):
                 return
+            self._email_installment(d, op)
         if op["status"] in ("failed", "cancelled", "mismatch", "succeeded") or not op.get("payment_intent_id"):
             if op["status"] == "succeeded":
                 self._settle_installment_payouts(d)
@@ -2944,6 +2957,8 @@ class Engine:
                     return "hotel staff: instalment payment mismatch"
                 if inst["overdue"]:
                     return "hotel staff: instalment overdue"
+                if inst["open"] and inst["open"]["status"] in ("submitting", "unknown"):
+                    return "seller: check instalment request"
                 if inst["open"]:
                     return "buyer: pay instalment"
                 if inst["due_now"]:
@@ -3007,6 +3022,9 @@ class Engine:
             if inst and not inst["blocked"]:
                 if inst["open"] and inst["open"]["status"] == "mismatch":
                     return "an instalment payment didn't match its request: wait for hotel staff to reconcile it"
+                if inst["open"] and inst["open"]["status"] in ("submitting", "unknown"):
+                    return ("the provider's answer to the instalment request was lost and the buyer hasn't been "
+                            "emailed: call check_balance_payment to look it up (never request it again)")
                 if inst["open"]:
                     return (f"an instalment request for {gbp(inst['open']['amount'])} is open: waiting for the buyer "
                             "(check_balance_payment verifies it; never request it again)")
