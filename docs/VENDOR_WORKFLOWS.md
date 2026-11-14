@@ -5,6 +5,10 @@ requests, quote versions, approvals, confirmations, master drafts, delivery note
 and tracked payment status live under each inquiry's `third_party` child object
 and use the existing file/Postgres storage and hotel access gate.
 
+**Off by default.** The dashboard hides this feature (the inquiry card, the third-party
+workspace, **Directory** and the New inquiry third-party option) and the server returns 404 for
+the vendor routes unless `GS_VENDORS=1` is set. The engine code and its tests are unchanged.
+
 ## How to use it
 
 1. Open a connected Harbour inquiry and enable **Needs third-party management**.
