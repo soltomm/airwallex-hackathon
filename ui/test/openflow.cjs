@@ -69,7 +69,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.locator('[data-preset="full_lifecycle"]').click();
  await page.locator('#liveDrawer[open]').waitFor();
  const again=await generated();
- assert.equal(again.length,2);assert.notEqual(again[0].company,again[1].company);
+ assert.equal(again.length,2);assert.notEqual(again[0].id,again[1].id);assert.notEqual(again[0].generated.seed,again[1].generated.seed);
  await page.keyboard.press('Escape');await page.locator('#liveDrawer:not([open])').waitFor({state:'attached'});
  await page.locator('#wbSimulate').click();
  // Write your own: a real RFP with no brief.
