@@ -209,6 +209,7 @@ def test_fx_endpoints_use_hotel_access_gate(server,monkeypatch):
 
 
 def test_inbox_accepts_structured_origin_but_no_currency_policy_override(server,monkeypatch):
+    monkeypatch.setattr(server,'FX',True)
     monkeypatch.setattr(server,'ACCESS','')
     code,_,body=_req(server,'/api/inbox',{'from':'Test <test@example.test>','subject':'New group','body':'Please quote rooms.','payer_country':'US'})
     assert code==200
@@ -289,3 +290,18 @@ def test_seller_and_payment_page_say_payments_are_in_gbp(server):
     assert 'charges in GBP, and their card issuer converts' in prompt
     assert "Don't quote" in prompt and 'converted amounts' in prompt
     assert 'Charged in GBP' in server.PAY_PAGE
+
+
+def test_fx_demo_inputs_are_refused_unless_enabled(server,monkeypatch):
+    """With GS_FX off, no scripted inquiry or intake can record a payer origin."""
+    monkeypatch.setattr(server,'ACCESS','')
+    cat=json.loads(_req(server,'/api/simulate/presets')[2])
+    assert 'payer_abroad' not in cat['presets'] and 'payer_abroad' not in cat['info']
+    assert 'full_lifecycle' in cat['presets']
+    count=len(server.engine.s['deals'])
+    for body in ({'preset':'payer_abroad','seed':991},{'traits':{'payer_country':'DE'},'seed':992}):
+        code,_,out=_req(server,'/api/simulate/rfp',body)
+        assert code==400 and 'GS_FX' in json.loads(out)['error']
+    code,_,out=_req(server,'/api/inbox',{'from':'Pat <pat@fx-off.example>','body':'Ten rooms','payer_country':'US'})
+    assert code==400 and 'GS_FX' in json.loads(out)['error']
+    assert len(server.engine.s['deals'])==count

@@ -115,7 +115,7 @@ class Runner:
                         engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
                                     "seller until tomorrow.", actor="system")
                 self.busy = f"seller ({mode})"
-                seller = ClaudeSeller(engine) if mode == "claude" else RulesSeller(engine)
+                seller = ClaudeSeller(engine, vendors=VENDORS) if mode == "claude" else RulesSeller(engine)
                 self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
@@ -307,7 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
             if p == "/api/simulate/presets":
-                return self._send(200, {"presets": generator.PRESETS, "info": generator.PRESET_INFO,
+                presets = {k: v for k, v in generator.PRESETS.items() if FX or k not in generator.FX_PRESETS}
+                return self._send(200, {"presets": presets, "info": {k: generator.PRESET_INFO[k] for k in presets},
                                         "traits": generator.TRAITS, "defaults": generator.DEFAULTS,
                                         "buyer_mode": runner.settings["buyer_mode"]})
             if p == "/api/fx/countries":
@@ -403,12 +404,16 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/simulate/rfp":
                 # A generated inquiry: the RFP email plus its buyer's private brief. The seller and buyer agents
                 # take it from there; nothing else in the deal is simulated.
+                if not FX and (b.get("preset") in generator.FX_PRESETS or (b.get("traits") or {}).get("payer_country")):
+                    raise Refused("Payer origin and FX are turned off (GS_FX); pick another inquiry type.")
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
                                          seed=b.get("seed"))
                 return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party") if VENDORS else None)))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
+                if b.get('payer_country') and not FX:
+                    raise Refused("Payer origin is turned off (GS_FX).")
                 if b.get('payer_country'):
                     try:
                         fx.payer_profile(b['payer_country'], b.get('payer_currency'))

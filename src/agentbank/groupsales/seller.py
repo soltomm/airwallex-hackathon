@@ -1009,12 +1009,22 @@ def meeting_room_facts(engine) -> str:
             "repeats them in short form for the buyer's answer form.")
 
 
-def system_prompt(engine) -> str:
+# Third-party vendor management is off the demo path unless the server has GS_VENDORS=1: without it the seller
+# isn't told about it and doesn't get its tools.
+VENDOR_TOOLS = {"vendor_workspace", "request_vendor_quote"}
+VENDOR_PROMPT = ("\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its "
+                 "simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot "
+                 "approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose "
+                 "vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff "
+                 "to resolve them.")
+
+
+def system_prompt(engine, vendors: bool = False) -> str:
     """SYSTEM with the hotel's current rule values (rules.seller_brief), so the prompt matches the engine."""
     return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario) + meeting_room_facts(engine))
             .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
             .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
-                                 f"{engine.policy['min_days_before_arrival']} days ahead") + "\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff to resolve them.")
+                                 f"{engine.policy['min_days_before_arrival']} days ahead") + (VENDOR_PROMPT if vendors else ""))
 
 
 _I = {"type": "integer"}
@@ -1144,10 +1154,12 @@ TOOLS = [
 class ClaudeSeller:
     name = "claude"
 
-    def __init__(self, engine: Engine, client=None, model: str = SELLER_MODEL):
+    def __init__(self, engine: Engine, client=None, model: str = SELLER_MODEL, vendors: bool = False):
         self.e = engine
         self.model = model
         self._client = client
+        self.vendors = vendors
+        self.tools = TOOLS if vendors else [t for t in TOOLS if t["name"] not in VENDOR_TOOLS]
 
     @property
     def client(self):
@@ -1159,6 +1171,8 @@ class ClaudeSeller:
     def _do(self, name: str, a: dict):
         e = self.e
         did = a.get("deal_id")
+        if name in VENDOR_TOOLS and not self.vendors:
+            raise Refused(f"unknown tool {name}")
         if name == 'vendor_workspace':
             return e.vendor_workspace(did)
         if name == 'request_vendor_quote':
@@ -1256,9 +1270,9 @@ class ClaudeSeller:
         while calls < MAX_TOOL_CALLS:
             try:
                 resp = self.client.beta.messages.create(
-                    model=self.model, max_tokens=8000, system=[{"type": "text", "text": system_prompt(raw),
+                    model=self.model, max_tokens=8000, system=[{"type": "text", "text": system_prompt(raw, self.vendors),
                                                                "cache_control": {"type": "ephemeral"}}],
-                    tools=TOOLS, messages=messages, output_config={"effort": "medium"},
+                    tools=self.tools, messages=messages, output_config={"effort": "medium"},
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default")
             except anthropic.APIStatusError as err:
                 raw.note(None, f"Seller model call failed ({err.status_code}: {str(err.message)[:200]}); falling back to rules for this run.")
@@ -1281,7 +1295,7 @@ class ClaudeSeller:
             for b in uses:
                 calls += 1
                 try:
-                    tool = next((t for t in TOOLS if t["name"] == b.name), None)
+                    tool = next((t for t in self.tools if t["name"] == b.name), None)
                     bad = (schema_errors(b.input, tool["input_schema"]) if tool else [f"unknown tool {b.name}"])
                     if bad:
                         # The tools aren't strict (see _tool): a call that doesn't match its schema goes back to the

@@ -91,7 +91,7 @@
         <label class="wb-field">Price pressure${opts('price', pairs('price'), d.price)}</label>
         <label class="wb-field">Attrition the buyer wants${opts('attrition', [['', 'Hotel standard'], ['20', '20% (traded for a bigger deposit)']], d.attrition)}</label>
         <label class="wb-field">Room type${opts('room_type', [['', 'Either'], ['twin', 'Twin'], ['king', 'King']], d.room_type)}</label>
-        <label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>
+        ${window.FX ? `<label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>` : ''}
         <label class="wb-field">Later change${opts('change_rooms', [['0', 'None'], ['1', '1 room fewer a night, then a refund'], ['2', '2 rooms fewer a night, then a refund']], d.change_rooms)}</label>
         <label class="wb-field">Meeting room${opts('meeting', [['', 'Not needed'], ['1', 'Thames Room, one day']], d.meeting ? '1' : '')}</label>
       </div>
@@ -105,7 +105,7 @@
       missing: [...document.querySelectorAll('[name=wbMissing]:checked')].map(x => x.value)};
     if (v('attrition')) out.attrition = Number(v('attrition'));
     if (v('room_type')) out.room_type = v('room_type');
-    if (v('payer_country')) out.payer_country = v('payer_country');
+    if ($('wbT_payer_country') && v('payer_country')) out.payer_country = v('payer_country');
     return out;
   }
   function buyerToggle(mode) {
