@@ -1431,7 +1431,7 @@ def test_access_token_gate(server, monkeypatch):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
     for path in ("/api/reset", "/api/clock", "/api/seller/run", "/api/inbox", "/api/simulate/rfp", "/api/approvals/ap1001",
-                 "/api/buyer/GS-1001/agent", "/api/deals/GS-1001/retry_payout",
+                 "/api/deals/GS-1001/retry_payout",
                  "/api/hotel_account/onboard"):
         code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
         assert code == 401 and "access token required" in body, path
@@ -1735,12 +1735,26 @@ def test_buyer_mailbox(server):
     assert _req(mod, f"/api/buyer/{n['id']}/view?t=wrong")[0] == 400
 
 
+def test_the_website_has_no_buyer_agent(server):
+    """Buyers always reply themselves from their mailbox: nothing on the site lets an agent answer for them."""
+    st, _, body = _req(server, "/api/settings", {"buyer_mode": "agent"})
+    assert st == 200 and "buyer_mode" not in json.loads(body)
+    assert "buyer_mode" not in server.runner.settings
+    d = server.engine.deal("GS-1001")
+    before = len(d["thread"])
+    assert _req(server, "/api/buyer/GS-1001/agent", {})[0] == 400      # no agent route: refused like any buyer move
+    assert len(d["thread"]) == before
+    assert "buyer_mode" not in server.buyer_view(d["id"], d["buyer_token"])
+    st, _, page = _req(server, "/assets/openflow.js")
+    assert st == 200 and "buyer agent" not in page.lower() and "data-buyer-mode" not in page
+
+
 def test_generated_inquiry_endpoint(server, monkeypatch):
     monkeypatch.setattr(server, "FX", True)
     st, _, body = _req(server, "/api/simulate/presets")
     cat = json.loads(body)
     assert st == 200 and "full_lifecycle" in cat["presets"] and cat["info"]["full_lifecycle"]["title"]
-    assert cat["buyer_mode"] in ("presenter", "agent")
+    assert "buyer_mode" not in cat
     st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
     r = json.loads(body)
     assert st == 200 and r["seed"] == 4242 and r["rfp"]["from"].endswith("4242.example>")

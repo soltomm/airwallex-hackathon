@@ -324,7 +324,7 @@ function renderHeader() {
   $('clock').textContent = new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'});
   const busy = S.runner.busy;
   $('agent').className = 'pill' + (busy ? ' live' : '');
-  $('agent').innerHTML = busy ? `<span class="dot pulse"></span>${busy.startsWith('seller') ? 'Seller agent is working…' : 'Buyer agent is working…'}`
+  $('agent').innerHTML = busy ? `<span class="dot pulse"></span>Seller agent is working…`
     : `<span class="dot" style="color:var(--ok)"></span>Seller agent (${S.runner.settings.seller_mode === 'claude' ? 'Claude' : 'rules'}) is watching the inbox`;
   $('pay').textContent = S.provider === 'airwallex' ? 'Payments: Airwallex sandbox' : 'Payments: simulated';
 }
@@ -408,18 +408,15 @@ function lastLine(d) {
   const s = lastStep(d);
   return s ? `<p class="small muted last" style="margin:10px 0 0">Seller's last action, ${hm(s.at)}: <b>${esc(TOOL[s.tool] || s.tool)}</b>${s.ok ? '' : ' (refused)'} · ${esc(tidy(s.summary))} <a href="#" data-tab="agent">AI Agent tab</a></p>` : '';
 }
-function manualBuyer(d) {
-  return S.runner.settings.buyer_mode !== 'agent' || !d.buyer_profile;
-}
 function mailboxAction(d) {
   return `<a class="buyer-mailbox-link" href="${esc(d.inbox_url)}" target="_blank" rel="noopener">Open buyer’s mailbox ↗</a>`;
 }
 function buyerMailboxCard(d) {
-  if (!manualBuyer(d) || ['declined','lost'].includes(d.status)) return '';
+  if (['declined','lost'].includes(d.status)) return '';
   return `<section class="buyer-mailbox-callout" aria-label="Reply as the buyer"><h3>Buyer replies are by you</h3><p>Open ${esc(contactOf(d))}’s mailbox to read the hotel’s messages and send your reply.</p>${mailboxAction(d)}<p class="small" style="margin:8px 0 0">Opens in a new tab. The seller agent picks up your reply automatically.</p></section>`;
 }
 function mailLink(d) {
-  if (manualBuyer(d) && !['declined','lost'].includes(d.status)) return '';
+  if (!['declined','lost'].includes(d.status)) return '';
   return `<div class="row" style="margin-top:12px">${mailboxAction(d)}<span class="small muted">Demo: view or reply as the buyer in a new tab.</span></div>`;
 }
 
@@ -934,7 +931,6 @@ window.Harbour = {
   // Generated inquiries (generator.py): the RFP plus its buyer's private brief; the agents do the rest.
   presets: () => api('/api/simulate/presets'),
   generate: async body => { const r = await api('/api/simulate/rfp', body); lastJSON = ''; await load(); return r; },
-  setBuyerMode: async mode => { await api('/api/settings', {buyer_mode: mode}); lastJSON = ''; await load(); },
 };
 // ---- the hotel's Airwallex connected account (Payments for Platforms) -------------------------------
 const ONBOARD = {starting: 'Starting', account_created: 'Account created', submitted: 'Submitted for verification',

@@ -92,11 +92,8 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 .wb-channel .wb-channel-action { margin-top:auto; color:#28634c; font-size:11px; }
 .wb-demo-note { background:#f0f5ef; border:1px solid #dfe8da; color:#64765e; border-radius:7px; padding:12px 14px; font-size:11px; margin:16px 0; }
 .wb-terms { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; }
-.wb-buyer-mode { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:#5e7066; }
 #wbInbound { margin-bottom:28px; padding-bottom:24px; border-bottom:1px solid var(--line); }
 .wb-generated { margin-top:20px; }
-.wb-buyer-mode button { white-space:normal; text-align:left; }
-.wb-buyer-mode button[aria-pressed="true"] { background:#e7f1eb; border-color:#47765b; color:#1f4f3b; font-weight:550; }
 .wb-seed { margin:22px 0 0; max-width:320px; }
 .wb-traits { margin:8px 0 28px; border:1px solid var(--line); border-radius:10px; padding:14px 18px; background:white; }
 .wb-traits summary { cursor:pointer; font-size:13px; font-weight:550; color:#28634c; }

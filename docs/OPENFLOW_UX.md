@@ -22,14 +22,13 @@ checks rooms and rates, asks for anything missing, quotes, asks the hotel manage
 be exceeded, and takes the deposit through Airwallex like any other deal. The drawer offers:
 
 - **Write your own**, first and open: a real, unscripted RFP (`POST /api/inbox`, the same intake as an email).
-  It has no brief, so nobody answers for the buyer automatically: reply from its mailbox.
+  You reply as the buyer from its mailbox.
 - **Generated test inquiries** (`POST /api/simulate/rfp`, see `src/agentbank/groupsales/generator.py`), folded
-  below it: one card per preset. Each inquiry comes with a private brief for the buyer agent; the seller never
+  below it: one card per preset. Each inquiry comes with a private brief that drafts the buyer's replies; the seller never
   sees it, or which preset it came from. An optional seed replays the same inquiry against the same calendar,
   for example after a reset. The drawer has no hand-picked traits form; the API still accepts `traits` for
   scripted runs and tests.
-- **Buyer replies**: automatically (the buyer agent answers for every buyer with a brief) or by you in the
-  buyer's mailbox. This is the server's buyer mode. Approvals and
+- **Buyer replies** are always by you, in the buyer's mailbox (there is no buyer agent). Approvals and
   paying the deposit always stay with a person.
 
 Generated rows show their preset and seed under the company name. The earlier browser-only simulator
@@ -70,7 +69,7 @@ changing the legacy UI dependencies, and install its Chromium if needed:
 ```bash
 npm install --prefix /tmp/openflow-browser playwright
 /tmp/openflow-browser/node_modules/.bin/playwright install chromium
-PAYMENTS=simulated SELLER_MODE=rules BUYER_MODE=presenter \
+PAYMENTS=simulated SELLER_MODE=rules \
   GS_PORT=8011 GS_VAR=/tmp/openflow-harbour-test \
   .venv/bin/python scripts/group_sales.py
 # In another terminal, from the same repository root:
@@ -84,9 +83,8 @@ otherwise the test uses `/usr/bin/chromium` if present, then Playwright's browse
 
 The browser test exercises connected detail/rules, the New inquiry drawer (presets loaded from the
 server, "Write your own" shown first with the generated inquiries folded below it and no traits form, a seeded
-preset, a replayed seed being refused, the buyer-mode switch and writing your own), search through polling, filters, payment-source labels, drawer keyboard focus and mobile
-layout. It checks that the workbench only writes through `/api/simulate/rfp`, `/api/inbox` and
-`/api/settings`. Screenshots are saved below; the before image is rendered from `origin/main` on the same
+preset, a replayed seed being refused, no buyer agent switch, and writing your own), search through polling, filters, payment-source labels, drawer keyboard focus and mobile
+layout. It checks that the workbench only writes through `/api/simulate/rfp` and `/api/inbox`. Screenshots are saved below; the before image is rendered from `origin/main` on the same
 isolated backend.
 
 ## Screenshots and reference limits
