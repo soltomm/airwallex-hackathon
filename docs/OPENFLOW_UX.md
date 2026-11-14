@@ -25,13 +25,12 @@ be exceeded, and takes the deposit through Airwallex like any other deal. The dr
   You reply as the buyer from its mailbox.
 - **Generated test inquiries** (`POST /api/simulate/rfp`, see `src/agentbank/groupsales/generator.py`), folded
   below it: one card per preset. Each inquiry comes with a private brief that drafts the buyer's replies; the seller never
-  sees it, or which preset it came from. An optional seed replays the same inquiry against the same calendar,
-  for example after a reset. The drawer has no hand-picked traits form; the API still accepts `traits` for
-  scripted runs and tests.
+  sees it, or which preset it came from. Each click sends a new inquiry: the drawer has no seed field and no
+  hand-picked traits form. The API still accepts `seed` and `traits` for scripted runs and tests.
 - **Buyer replies** are always by you, in the buyer's mailbox (there is no buyer agent). Approvals and
   paying the deposit always stay with a person.
 
-Generated rows show their preset and seed under the company name. The earlier browser-only simulator
+Generated rows show their preset under the company name. The earlier browser-only simulator
 (its fixtures, fake approvals and deposits) has been removed: everything on the workbench comes from the
 engine.
 
@@ -82,8 +81,8 @@ never point it at a deployed dashboard. The default target is port 8011;
 otherwise the test uses `/usr/bin/chromium` if present, then Playwright's browser.
 
 The browser test exercises connected detail/rules, the New inquiry drawer (presets loaded from the
-server, "Write your own" shown first with the generated inquiries folded below it and no traits form, a seeded
-preset, a replayed seed being refused, no buyer agent switch, and writing your own), search through polling, filters, payment-source labels, drawer keyboard focus and mobile
+server, "Write your own" shown first with the generated inquiries folded below it and no traits form, no seed
+field, a new inquiry on each click, no buyer agent switch, and writing your own), search through polling, filters, payment-source labels, drawer keyboard focus and mobile
 layout. It checks that the workbench only writes through `/api/simulate/rfp` and `/api/inbox`. Screenshots are saved below; the before image is rendered from `origin/main` on the same
 isolated backend.
 

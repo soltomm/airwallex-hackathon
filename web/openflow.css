@@ -94,7 +94,6 @@ body:has(.wb-drawer[open]) { overflow:hidden; }
 .wb-terms { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; }
 #wbInbound { margin-bottom:28px; padding-bottom:24px; border-bottom:1px solid var(--line); }
 .wb-generated { margin-top:20px; }
-.wb-seed { margin:22px 0 0; max-width:320px; }
 .wb-traits { margin:8px 0 28px; border:1px solid var(--line); border-radius:10px; padding:14px 18px; background:white; }
 .wb-traits summary { cursor:pointer; font-size:13px; font-weight:550; color:#28634c; }
 .wb-traits[open] summary { margin-bottom:10px; }
