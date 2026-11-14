@@ -1832,9 +1832,10 @@ class Engine:
         overdue = bool(open_op and open_op["status"] == "created" and open_op.get("due_by")
                        and (calc.d(open_op["due_by"]) + timedelta(days=self.INSTALLMENT_GRACE_DAYS)).isoformat() < today)
         return {"due_now": sum(m["amount"] for m in due), "due_by": due[-1]["due"] if due else None,
+                "final_due": sched[-1]["due"] if len(sched) > 1 else None,
                 "milestones_due": [m["label"] for m in due], "next": upcoming, "blocked": blocked,
                 "open": open_op and {k: open_op.get(k) for k in ("id", "status", "amount", "due_by", "payment_intent_id",
-                                                                  "created_at")},
+                                                                  "created_at", "milestones")},
                 "overdue": overdue, "paid": sum(o["amount"] for o in ops if o["status"] == "succeeded")}
 
     @staticmethod
@@ -3087,6 +3088,7 @@ class Engine:
                 x["waiting_on"] = self.waiting_on(d)
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
+                x["installments"] = self.installments(d)
                 x["payout_view"] = self.payout_view(d)
                 x["money_trail"] = self.money_trail(d)
                 x["ops"] = self.ops_instructions(d)

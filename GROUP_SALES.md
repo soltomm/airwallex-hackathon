@@ -59,7 +59,7 @@ checkout redirected back to `http://localhost` in our tests. Webhooks need a pub
 tunnel. Without one, the backend checks outcomes by asking Airwallex directly: on return from checkout,
 through the seller's `check_payment`/`check_refund`, and when a hold expires.
 
-## Demo script (about 6 minutes)
+## Demo script (about 7 minutes)
 
 The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
@@ -101,6 +101,11 @@ hand-written RFP and sets who answers for the buyer.
    back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
+9. **Jump to 3 Mar (demo)**, on Northstar's card: the day the last instalment falls due, 7 days before
+   arrival. Both instalment dates have now passed, so the seller emails Maya one request for everything
+   due: **£4,968**. In the mailbox, **Open payment page ↗** and pay with the same test card. The card reads
+   **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Group Desk fee**; the Payments tab
+   marks every instalment paid.
 
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
@@ -182,10 +187,10 @@ For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb an
 passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
 is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
 
-To try it after step 8 of the demo, move the clock (no dashboard button), from the dashboard's browser console:
-`fetch('/api/clock', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({to: '2027-02-08T09:00:00+00:00'})})`.
-The seller emails the £828 request; in Maya's mailbox, **Open payment page ↗** and pay. Use `2027-03-03` instead
-to see one request for £4,968. `scripts/e2e_demo.js` runs the 8 Feb case last.
+Step 9 of the demo shows the combined request. To see the two requests separately, move the clock to 8 Feb
+first (`POST /api/clock {"to": "2027-02-08T09:00:00+00:00"}`; no dashboard button): the seller asks for £828,
+and after it's paid the card offers **Jump to 3 Mar (demo)** for the £4,140. `scripts/e2e_demo.js` runs it
+that way.
 
 ### When a payment provider refuses
 
