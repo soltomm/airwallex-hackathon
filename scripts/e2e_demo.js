@@ -72,6 +72,11 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     return m;
   };
   const mclick = async (m, sel) => { await m.click(sel); await m.waitForTimeout(700); };
+  // The mailbox has one reply box; the buyer's brief prefills it. Wait for that draft, then Send.
+  const sendDraft = async m => {
+    await m.waitForFunction(() => { const d = document.getElementById('draft'); return d && d.value.trim(); }, null, { timeout: 10000 });
+    await mclick(m, '[data-act=send]');
+  };
 
   try {
     await page.goto(`${BASE}/${TOKEN ? '?k=' + encodeURIComponent(TOKEN) : ''}`);
@@ -92,7 +97,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     check('Summit quoted £4,920 with a £1,476 deposit', s1.versions[0].pricing.total === 492000 && s1.versions[0].pricing.deposit === 147600);
     check('Northstar asked three questions', (n.thread.find(m => m.questions) || {}).questions?.length === 3);
     await open('Northstar');
-    check('the dashboard has no buyer actions', (await page.$$('#deal [data-act=sendSug], #deal [data-act=accept], #deal [data-form]')).length === 0);
+    check('the dashboard has no buyer actions', (await page.$$('#deal [data-act=send], #deal [data-act=accept], #deal [data-form]')).length === 0);
     check('the card shows the seller\'s last action', /Seller's last action/.test(await page.innerText('#deal .next')));
     await tab('agent');
     let txt = await card();
@@ -107,13 +112,13 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     // 2-3. In Northstar's mailbox: answers, then the counteroffer. v2 at £3,840 waits for the manager.
     const mb = await mailbox('Northstar');
     check('the mailbox shows the hotel\'s questions', /Before we can confirm/.test(await mb.innerText('#thread')));
-    await mclick(mb, '[data-act=sendSug]');                         // Send answers
+    await sendDraft(mb);                         // Send answers
     n = await settle('Northstar', ['offer_sent']);
     const v1 = n.versions[n.versions.length - 1];
     check('v1 £9,600, 30% deposit, 10% attrition', v1.pricing.total === 960000 && v1.terms.deposit_pct === 30 && v1.terms.attrition_pct === 10);
     await mb.waitForSelector('.att', { timeout: 10000 });
     check('the offer arrives in the mailbox with its figures', /£9,600/.test(await mb.innerText('#thread')));
-    await mclick(mb, '[data-act=sendSug]');                         // Send counteroffer
+    await sendDraft(mb);                         // Send counteroffer
     n = await settle('Northstar', ['pending_approval']);
     const v2 = n.versions[n.versions.length - 1];
     check('v2 keeps £220 and asks 40% (£3,840)', v2.terms.rate === 22000 && v2.pricing.deposit === 384000);
@@ -122,8 +127,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     n = await settle('Northstar', ['offer_sent']);
 
     // 4. Accept v2 in the mailbox; the seller opens checkout.
-    await mb.waitForSelector('button:has-text("Accept v2")', { timeout: 10000 });
-    await mclick(mb, 'button:has-text("Accept v2")');
+    await sendDraft(mb);
     n = await settle('Northstar', ['awaiting_payment']);
     const accMsg = n.thread.filter(m => m.from === 'buyer').pop().text;
     check('the accept message states no limits', !/£3,000|30% limit|budget/.test(accMsg), accMsg);
@@ -146,11 +150,10 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await click('#deal [data-act=jump]');
     await settle('Summit', ['expired']);
     check('Summit lapsed at the jump', (await deal('Summit')).status === 'expired');
-    await mb.reload(); await mb.waitForSelector('[data-act=sendSug]', { timeout: 10000 });
-    await mclick(mb, '[data-act=sendSug]');                          // Send change request
+    await mb.reload();
+    await sendDraft(mb);                          // Send change request
     n = await settle('Northstar', ['amendment_sent']);
-    await mb.waitForSelector('button:has-text("Accept v3")', { timeout: 10000 });
-    await mclick(mb, 'button:has-text("Accept v3")');
+    await sendDraft(mb);
     n = await settle('Northstar', ['refund_awaiting_approval']);
     const v3 = n.versions[n.versions.length - 1];
     check('v3 £8,280 with £528 owed', v3.pricing.total === 828000 && n.finance.refund_owed === 52800);
