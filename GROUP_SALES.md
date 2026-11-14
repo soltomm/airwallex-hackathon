@@ -4,7 +4,7 @@ Internal pricing decisions and the revenue-manager demo are documented in
 [Revenue pricing review](docs/REVENUE_REVIEW.md).
 
 Post-stay PMS folios and incremental balance collection are documented in
-[Post-stay reconciliation](docs/POST_STAY_RECONCILIATION.md).
+[Post-stay reconciliation](docs/POST_STAY_RECONCILIATION.md). They are hidden unless `GS_FOLIO=1` is set.
 
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
