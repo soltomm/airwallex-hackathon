@@ -76,8 +76,12 @@ def _hash(obj) -> str:
 
 class Engine:
     def __init__(self, var_dir: str | Path, provider, scenario_path: str | Path = SCENARIO,
-                 public_base: str = "http://localhost:8010"):
+                 public_base: str = "http://localhost:8010", fx_enabled: bool = False):
         self.var = Path(var_dir)
+        # Automated sandbox FX (foreign bank receipts and conversions in the hotel's wallet) is off unless the
+        # server turns it on (GS_FX=1). While off it makes no FX provider calls and converts nothing; card
+        # checkout is GBP either way.
+        self.fx_enabled = fx_enabled
         self.var.mkdir(parents=True, exist_ok=True)
         self.provider = provider
         self.scenario_path = Path(scenario_path)
@@ -221,6 +225,8 @@ class Engine:
 
     def scan_fx(self):
         """Automatic sandbox treasury scan. Network calls happen outside the booking lock."""
+        if not self.fx_enabled:
+            return {'disabled': True}
         if not self.fx_scan_lock.acquire(blocking=False):
             return {'busy': True}
         try:
@@ -257,6 +263,8 @@ class Engine:
             self.fx_scan_lock.release()
 
     def simulate_fx_receipt(self, deal_id):
+        if not self.fx_enabled:
+            raise Refused('Automated FX is turned off.')
         if not self.fx_provider.simulated:
             raise Refused('Local FX receipt fixtures are only available with simulated payments.')
         with self.lock:
@@ -1758,10 +1766,11 @@ class Engine:
             return
         op["status"] = "succeeded"
         new = self._ledger(f"receipt:{pi['id']}", d, "deposit_received", op["amount"], op, pi["id"])
-        self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
-                                 'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
-                                 'amount': str(Decimal(op['amount']) / 100),
-                                 'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
+        if self.fx_enabled:
+            self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
+                                     'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
+                                     'amount': str(Decimal(op['amount']) / 100),
+                                     'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
         if not new and d.get("booking"):
             return
         v = self._version(d, op["version"])
@@ -1964,10 +1973,11 @@ class Engine:
             return
         op["status"] = "succeeded"
         if self._ledger(f"receipt:{pi['id']}", d, "installment_received", op["amount"], op, pi["id"]):
-            self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
-                                     'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
-                                     'amount': str(Decimal(op['amount']) / 100),
-                                     'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
+            if self.fx_enabled:
+                self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
+                                         'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
+                                         'amount': str(Decimal(op['amount']) / 100),
+                                         'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
             self.log(d["id"], "system", "installment_paid", f"Instalment payment {pi['id']} verified with the provider "
                      f"({source}); {gbp(op['amount'])} received and recorded once.")
         self._settle_installment_payouts(d)
@@ -3062,7 +3072,7 @@ class Engine:
             deals = []
             for d in self.s["deals"].values():
                 x = copy.deepcopy(d)
-                x['payer_fx'] = self.payer_view(d)
+                x['payer_fx'] = self.payer_view(d) if self.fx_enabled else None
                 x['vendor_workflow'] = self.vendor_workspace(d['id']) if vendors.workspace(d)['enabled'] else None
                 if (d.get("booking") or {}).get("status") == "confirmed": x["folio_summary"] = self.folio_view(d["id"])
                 if d.get("pricing_review"): x["pricing_review"] = self.pricing_review(d["id"])

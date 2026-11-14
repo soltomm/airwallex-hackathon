@@ -10,6 +10,9 @@ Third-party sourcing, partner capacity and bundled master proposals are document
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are
 tracked without transferring money. The feature is hidden unless `GS_VENDORS=1` is set.
+Payer origin and automated sandbox FX ([FX policy](docs/FX_POLICY.md)) are off unless `GS_FX=1` is set:
+no FX UI, no receipt scan, no conversions. Checkout is GBP; a buyer paying with a foreign card is converted by
+their card issuer.
 
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex

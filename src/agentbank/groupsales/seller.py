@@ -958,6 +958,10 @@ How to work:
   or fact stops you (why_a_person) and what decision you need (what_a_person_should_do).
 - When the buyer accepts, open_checkout (the buyer pays on Airwallex's hosted page; you never see card
   data). Payments are verified by the back office.
+- Currency: every price, deposit, instalment and refund is in GBP, and the payment page charges GBP by
+  card. If a buyer asks to pay in another currency (USD, EUR, ...), answer in your next email: the hotel
+  invoices and charges in GBP, and their card issuer converts the amount at its own rate. Don't quote
+  converted amounts or exchange rates, and don't offer another payment currency or a bank transfer.
 - After the deposit, the rest of the contract is due on the instalment schedule. When a deal's next
   step says an instalment is due, call request_balance: the engine works out the amount from the signed
   contract and emails the buyer a payment link (you never choose or change the amount, and never waive
