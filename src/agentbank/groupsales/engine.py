@@ -76,8 +76,12 @@ def _hash(obj) -> str:
 
 class Engine:
     def __init__(self, var_dir: str | Path, provider, scenario_path: str | Path = SCENARIO,
-                 public_base: str = "http://localhost:8010"):
+                 public_base: str = "http://localhost:8010", fx_enabled: bool = False):
         self.var = Path(var_dir)
+        # Automated sandbox FX (foreign bank receipts and conversions in the hotel's wallet) is off unless the
+        # server turns it on (GS_FX=1). While off it makes no FX provider calls and converts nothing; card
+        # checkout is GBP either way.
+        self.fx_enabled = fx_enabled
         self.var.mkdir(parents=True, exist_ok=True)
         self.provider = provider
         self.scenario_path = Path(scenario_path)
@@ -221,6 +225,8 @@ class Engine:
 
     def scan_fx(self):
         """Automatic sandbox treasury scan. Network calls happen outside the booking lock."""
+        if not self.fx_enabled:
+            return {'disabled': True}
         if not self.fx_scan_lock.acquire(blocking=False):
             return {'busy': True}
         try:
@@ -257,6 +263,8 @@ class Engine:
             self.fx_scan_lock.release()
 
     def simulate_fx_receipt(self, deal_id):
+        if not self.fx_enabled:
+            raise Refused('Automated FX is turned off.')
         if not self.fx_provider.simulated:
             raise Refused('Local FX receipt fixtures are only available with simulated payments.')
         with self.lock:
@@ -1758,10 +1766,11 @@ class Engine:
             return
         op["status"] = "succeeded"
         new = self._ledger(f"receipt:{pi['id']}", d, "deposit_received", op["amount"], op, pi["id"])
-        self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
-                                 'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
-                                 'amount': str(Decimal(op['amount']) / 100),
-                                 'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
+        if self.fx_enabled:
+            self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
+                                     'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
+                                     'amount': str(Decimal(op['amount']) / 100),
+                                     'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
         if not new and d.get("booking"):
             return
         v = self._version(d, op["version"])
@@ -1832,9 +1841,10 @@ class Engine:
         overdue = bool(open_op and open_op["status"] == "created" and open_op.get("due_by")
                        and (calc.d(open_op["due_by"]) + timedelta(days=self.INSTALLMENT_GRACE_DAYS)).isoformat() < today)
         return {"due_now": sum(m["amount"] for m in due), "due_by": due[-1]["due"] if due else None,
+                "final_due": sched[-1]["due"] if len(sched) > 1 else None,
                 "milestones_due": [m["label"] for m in due], "next": upcoming, "blocked": blocked,
                 "open": open_op and {k: open_op.get(k) for k in ("id", "status", "amount", "due_by", "payment_intent_id",
-                                                                  "created_at")},
+                                                                  "created_at", "milestones")},
                 "overdue": overdue, "paid": sum(o["amount"] for o in ops if o["status"] == "succeeded")}
 
     @staticmethod
@@ -1863,6 +1873,7 @@ class Engine:
                     raise Refused("the last instalment payment didn't match its request: hotel staff must reconcile it")
                 if op["status"] in ("submitting", "unknown"):
                     self._recover(op)
+                    self._email_installment(d, op)
                     self._save()
                 return {"payment_url": self.balance_url(d), "operation": op["id"], "status": op["status"],
                         "amount": gbp(op["amount"]), "note": "existing instalment request reused; check it, don't ask again"}
@@ -1900,21 +1911,32 @@ class Engine:
                 self._pause_seller(d, "requesting an instalment", e)
                 self._save()
                 raise Refused(f"provider refused the payment intent: {e}")
-            total = v["pricing"]["total"]
-            paid_after = self.finance(d)["net_received"] + amount
             self._seller_acted(d)
-            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
-                                "installment_op": oid,
-                                "text": f"Your next payment for booking {d['ref']} is due: {gbp(amount)}. Under the "
-                                        f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
-                                        f"total is due by {self._long_date(st['due_by'])}; this payment brings what "
-                                        f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
-                                        f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
             self.log(d["id"], actor, "installment_requested", f"Instalment {gbp(amount)} requested for v{v['n']} "
-                     f"({', '.join(st['milestones_due'])}, due {st['due_by']}); payment page opened "
-                     f"(intent {op.get('payment_intent_id') or 'unknown'}).")
+                     f"({', '.join(st['milestones_due'])}, due {st['due_by']}); "
+                     + (f"payment page opened (intent {op['payment_intent_id']})." if op["status"] == "created" else
+                        "the provider's answer was lost and the intent isn't found yet: no email sent until "
+                        "check_balance_payment finds it."))
+            self._email_installment(d, op)
             self._save()
             return {"payment_url": self.balance_url(d), "operation": oid, "status": op["status"], "amount": gbp(amount)}
+
+    def _email_installment(self, d, op):
+        """Email the buyer the payment link, once, and only for an intent the provider has confirmed exists:
+        a link to a payment that may not exist would only show the buyer an error."""
+        if op["status"] != "created" or op.get("emailed_at"):
+            return
+        v = self._version(d, op["version"])
+        total = v["pricing"]["total"]
+        paid_after = self.finance(d)["net_received"] + op["amount"]
+        d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                            "installment_op": op["id"],
+                            "text": f"Your next payment for booking {d['ref']} is due: {gbp(op['amount'])}. Under the "
+                                    f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
+                                    f"total is due by {self._long_date(op['due_by'])}; this payment brings what "
+                                    f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
+                                    f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
+        op["emailed_at"] = self.now()
 
     def check_balance_payment(self, deal_id: str, source: str = "seller") -> dict:
         with self.lock:
@@ -1939,6 +1961,7 @@ class Engine:
             self._recover(op)
             if op["status"] in ("submitting", "unknown"):
                 return
+            self._email_installment(d, op)
         if op["status"] in ("failed", "cancelled", "mismatch", "succeeded") or not op.get("payment_intent_id"):
             if op["status"] == "succeeded":
                 self._settle_installment_payouts(d)
@@ -1964,10 +1987,11 @@ class Engine:
             return
         op["status"] = "succeeded"
         if self._ledger(f"receipt:{pi['id']}", d, "installment_received", op["amount"], op, pi["id"]):
-            self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
-                                     'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
-                                     'amount': str(Decimal(op['amount']) / 100),
-                                     'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
+            if self.fx_enabled:
+                self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
+                                         'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
+                                         'amount': str(Decimal(op['amount']) / 100),
+                                         'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
             self.log(d["id"], "system", "installment_paid", f"Instalment payment {pi['id']} verified with the provider "
                      f"({source}); {gbp(op['amount'])} received and recorded once.")
         self._settle_installment_payouts(d)
@@ -2944,6 +2968,8 @@ class Engine:
                     return "hotel staff: instalment payment mismatch"
                 if inst["overdue"]:
                     return "hotel staff: instalment overdue"
+                if inst["open"] and inst["open"]["status"] in ("submitting", "unknown"):
+                    return "seller: check instalment request"
                 if inst["open"]:
                     return "buyer: pay instalment"
                 if inst["due_now"]:
@@ -3007,6 +3033,9 @@ class Engine:
             if inst and not inst["blocked"]:
                 if inst["open"] and inst["open"]["status"] == "mismatch":
                     return "an instalment payment didn't match its request: wait for hotel staff to reconcile it"
+                if inst["open"] and inst["open"]["status"] in ("submitting", "unknown"):
+                    return ("the provider's answer to the instalment request was lost and the buyer hasn't been "
+                            "emailed: call check_balance_payment to look it up (never request it again)")
                 if inst["open"]:
                     return (f"an instalment request for {gbp(inst['open']['amount'])} is open: waiting for the buyer "
                             "(check_balance_payment verifies it; never request it again)")
@@ -3062,13 +3091,14 @@ class Engine:
             deals = []
             for d in self.s["deals"].values():
                 x = copy.deepcopy(d)
-                x['payer_fx'] = self.payer_view(d)
+                x['payer_fx'] = self.payer_view(d) if self.fx_enabled else None
                 x['vendor_workflow'] = self.vendor_workspace(d['id']) if vendors.workspace(d)['enabled'] else None
                 if (d.get("booking") or {}).get("status") == "confirmed": x["folio_summary"] = self.folio_view(d["id"])
                 if d.get("pricing_review"): x["pricing_review"] = self.pricing_review(d["id"])
                 x["waiting_on"] = self.waiting_on(d)
                 x["next_step"] = self.next_step(d)
                 x["finance_view"] = self.finance(d)
+                x["installments"] = self.installments(d)
                 x["payout_view"] = self.payout_view(d)
                 x["money_trail"] = self.money_trail(d)
                 x["ops"] = self.ops_instructions(d)

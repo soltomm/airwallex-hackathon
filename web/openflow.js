@@ -40,7 +40,7 @@
   const source = d => d.generated ? `Generated · ${presetTitle(d.generated)} · seed ${d.generated.seed}` : 'Groupy · Connected';
   function table(all) {
     const filtered=all.filter(d=>(filter==='all'||filter==='new'&&NEW.includes(d.status)||filter===d.status) && `${d.company} ${d.contact||''} ${d.payer?.origin?.country||''} ${d.payer?.origin?.local_currency||''}`.toLowerCase().includes(search.toLowerCase()));
-    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th><th>Payer origin</th><th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(source(d))}</span></button></td><td>${window.FX?.summary(d.payer)||'<span class="muted">Not recorded</span>'}</td><td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="6" class="wb-empty">No inquiries match. Try another filter or send a new inquiry.</td></tr>'}</tbody></table></div>`;
+    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th>${window.FX?'<th>Payer origin</th>':''}<th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(source(d))}</span></button></td>${window.FX?`<td>${window.FX.summary(d.payer)}</td>`:''}<td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="${window.FX?6:5}" class="wb-empty">No inquiries match. Try another filter or send a new inquiry.</td></tr>'}</tbody></table></div>`;
   }
   function renderPipeline(all) {
     const moves=all.filter(d=>d.review).slice(0,6);
@@ -91,7 +91,7 @@
         <label class="wb-field">Price pressure${opts('price', pairs('price'), d.price)}</label>
         <label class="wb-field">Attrition the buyer wants${opts('attrition', [['', 'Hotel standard'], ['20', '20% (traded for a bigger deposit)']], d.attrition)}</label>
         <label class="wb-field">Room type${opts('room_type', [['', 'Either'], ['twin', 'Twin'], ['king', 'King']], d.room_type)}</label>
-        <label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>
+        ${window.FX ? `<label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>` : ''}
         <label class="wb-field">Later change${opts('change_rooms', [['0', 'None'], ['1', '1 room fewer a night, then a refund'], ['2', '2 rooms fewer a night, then a refund']], d.change_rooms)}</label>
         <label class="wb-field">Meeting room${opts('meeting', [['', 'Not needed'], ['1', 'Thames Room, one day']], d.meeting ? '1' : '')}</label>
       </div>
@@ -105,7 +105,7 @@
       missing: [...document.querySelectorAll('[name=wbMissing]:checked')].map(x => x.value)};
     if (v('attrition')) out.attrition = Number(v('attrition'));
     if (v('room_type')) out.room_type = v('room_type');
-    if (v('payer_country')) out.payer_country = v('payer_country');
+    if ($('wbT_payer_country') && v('payer_country')) out.payer_country = v('payer_country');
     return out;
   }
   function buyerToggle(mode) {

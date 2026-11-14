@@ -341,6 +341,19 @@ function render() {
   $('rulesSub').textContent = changed ? 'Changed by hotel staff · see what the seller may agree' : 'What the seller may agree, and how to change it';
 }
 
+// What the booking card says about the contract's instalments, and the demo's jump to the last due date.
+function instalmentHtml(d) {
+  const i = d.installments;
+  if (!i || i.blocked) return '';
+  const o = i.open;
+  if (o && o.status === 'mismatch') return `<p><b>The last instalment payment didn't match its request.</b> Check it in Airwallex before anything more is collected.</p>`;
+  if (i.overdue) return `<p><b>The ${gbp(o.amount)} instalment due ${day(o.due_by)} is unpaid.</b> The seller doesn't chase with new requests: contact the buyer.</p>`;
+  if (o && o.status !== 'created') return `<p class="small">The seller is confirming a ${gbp(o.amount)} instalment request with Airwallex before it emails the buyer.</p>`;
+  if (o) return `<p class="small">The seller asked for ${gbp(o.amount)} (due ${day(o.due_by)}) by email with a payment link. Waiting for the buyer to pay on Airwallex's hosted page.</p>`;
+  if (i.due_now || !i.next || !i.final_due || i.final_due <= S.clock.slice(0, 10)) return '';
+  return `<p class="small">The rest of the contract is due by ${day(i.final_due)}. The seller asks for it on the due date.</p><div class="row"><button data-act="jumpInst" data-to="${esc(i.final_due)}">Jump to ${day(i.final_due)} (demo)</button></div>`;
+}
+
 // ---- the next step, in one place. The dashboard is the hotel's: the buyer answers by email ------
 const SELLER_TURN = ['new', 'intake', 'approved_to_send', 'accepted', 'refund_due', 'amendment_approved', 'revise', 'refund_awaiting_approval'];
 const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
@@ -365,7 +378,13 @@ function nextOf(d) {
   // apply): show that hand-off until the buyer writes again.
   if (st === 'confirmed' && d.handoff && !d.thread.some(m => m.from === 'buyer' && m.at > d.handoff.at))
     return {cls: 'bad', short: 'With hotel staff', who: 'Booked · handed to a person · not an approval', confirmed: true, handoff: d.handoff};
-  if (st === 'confirmed') return {cls: 'done', short: 'Booked', who: 'Booking confirmed', confirmed: true};
+  if (st === 'confirmed') {
+    const i = d.installments, open = i && !i.blocked && i.open;
+    if (open && (open.status === 'mismatch' || i.overdue))
+      return {cls: 'bad', short: open.status === 'mismatch' ? 'Instalment mismatch' : 'Instalment overdue', who: 'Booking confirmed · needs hotel staff', confirmed: true};
+    if (open) return {cls: 'buyer', short: 'Instalment requested', who: 'Booking confirmed · waiting for the buyer to pay', confirmed: true};
+    return {cls: 'done', short: d.finance_view && d.finance_view.still_due === 0 ? 'Paid in full' : 'Booked', who: 'Booking confirmed', confirmed: true};
+  }
   if (['needs_info', 'offer_sent', 'amendment_sent', 'expired'].includes(st)) return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
     title: st === 'needs_info' ? `The seller asked ${co} some questions` : st === 'expired' ? 'The offer lapsed'
       : `${v && v.kind === 'amendment' ? 'Change' : 'Offer'} v${v && v.n} is with ${co}`,
@@ -419,10 +438,13 @@ function nextCard(d) {
     h += S.runner.busy ? `<h3><span class="dot pulse"></span>Working on it…</h3>` : `<h3>The seller agent is picking this up</h3>`;
   } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
-    h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
+    const full = d.finance_view.still_due === 0;
+    h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${full ? `paid in full (${gbp(d.finance_view.net_received)})` : `${gbp(d.finance_view.net_received)} paid`}</h3>`;
     if (window.Folios) h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
     if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
-    if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
+    const jumpReduction = d.company.startsWith('Northstar') && S.clock < '2027-01-20';
+    if (jumpReduction) h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
+    else h += instalmentHtml(d);
     h += mailLink(d);
   } else {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
@@ -583,7 +605,10 @@ function tabBody(d) {
   if (tab === 'money') {
     const ops = S.operations.filter(o => o.deal_id === d.id), led = S.ledger.filter(x => x.deal_id === d.id), f = d.finance_view;
     if (!ops.length) return '<p class="muted">No payments yet.</p>';
-    return `${f.schedule ? `<table class="t"><tr><th>Schedule</th><th>Due</th><th class="r">Amount</th></tr>${f.schedule.map(x => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {year: 'numeric'}) : '–'}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">The seller asks for each instalment on its due date; the amounts come from the contract.</p>` : ''}
+    const io = d.installments && d.installments.open, today = S.clock.slice(0, 10);
+    const payState = (x, k) => !x.amount ? 'Paid' : k && io && (io.milestones || []).includes(x.label) ? 'Requested'
+      : x.due && x.due <= today ? 'Due' : 'Upcoming';
+    return `${f.schedule ? `<table class="t"><tr><th>Schedule</th><th>Due</th><th>Status</th><th class="r">Still to pay</th></tr>${f.schedule.map((x, k) => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {year: 'numeric'}) : '–'}</td><td>${payState(x, k)}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">The seller asks for each instalment on its due date; the amounts come from the contract.</p>` : ''}
       <div class="label" style="margin-top:12px">Airwallex</div><table class="t">${ops.map(o => `<tr><td>${o.kind} ${gbp(o.amount)}</td><td><code class="small">${esc((o.kind === 'deposit' || o.kind === 'installment') ? o.payment_intent_id : o.provider_id || '–')}</code></td><td>${esc(o.provider_status || o.status)}</td></tr>`).join('')}</table>
       <div class="label" style="margin-top:12px">Ledger</div><table class="t">${led.map(x => `<tr><td>${when(x.at)}</td><td>${esc(x.type.replaceAll('_', ' '))}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('') || '<tr><td class="muted">empty</td></tr>'}</table>
       ${d.pay_url ? `<p><a href="${d.pay_url}" target="_blank" class="small">Booking payment page ↗</a></p>` : ''}`;
@@ -622,6 +647,7 @@ function wire(d) {
       else if (a === 'retry') { await api(`/api/deals/${d.id}/retry`, {}); toast('The seller is retrying'); }
       else if (a === 'retryPayout') { const r = await api(`/api/deals/${d.id}/retry_payout`, {}); toast(r.status === 'paid' ? 'Hotel paid' : 'Payout still pending'); }
       else if (a === 'jump') await api('/api/clock', {to: '2027-01-20T09:00:00+00:00'});
+      else if (a === 'jumpInst') await api('/api/clock', {to: b.dataset.to + 'T09:00:00+00:00'});
       else if (a === 'handBack') { await api(`/api/deals/${d.id}/hand_back`, {instruction: ($('instr') || {}).value || ''}); toast('Handed back to the seller'); }
       else if (a === 'close') { await api(`/api/deals/${d.id}/close`, {}); toast('Inquiry closed'); }
     } catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
@@ -850,7 +876,7 @@ function renderRules() {
   const changes = S ? S.activity.filter(a => a.kind === 'rules_changed').slice(-5).reverse() : [];
   $('rules').innerHTML = `<button class="btn-ghost back" id="rulesBack">← Back to deals</button><h2>Seller rules</h2>
     <p class="lede">The seller agent works inside these rules. They are enforced in code, not just in the prompt: an offer outside them is refused, and anything between the seller's limit and the hard limit waits for the hotel manager. Nothing in a buyer's email can change them.</p>
-    <div class="card"><div class="label">Automated FX policy</div><p class="small muted">Stable foreign currency: hold. Unstable foreign currency: convert to GBP after verified sandbox receipt. Current GBP card deposits are already in hotel currency.</p><button id="fxDirectoryOpen">Countries & currency risk ↗</button></div>
+    ${window.FX ? `<div class="card"><div class="label">Automated FX policy</div><p class="small muted">Stable foreign currency: hold. Unstable foreign currency: convert to GBP after verified sandbox receipt. Current GBP card deposits are already in hotel currency.</p><button id="fxDirectoryOpen">Countries & currency risk ↗</button></div>` : ''}
     <div class="card"><div class="label">Who decides</div><div style="overflow-x:auto"><table class="t"><tr><th></th><th>Seller alone</th><th>Hotel manager approves</th><th>Never</th></tr>
       ${decisions().map(r => `<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="muted">${esc(r[3])}</td></tr>`).join('')}</table></div></div>
     <div class="card"><div class="label"><span>Change the rules</span><span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">${R.changed ? R.changed + ' changed from the defaults' : 'All at their defaults'}</span></div>

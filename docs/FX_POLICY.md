@@ -1,5 +1,11 @@
 # Payer origin and automated sandbox FX
 
+**Off by default.** Everything on this page runs only when the server has `GS_FX=1`. Without it the
+dashboard shows no payer-origin column, FX card or currency directory, the FX routes return 404, the
+background receipt scan doesn't start, and the engine makes no FX provider calls or conversions
+(`Engine(fx_enabled=False)`). Card checkout charges GBP either way: the payment page says so, and the
+Claude seller tells a buyer who asks to pay in another currency that their card issuer converts.
+
 The pipeline now shows payer country, local currency, the directional risk label,
 and the latest verified FX outcome. Country/currency is awareness metadata; it is
 not evidence that a payment was received in that currency. Existing inquiries

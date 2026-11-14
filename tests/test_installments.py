@@ -146,6 +146,31 @@ def test_a_timeout_is_looked_up_not_resubmitted(eng):
     assert len(ops(e, n)) == 1
 
 
+def test_a_request_whose_intent_is_not_found_yet_emails_nobody_until_it_is(eng):
+    e = eng
+    s, n = story(e)
+    e.advance_clock(to="2027-03-03T09:00:00+00:00")
+    real_find = e.provider.find_intents
+    e.provider.find_intents = lambda ref: []           # the answer was lost and the lookup can't see it yet
+    e.provider.knobs["timeout_next_create"] = True
+    emails = len(n["thread"])
+    e.request_balance(n["id"])
+    [op] = ops(e, n)
+    assert op["status"] == "unknown"
+    assert len(n["thread"]) == emails                  # no link to a payment that may not exist
+    assert e.waiting_on(n) == "seller: check instalment request"
+    assert "check_balance_payment" in e.next_step(n)
+    e.provider.find_intents = real_find
+    s.run()                                            # the rules seller looks it up; it doesn't ask again
+    assert op["status"] == "created" and len(ops(e, n)) == 1
+    assert [m for m in n["thread"][emails:] if m.get("installment_op") == op["id"]]
+    assert e.waiting_on(n) == "buyer: pay instalment"
+    e.check_balance_payment(n["id"])
+    assert len([m for m in n["thread"] if m.get("installment_op") == op["id"]]) == 1   # emailed once
+    pay_open(e, n)
+    assert op["status"] == "succeeded"
+
+
 def test_nothing_is_requested_while_a_refund_is_unresolved(eng):
     e = eng
     s, n = run_to_confirmed(e)

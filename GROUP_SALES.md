@@ -10,6 +10,9 @@ Third-party sourcing, partner capacity and bundled master proposals are document
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are
 tracked without transferring money. The feature is hidden unless `GS_VENDORS=1` is set.
+Payer origin and automated sandbox FX ([FX policy](docs/FX_POLICY.md)) are off unless `GS_FX=1` is set:
+no FX UI, no receipt scan, no conversions. Checkout is GBP; a buyer paying with a foreign card is converted by
+their card issuer.
 
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex
@@ -59,7 +62,7 @@ checkout redirected back to `http://localhost` in our tests. Webhooks need a pub
 tunnel. Without one, the backend checks outcomes by asking Airwallex directly: on return from checkout,
 through the seller's `check_payment`/`check_refund`, and when a hold expires.
 
-## Demo script (about 6 minutes)
+## Demo script (about 7 minutes)
 
 The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
@@ -101,6 +104,11 @@ hand-written RFP and sets who answers for the buyer.
    back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
+9. **Jump to 3 Mar (demo)**, on Northstar's card: the day the last instalment falls due, 7 days before
+   arrival. Both instalment dates have now passed, so the seller emails Maya one request for everything
+   due: **£4,968**. In the mailbox, **Open payment page ↗** and pay with the same test card. The card reads
+   **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Group Desk fee**; the Payments tab
+   marks every instalment paid.
 
 Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
@@ -181,6 +189,11 @@ due date is shown to hotel staff ("instalment overdue"); the seller doesn't chas
 For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb and £4,140 on 3 Mar. If the clock
 passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
 is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
+
+Step 9 of the demo shows the combined request. To see the two requests separately, move the clock to 8 Feb
+first (`POST /api/clock {"to": "2027-02-08T09:00:00+00:00"}`; no dashboard button): the seller asks for £828,
+and after it's paid the card offers **Jump to 3 Mar (demo)** for the £4,140. `scripts/e2e_demo.js` runs it
+that way.
 
 ### When a payment provider refuses
 
@@ -386,14 +399,14 @@ it, and the seller never sees the brief.
 
 An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
-(`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
+(`payer`, `taxes`, `layout`), `payer_country` (only with `GS_FX=1`), `change_rooms`. Presets are named combinations:
 
 | Preset | Path with the rules seller |
 |---|---|
 | `straight_booking` | quote, accept, deposit paid |
 | `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, paid |
 | `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
-| `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
+| `payer_abroad` | payer in Germany (records payer origin), paid in GBP, fewer rooms, refund. Only offered with `GS_FX=1` |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
 
 The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the

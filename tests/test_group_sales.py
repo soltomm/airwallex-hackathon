@@ -1735,7 +1735,8 @@ def test_buyer_mailbox(server):
     assert _req(mod, f"/api/buyer/{n['id']}/view?t=wrong")[0] == 400
 
 
-def test_generated_inquiry_endpoint(server):
+def test_generated_inquiry_endpoint(server, monkeypatch):
+    monkeypatch.setattr(server, "FX", True)
     st, _, body = _req(server, "/api/simulate/presets")
     cat = json.loads(body)
     assert st == 200 and "full_lifecycle" in cat["presets"] and cat["info"]["full_lifecycle"]["title"]

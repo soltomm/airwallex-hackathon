@@ -17,7 +17,7 @@ from test_group_sales import server, _req, run_to_confirmed, deal_by
 
 @pytest.fixture
 def engine(tmp_path):
-    return Engine(tmp_path/'hotel', SimulatedProvider(tmp_path/'payments.json'))
+    return Engine(tmp_path/'hotel', SimulatedProvider(tmp_path/'payments.json'), fx_enabled=True)
 
 
 def test_catalog_covers_iso_countries_and_multicurrency():
@@ -76,7 +76,7 @@ def test_foreign_receipts_are_automatic_and_separate_from_booking(engine):
     # Polling, a fresh engine, or a scenario reset cannot resubmit a completed conversion.
     engine.scan_fx()
     assert len(engine.fx_provider.state['conversions'])==1
-    restored=Engine(engine.var,engine.provider);restored.scan_fx()
+    restored=Engine(engine.var,engine.provider,fx_enabled=True);restored.scan_fx()
     assert len(restored.fx_provider.state['conversions'])==1
     restored.reset();restored.scan_fx()
     assert restored.payer_view(deal_by(restored,'Northstar'))['latest'] is None
@@ -194,6 +194,7 @@ def test_sandbox_adapter_scopes_all_calls_and_matches_provider_receipts():
 
 
 def test_fx_endpoints_use_hotel_access_gate(server,monkeypatch):
+    monkeypatch.setattr(server,'FX',True);monkeypatch.setattr(server.engine,'fx_enabled',True)
     monkeypatch.setattr(server,'ACCESS','fx-test-token')
     assert _req(server,'/api/fx/countries')[0]==401
     assert _req(server,'/assets/fx.js')[0]==401
@@ -208,6 +209,7 @@ def test_fx_endpoints_use_hotel_access_gate(server,monkeypatch):
 
 
 def test_inbox_accepts_structured_origin_but_no_currency_policy_override(server,monkeypatch):
+    monkeypatch.setattr(server,'FX',True)
     monkeypatch.setattr(server,'ACCESS','')
     code,_,body=_req(server,'/api/inbox',{'from':'Test <test@example.test>','subject':'New group','body':'Please quote rooms.','payer_country':'US'})
     assert code==200
@@ -230,7 +232,7 @@ def test_unknown_payer_country_does_not_prevent_verifying_actual_currency(engine
 
 def test_existing_state_gets_a_reference_without_inventing_origin(engine):
     d=deal_by(engine,'Northstar');del d['fx_reference'];engine._save()
-    restored=Engine(engine.var,engine.provider)
+    restored=Engine(engine.var,engine.provider,fx_enabled=True)
     result=restored.payer_view(deal_by(restored,'Northstar'))
     assert result['reference'].startswith('HH-')
     assert result['origin'] is None
@@ -240,3 +242,66 @@ def test_simulated_receipts_are_refused_on_real_provider(engine):
     engine.fx_provider=SimpleNamespace(simulated=False)
     with pytest.raises(Refused,match='only available'):
         engine.simulate_fx_receipt('GS-1001')
+
+
+# GS_FX is off by default: the hidden FX feature makes no provider calls and shows nothing.
+
+def test_fx_off_by_default_makes_no_provider_calls(tmp_path):
+    off=Engine(tmp_path/'hotel', SimulatedProvider(tmp_path/'payments.json'))
+    assert off.fx_enabled is False
+    calls=[]
+    off.fx_provider=SimpleNamespace(simulated=True, receipts=lambda *a: calls.append(a) or [])
+    assert off.scan_fx()=={'disabled': True} and not calls
+    d=deal_by(off,'Northstar');off.update_payer(d['id'],'NG')
+    with pytest.raises(Refused):
+        off.simulate_fx_receipt(d['id'])
+    assert not calls and not off.fx_journal.state['receipts']
+    assert all(x['payer_fx'] is None for x in off.snapshot()['deals'])
+
+
+def test_fx_off_card_deposit_writes_no_fx_journal(tmp_path):
+    off=Engine(tmp_path/'hotel', SimulatedProvider(tmp_path/'payments.json', refund_settle_seconds=0))
+    _,d=run_to_confirmed(off)
+    assert d['status']=='confirmed' and any(r['type']=='deposit_received' for r in off.s['ledger'])
+    assert not off.fx_journal.state['receipts']
+
+
+def test_fx_ui_and_routes_hidden_unless_enabled(server):
+    assert server.FX is False and server.engine.fx_enabled is False
+    code,_,page=_req(server,'/');assert code==200
+    assert '/assets/fx.js' not in page and 'id="fxDirectory"' not in page
+    did=next(iter(server.engine.s['deals']))
+    for path in ['/assets/fx.js','/api/fx/countries']:
+        assert _req(server,path)[0]==404
+    for path in ['/api/fx/scan',f'/api/deals/{did}/payer',f'/api/deals/{did}/fx_simulate']:
+        assert _req(server,path,{'country_code':'US'})[0]==404
+
+
+def test_fx_ui_shows_when_enabled(server,monkeypatch):
+    monkeypatch.setattr(server,'FX',True)
+    page=_req(server,'/')[2]
+    assert '/assets/fx.js' in page and 'id="fxDirectory"' in page
+    assert _req(server,'/assets/fx.js')[0]==200
+
+
+def test_seller_and_payment_page_say_payments_are_in_gbp(server):
+    from agentbank.groupsales.seller import system_prompt
+    prompt=system_prompt(server.engine)
+    assert 'charges in GBP, and their card issuer converts' in prompt
+    assert "Don't quote" in prompt and 'converted amounts' in prompt
+    assert 'Charged in GBP' in server.PAY_PAGE
+
+
+def test_fx_demo_inputs_are_refused_unless_enabled(server,monkeypatch):
+    """With GS_FX off, no scripted inquiry or intake can record a payer origin."""
+    monkeypatch.setattr(server,'ACCESS','')
+    cat=json.loads(_req(server,'/api/simulate/presets')[2])
+    assert 'payer_abroad' not in cat['presets'] and 'payer_abroad' not in cat['info']
+    assert 'full_lifecycle' in cat['presets']
+    count=len(server.engine.s['deals'])
+    for body in ({'preset':'payer_abroad','seed':991},{'traits':{'payer_country':'DE'},'seed':992}):
+        code,_,out=_req(server,'/api/simulate/rfp',body)
+        assert code==400 and 'GS_FX' in json.loads(out)['error']
+    code,_,out=_req(server,'/api/inbox',{'from':'Pat <pat@fx-off.example>','body':'Ten rooms','payer_country':'US'})
+    assert code==400 and 'GS_FX' in json.loads(out)['error']
+    assert len(server.engine.s['deals'])==count
