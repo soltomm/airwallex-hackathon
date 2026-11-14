@@ -77,6 +77,8 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.locator('#wbInquiryText').fill('Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays.');
  await page.locator('#wbSend').click();
  await page.locator('#liveDrawer[open]').waitFor();await page.keyboard.press('Escape');
+ // Closing hands focus back to the page in a later task; let it land before typing, as a person would.
+ await page.locator('#liveDrawer:not([open])').waitFor({state:'attached'});await page.waitForTimeout(300);
  // Search keeps focus through a polling tick; filters work.
  await page.locator('#wbSearch').fill('Acme');await page.waitForTimeout(1700);
  assert.equal(await page.locator('#wbSearch').evaluate(el=>el===document.activeElement),true);
