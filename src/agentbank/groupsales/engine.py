@@ -29,6 +29,7 @@ from pathlib import Path
 
 from . import bookable, calc, rules
 from .calc import gbp
+from .intent import interpret
 from .extract import MAX_EMAIL_CHARS, MAX_MESSAGE_CHARS, extract, missing_info, stay_nights
 from .policy import hotel_check, rule
 from .provider import AirwallexError, AmbiguousResult
@@ -1395,8 +1396,15 @@ class Engine:
             d = self.deal(deal_id)
             if not secrets.compare_digest(token or "", d["buyer_token"]):
                 raise Refused("not authenticated as this deal's buyer")
+            # A typed reply carries no structured move: read what it asks for (a counter, an acceptance, a
+            # change), so the buyer can negotiate in their own words. Everything below checks it as usual.
+            read = interpret(d, text) if action in ("message", "reply") and not payload else None
+            if read:
+                action, payload = read
             msg = {"id": self._id("msg"), "at": self.now(), "from": "buyer", "channel": "portal", "text": text,
                    "action": action, "payload": payload}
+            if read:
+                msg["read_from_text"] = True
             result: dict = {"recorded": True}
             if action == "accept":
                 n = int(payload.get("version") or 0)
@@ -1935,7 +1943,7 @@ class Engine:
                                     f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
                                     f"total is due by {self._long_date(op['due_by'])}; this payment brings what "
                                     f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
-                                    f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
+                                    f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Harbour House"})
         op["emailed_at"] = self.now()
 
     def check_balance_payment(self, deal_id: str, source: str = "seller") -> dict:
@@ -2399,7 +2407,7 @@ class Engine:
     def _run_onboarding(self, request_id: str, account: str | None):
         h = self.hotel
         try:
-            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@groupy.example",
+            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@harbourhouse.example",
                                                request_id, account, self._onboarding_step)
             final, error = ("ready", None) if ok else ("capabilities_pending",
                                                        "card payments not enabled yet; retry in a minute")
