@@ -279,10 +279,25 @@ const cap = t => { t = String(t || '').trim(); return t ? t[0].toUpperCase() + t
 // decision does. Older stored approvals without rules fall back to their reasons.
 function whyCard(a, alone = 'Seller alone') {
   const rules = a.rules || [];
-  let h = rules.length
-    ? `<div class="small muted" style="margin-top:6px">Why this needs you: ${rules.length > 1 ? 'these requests go' : 'this request goes'} beyond what the ${alone.split(' ')[0].toLowerCase()} can agree alone.</div>
-       <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>This request</th></tr>${rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`
-    : `<p>${esc(sentences(a.reasons))}</p>`;
+  // The buyer's own ask where the draft offers something else (e.g. 60% attrition asked, 20% drafted):
+  // shown beside the seller's proposal, so the manager sees what was asked and what they are approving.
+  const ba = a.buyer_asked || [];
+  const who = alone.split(' ')[0].toLowerCase();
+  let h;
+  if (rules.length && ba.length) {
+    const extra = ba.filter(x => !rules.some(r => r.rule === x.rule));
+    const rows = [...rules.map(r => ({...r, buyer: ba.find(x => x.rule === r.rule)})),
+                  ...extra.map(x => ({rule: x.rule, alone: '', asked: x.offered, buyer: x}))];
+    const lead = ba.map(x => `The buyer asked for ${esc(x.rule.toLowerCase())} <b>${esc(x.asked)}</b>${x.note ? `, ${esc(x.note)}` : ''}; the seller proposes <b>${esc(x.offered)}</b>.`).join(' ');
+    h = `<div class="small" style="margin-top:6px">${lead}</div>
+       <div class="small muted" style="margin-top:4px">Why this needs you: the seller's proposal goes beyond what the ${who} can agree alone.</div>
+       <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>Buyer asked</th><th>Seller proposes</th></tr>${rows.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td>${r.buyer ? esc(r.buyer.asked) : '—'}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`;
+  } else if (rules.length) {
+    h = `<div class="small muted" style="margin-top:6px">Why this needs you: ${rules.length > 1 ? 'these requests go' : 'this request goes'} beyond what the ${who} can agree alone.</div>
+       <table class="why"><tr><th>Rule</th><th>${esc(alone)}</th><th>This request</th></tr>${rules.map(r => `<tr><td>${esc(r.rule)}</td><td>${esc(r.alone)}</td><td><b>${esc(r.asked)}</b></td></tr>`).join('')}</table>`;
+  } else {
+    h = `<p>${esc(sentences(a.reasons))}</p>`;
+  }
   if (a.if_approved || a.if_rejected) h += `<dl class="kv small outcomes">${a.if_approved ? `<dt>If you approve</dt><dd>${esc(a.if_approved)}</dd>` : ''}${a.if_rejected ? `<dt>If you reject</dt><dd>${esc(a.if_rejected)}</dd>` : ''}</dl>`;
   return h;
 }
