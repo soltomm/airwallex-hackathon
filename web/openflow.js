@@ -1,7 +1,7 @@
 /* OpenFlow presentation over Groupy's live state, and the New inquiry drawer.
-   Every inquiry here goes to Groupy itself: generated ones (an RFP plus a private brief for the buyer
-   agent, see generator.py) or one you write. The seller agent, the buyer agent and the backend's rules do the
-   rest; nothing in this file prices, approves or moves money. */
+   Every inquiry here goes to Groupy itself: generated ones (an RFP, see generator.py) or one you write.
+   You reply as the buyer from its mailbox; the seller agent and the backend's rules do the rest.
+   Nothing in this file prices, approves or moves money. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -108,13 +108,6 @@
     if (v('payer_country')) out.payer_country = v('payer_country');
     return out;
   }
-  function buyerToggle(mode) {
-    return `<div class="wb-buyer-mode" role="group" aria-label="Who answers for the buyer">
-      <span>Buyer replies</span>
-      <button type="button" data-buyer-mode="agent" aria-pressed="${mode==='agent'}">Automatically (buyer agent)</button>
-      <button type="button" data-buyer-mode="presenter" aria-pressed="${mode!=='agent'}">By you, in the buyer’s mailbox</button></div>
-      <p class="wb-sub">${mode==='agent' ? 'The buyer agent answers for every buyer with a brief: generated inquiries and the two scenario ones. Approvals and paying the deposit stay with you.' : 'You send each buyer’s replies from its mailbox, with a draft from its brief ready to send.'}</p>`;
-  }
   async function simulator() {
     showDrawer('Let the inquiry come to you.', '<p class="wb-lede">Loading inquiry types…</p>');
     try { catalog = await window.Harbour.presets(); }
@@ -122,8 +115,7 @@
     const S = actual(), b = S?.bookable;
     const cards = Object.keys(catalog.presets).map(k => { const i = catalog.info[k] || {title: k, shows: ''};
       return `<button class="wb-channel" data-preset="${html(k)}"><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry →</span></button>`; }).join('');
-    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Groupy a generated group inquiry. Each one comes with a private brief for the buyer agent: its answers and goals, which the seller never sees. From the email on, the seller agent, the buyer agent and the backend’s rules take over${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
-      ${buyerToggle(catalog.buyer_mode)}
+    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Groupy a generated group inquiry. From the email on, the seller agent and the backend’s rules run the hotel side; you reply as the buyer from its mailbox${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
       ${thirdPartyForm()}
       <label class="wb-field wb-seed">Seed (optional)<input id="wbSeed" inputmode="numeric" pattern="[0-9]*" placeholder="Leave blank for a new inquiry each time"></label>
       <p class="wb-sub">The same seed sends the same inquiry against the same calendar. After a reset, reuse a seed to replay a run.</p>
@@ -153,7 +145,7 @@
   function ownForm(b) {
     const scope = b ? `for nights from ${longDate(b.first_night)} to ${longDate(b.last_night)}, with at least ${b.min_days_before_arrival} days’ notice` : 'for its bookable nights';
     return `<form id="wbInbound"><h3>Or write your own</h3>
-        <p class="wb-sub">A real, unscripted RFP. It has no brief, so nobody answers for the buyer automatically: reply from its mailbox.</p>
+        <p class="wb-sub">A real, unscripted RFP. Reply as the buyer from its mailbox.</p>
         <label class="wb-field">From<input id="wbInquiryFrom" required maxlength="200" value="Guest <guest@example.com>"></label>
         <label class="wb-field">Subject<input id="wbInquirySubject" required maxlength="200" value="Group inquiry"></label>
         <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="8" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>
@@ -178,13 +170,6 @@
       catch(err){ notify(err.message); $('wbSend').disabled=false; }
     };
   }
-  async function setBuyerMode(mode) {
-    try { await window.Harbour.setBuyerMode(mode); catalog.buyer_mode = mode;
-      const box = document.querySelector('.wb-buyer-mode'); box.nextElementSibling.remove(); box.outerHTML = buyerToggle(mode);
-      notify(mode==='agent' ? 'The buyer agent now answers for buyers with a brief.' : 'You answer for the buyers now.'); }
-    catch (err) { notify(err.message); }
-  }
-
   function open(id) {
     if(!actual()?.deals.some(d=>d.id===id)){notify('This inquiry is no longer available.');return;}
     trigger=document.activeElement; window.Harbour.open(id);
@@ -196,7 +181,6 @@
     if(button.dataset.filter){filter=button.dataset.filter;refresh();document.querySelector(`[data-filter="${filter}"]`).focus();}
     if(button.dataset.open)open(button.dataset.open);
     if(button.dataset.preset)generate({preset: button.dataset.preset});
-    if(button.dataset.buyerMode && button.getAttribute('aria-pressed')!=='true')setBuyerMode(button.dataset.buyerMode);
   });
   for(const dialog of [$('wbDrawer'),$('liveDrawer')]) {
     dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right)dialog.close();}});

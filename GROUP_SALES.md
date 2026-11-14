@@ -46,7 +46,6 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/test_group_sales.py -q
 |---|---|---|
 | `PAYMENTS` | `airwallex` if sandbox keys are set, else `simulated` | where deposits and refunds go |
 | `SELLER_MODE` | `claude` if an Anthropic key is set, else `rules` | seller agent; switchable in the dashboard |
-| `BUYER_MODE` | `presenter` | `agent` lets the buyer side reply on its own |
 | `GS_SELLER_MODEL` / `GS_BUYER_MODEL` | `claude-opus-5-5` | models |
 | `PUBLIC_BASE_URL` | `http://localhost:8010` | return URL after hosted checkout |
 | `AWX_WEBHOOK_SECRET` | unset | accept signed Airwallex webhooks at `POST /webhooks/airwallex` |
@@ -111,8 +110,7 @@ are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 Mar
 reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
 back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
-payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed). **＋ New inquiry → Buyer replies →
-Automatically (buyer agent)**, to let the buyer side answer on its own.
+payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed).
 
 ### Seller rules
 

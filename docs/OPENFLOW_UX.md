@@ -26,11 +26,10 @@ be exceeded, and takes the deposit through Airwallex like any other deal. The dr
   type, payer country, a later reduction, a meeting room, details left out of the RFP). Each inquiry comes
   with a private brief for the buyer agent; the seller never sees it. An optional seed replays the same
   inquiry against the same calendar, for example after a reset.
-- **Buyer replies**: automatically (the buyer agent answers for every buyer with a brief) or by you in the
-  buyer's mailbox. This is the server's buyer mode. Approvals and
-  paying the deposit always stay with a person.
-- **Write your own**: a real, unscripted RFP (`POST /api/inbox`, the same intake as an email). It has no
-  brief, so nobody answers for the buyer automatically.
+- **Buyer replies**: always by you, in the buyer's mailbox. There is no automatic buyer agent in the
+  dashboard. Approvals and paying the deposit always stay with a person.
+- **Write your own**: a real, unscripted RFP (`POST /api/inbox`, the same intake as an email). You reply as
+  the buyer from its mailbox.
 
 Generated rows show their preset and seed under the company name. The earlier browser-only simulator
 (its fixtures, fake approvals and deposits) has been removed: everything on the workbench comes from the
@@ -70,7 +69,7 @@ changing the legacy UI dependencies, and install its Chromium if needed:
 ```bash
 npm install --prefix /tmp/openflow-browser playwright
 /tmp/openflow-browser/node_modules/.bin/playwright install chromium
-PAYMENTS=simulated SELLER_MODE=rules BUYER_MODE=presenter \
+PAYMENTS=simulated SELLER_MODE=rules \
   GS_PORT=8011 GS_VAR=/tmp/openflow-harbour-test \
   .venv/bin/python scripts/group_sales.py
 # In another terminal, from the same repository root:

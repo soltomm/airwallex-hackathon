@@ -37,7 +37,6 @@ Example group-sales settings (no secrets):
 ```bash
 PAYMENTS=simulated              # or airwallex (default when sandbox keys are set)
 SELLER_MODE=rules               # or claude (default when an Anthropic key is set)
-BUYER_MODE=presenter            # or agent: the buyer side replies on its own
 PUBLIC_BASE_URL=http://localhost:8010   # return URL after hosted checkout
 GS_PORT=8010
 GS_VAR=var/groupsales           # state directory (DATABASE_URL switches to Postgres)

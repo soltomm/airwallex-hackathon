@@ -2,7 +2,7 @@
 """Groupy group-sales demo server: hotel dashboard, agents, hosted payment page, webhooks.
 
   PYTHONPATH=src python scripts/group_sales.py            # http://localhost:8010
-Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presenter|agent
+Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules
      PUBLIC_BASE_URL (for Airwallex return URLs)  AWX_WEBHOOK_SECRET (to accept Airwallex webhooks)
      GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
@@ -32,7 +32,7 @@ from agentbank.config import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from agentbank.groupsales import generator  # noqa: E402
-from agentbank.groupsales.buyer import BuyerAgent, act, suggest, wants_reply  # noqa: E402
+from agentbank.groupsales.buyer import BuyerAgent, act, suggest  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
@@ -73,8 +73,7 @@ class Runner:
 
     def __init__(self):
         self.settings = {"auto_seller": True,
-                         "seller_mode": os.environ.get("SELLER_MODE") or ("claude" if HAS_CLAUDE else "rules"),
-                         "buyer_mode": os.environ.get("BUYER_MODE", "presenter")}
+                         "seller_mode": os.environ.get("SELLER_MODE") or ("claude" if HAS_CLAUDE else "rules")}
         self.busy = None
         self.last = []
         self.claude_runs = {"day": time.strftime("%Y-%m-%d"), "n": 0}
@@ -83,7 +82,7 @@ class Runner:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def wake(self, reason: str):
-        if self.settings["auto_seller"] or self.settings["buyer_mode"] == "agent":
+        if self.settings["auto_seller"]:
             self.pending.set()
 
     def _loop(self):
@@ -113,20 +112,6 @@ class Runner:
                 self.busy = f"seller ({mode})"
                 seller = ClaudeSeller(engine) if mode == "claude" else RulesSeller(engine)
                 self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
-            if self.settings["buyer_mode"] == "agent":
-                self.busy = "buyer agent"
-                claude_buyer = HAS_CLAUDE and self.settings["seller_mode"] == "claude"
-                for d in list(engine.s["deals"].values()):
-                    # Claude can also answer hotel questions the brief's drafts don't cover.
-                    if not (wants_reply(engine, d["id"]) if claude_buyer else suggest(engine, d["id"])):
-                        continue
-                    if claude_buyer:
-                        BuyerAgent(engine).run(d["id"])
-                    else:
-                        try:
-                            act(engine, d["id"], suggest(engine, d["id"]), actor="buyer agent")
-                        except Refused as e:
-                            engine.note(d["id"], f"Buyer agent refused: {e}", actor="buyer agent")
             self.busy = None
 
 
@@ -163,7 +148,6 @@ def buyer_view(deal_id: str, token: str) -> dict:
     inst = engine.installments(d)
     v["balance_pay_url"] = engine.balance_url(d) if inst and inst["open"] and inst["open"]["status"] == "created" else None
     v["suggestion"] = suggest(engine, d["id"])
-    v["buyer_mode"] = runner.settings["buyer_mode"]
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
     v["finance_view"] = engine.finance(d)
     if d.get("folio") and engine.folio_view(d["id"])["approved"]:
@@ -293,8 +277,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.rules_view())
             if p == "/api/simulate/presets":
                 return self._send(200, {"presets": generator.PRESETS, "info": generator.PRESET_INFO,
-                                        "traits": generator.TRAITS, "defaults": generator.DEFAULTS,
-                                        "buyer_mode": runner.settings["buyer_mode"]})
+                                        "traits": generator.TRAITS, "defaults": generator.DEFAULTS})
             if p == "/api/fx/countries":
                 return self._send(200, fx.directory())
             if p.startswith("/pay/"):
@@ -369,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
                                  daemon=True).start()
                 return self._send(200, {"started": True})
             if p == "/api/settings":
-                for k in ("seller_mode", "buyer_mode"):
+                for k in ("seller_mode",):
                     if k in b:
                         if k == "seller_mode" and b[k] == "claude" and not HAS_CLAUDE:
                             return self._send(400, {"error": "no Anthropic credentials configured"})
@@ -576,7 +559,7 @@ def main():
     threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
     print(f"Groupy group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
-          f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']}, "
+          f"run {engine.s['run_id']}, "
           f"rules seller reads emails with: {'the model' if understand.available() else 'patterns (no Anthropic key)'})",
           flush=True)
     srv.serve_forever()

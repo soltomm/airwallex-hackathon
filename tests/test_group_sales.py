@@ -1739,7 +1739,7 @@ def test_generated_inquiry_endpoint(server):
     st, _, body = _req(server, "/api/simulate/presets")
     cat = json.loads(body)
     assert st == 200 and "full_lifecycle" in cat["presets"] and cat["info"]["full_lifecycle"]["title"]
-    assert cat["buyer_mode"] in ("presenter", "agent")
+    assert "buyer_mode" not in cat
     st, _, body = _req(server, "/api/simulate/rfp", {"preset": "payer_abroad", "seed": 4242})
     r = json.loads(body)
     assert st == 200 and r["seed"] == 4242 and r["rfp"]["from"].endswith("4242.example>")
