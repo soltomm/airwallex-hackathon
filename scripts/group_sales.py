@@ -7,6 +7,7 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
      GS_PORT / PORT (default 8010)  GS_VAR (state dir, default var/groupsales)
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
      GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
+     GS_VENDORS=1: show third-party vendor management (inquiry workspace, Directory). Off by default.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -45,6 +46,8 @@ PORT = int(os.environ.get("GS_PORT") or os.environ.get("PORT") or "8010")
 VAR = Path(os.environ.get("GS_VAR", ROOT / "var" / "groupsales"))
 PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}").rstrip("/")
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
+# Third-party vendor management stays in the engine but is off the demo path unless this is set.
+VENDORS = os.environ.get("GS_VENDORS", "").strip().lower() in ("1", "true", "yes", "on")
 # No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
 # Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
@@ -166,6 +169,19 @@ def buyer_view(deal_id: str, token: str) -> dict:
     return v
 
 
+def _vendor_route(p: str) -> bool:
+    return p == '/api/vendor_directory' or p.startswith('/api/vendors/') or (p.startswith('/api/deals/') and p.endswith('/vendors'))
+
+
+def dashboard_html() -> str:
+    page = (WEB / "group_sales.html").read_text()
+    if not VENDORS:
+        # Drop the Directory nav item and the vendor script; the rest of the dashboard checks window.Vendors.
+        page = re.sub(r'\s*<button id="vendorDirectoryNav">.*?</button>', '', page, count=1)
+        page = page.replace('<script src="/assets/vendors.js"></script>', '')
+    return page
+
+
 PAY_PAGE = (WEB / "group_pay.html").read_text() if (WEB / "group_pay.html").exists() else ""
 
 
@@ -228,14 +244,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if p == "/":
-                return self._send(200, (WEB / "group_sales.html").read_text(), "text/html")
+                return self._send(200, dashboard_html(), "text/html")
             assets = {"/assets/folio.js": ("folio.js", "text/javascript"),
                       "/assets/revenue.js": ("revenue.js", "text/javascript"),
                       "/assets/openflow.css": ("openflow.css", "text/css"),
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
-            if p in assets:
+            if p in assets and (VENDORS or p != "/assets/vendors.js"):
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
             if p.startswith('/api/deals/') and p.endswith('/folio/report'):
@@ -250,6 +266,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, engine.pricing_review(p.split('/')[3]))
             if p == "/api/state":
                 return self._send(200, state())
+            if not VENDORS and _vendor_route(p):
+                return self._send(404, {"error": "not found"})
             if p.startswith('/api/vendors/') and p.endswith('/history'):
                 return self._send(200, engine.vendor_history(p.split('/')[3], q.get('exclude_deal')))
             if p == '/api/vendor_directory':
@@ -303,6 +321,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._webhook(raw)
             if p == "/api/reset":
                 return self._send(200, engine.reset())
+            if not VENDORS and _vendor_route(p):
+                return self._send(404, {"error": "not found"})
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
                 did = p.split('/')[3]
                 if b.get('command') == 'propose':
@@ -364,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                 # take it from there; nothing else in the deal is simulated.
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
                                          seed=b.get("seed"))
-                return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party"))))
+                return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party") if VENDORS else None)))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
@@ -374,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc:
                         raise Refused(str(exc))
                 result = engine.ingest_email(b["from"], b.get("subject") or "(no subject)", b["body"],
-                                            message_id=b.get("message_id") or None, third_party=b.get("third_party"))
+                                            message_id=b.get("message_id") or None, third_party=b.get("third_party") if VENDORS else None)
                 if b.get('payer_country'):
                     engine.update_payer(result['deal_id'], b['payer_country'], b.get('payer_currency'))
                 return self._send(200, result)

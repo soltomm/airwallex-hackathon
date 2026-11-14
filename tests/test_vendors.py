@@ -158,6 +158,7 @@ def test_flat_markup_is_per_subitem_not_per_unit(eng):
 
 
 def test_vendor_routes_are_hotel_only(server,monkeypatch):
+    monkeypatch.setattr(server,'VENDORS',True)
     monkeypatch.setattr(server,'ACCESS','vendor-demo-token')
     did=next(iter(server.engine.s['deals']))
     for path in ['/api/vendor_directory',f'/api/deals/{did}/vendors','/assets/vendors.js','/api/vendors/sound/history']:
@@ -285,7 +286,8 @@ def test_invalid_simulation_does_not_create_inquiry(eng):
     assert len(eng.s['deals'])==n
 
 
-def test_generated_inquiry_can_include_vendor_quote(server):
+def test_generated_inquiry_can_include_vendor_quote(server,monkeypatch):
+    monkeypatch.setattr(server,'VENDORS',True)
     from agentbank.groupsales import generator
     preset=next(iter(generator.PRESETS))
     code,_,body=_req(server,'/api/simulate/rfp',{'preset':preset,'seed':872,'third_party':{'category':'av','quote_response':True}})
@@ -314,3 +316,32 @@ def test_disabling_pending_simulation_prevents_later_auto_creation(eng):
     eng.record_requirements(did,{'arrival':'2027-03-10','departure':'2027-03-13','rooms':5})
     assert not eng.deal(did)['third_party']['requests']
     assert 'simulation_pending' not in eng.deal(did)['third_party']
+
+
+def test_vendor_management_is_hidden_unless_enabled(server):
+    """GS_VENDORS is off by default: no Directory, no vendor script, no vendor routes."""
+    assert server.VENDORS is False
+    code,_,page=_req(server,'/');assert code==200
+    assert 'vendorDirectoryNav' not in page and '/assets/vendors.js' not in page
+    did=next(iter(server.engine.s['deals']))
+    for path in ['/api/vendor_directory',f'/api/deals/{did}/vendors','/assets/vendors.js','/api/vendors/sound/history']:
+        assert _req(server,path)[0]==404
+    assert _req(server,f'/api/deals/{did}/vendors',{'command':'configure','payload':{'enabled':True}})[0]==404
+
+
+def test_third_party_options_are_ignored_while_disabled(server):
+    from agentbank.groupsales import generator
+    preset=next(iter(generator.PRESETS))
+    code,_,body=_req(server,'/api/simulate/rfp',{'preset':preset,'seed':873,'third_party':{'category':'av','quote_response':True}})
+    assert code==200,body
+    assert not (server.engine.deal(json.loads(body)['deal_id']).get('third_party') or {}).get('requests')
+    code,_,body=_req(server,'/api/inbox',{'from':'Pat <pat@flag.example>','body':'Ten rooms in March','third_party':{'category':'av'}})
+    assert code==200,body
+    assert not (server.engine.deal(json.loads(body)['deal_id']).get('third_party') or {}).get('requests')
+
+
+def test_vendor_management_shows_when_enabled(server,monkeypatch):
+    monkeypatch.setattr(server,'VENDORS',True)
+    page=_req(server,'/')[2]
+    assert 'vendorDirectoryNav' in page and '/assets/vendors.js' in page
+    assert _req(server,'/assets/vendors.js')[0]==200

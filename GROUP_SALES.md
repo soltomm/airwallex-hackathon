@@ -9,7 +9,7 @@ Post-stay PMS folios and incremental balance collection are documented in
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are
-tracked without transferring money.
+tracked without transferring money. The feature is hidden unless `GS_VENDORS=1` is set.
 
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex
