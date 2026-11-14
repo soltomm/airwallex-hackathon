@@ -1,10 +1,11 @@
 // Run against an isolated simulated server. Creates two inquiries; does not reset it.
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
 const base=process.env.VENDOR_TEST_URL||'http://127.0.0.1:8023';
 if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw Error('Loopback server required.');
 (async()=>{
- const b=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ const b=await chromium.launch({...(process.env.CHROMIUM_PATH||fs.existsSync('/usr/bin/chromium')?{executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium'}:{}),args:['--no-sandbox']});
  try{
   const p=await b.newPage({viewport:{width:1440,height:1000}}),errors=[];
   p.on('pageerror',e=>errors.push(e.message));await p.goto(base);
@@ -13,6 +14,7 @@ if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw Error('Loop
    await p.locator('#wbSimulate').click();await p.locator('#wbThirdParty').check();
    await p.locator('#wbThirdPartyCategory').selectOption('av');
    if(i===1)await p.locator('#wbThirdPartyQuote').uncheck();
+   await p.locator('.wb-generated summary').click(); // preset cards sit in the collapsed "Generated test inquiries" section
    await p.locator('[data-preset]').first().click();
    await p.locator('#liveDrawer[open]').waitFor();
    await p.waitForFunction(()=>window.Harbour.state()?.deals.some(d=>d.generated&&d.third_party?.requests.length));
