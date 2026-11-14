@@ -2321,7 +2321,8 @@ def test_attrition_ask_above_the_maximum_is_capped_and_the_buyer_and_manager_are
     e, d = _summit_counter(tmp_path, {"attrition_pct": 60})
     v = d["versions"][-1]
     assert v["status"] == "pending_approval" and v["terms"]["attrition_pct"] == POL["attrition"]["max_pct_with_approval"]
-    assert v["message"].startswith("Thank you for asking. We can't offer 60% attrition; the most we can release free is 20%")
+    assert v["message"].startswith("Thank you for asking. We can't offer 60% attrition. We can offer 20% attrition")
+    assert "most" not in v["message"] and "maximum" not in v["message"]     # don't reveal the ceiling
     a = next(a for a in e.s["approvals"].values() if a["deal_id"] == d["id"] and a["status"] == "pending")
     assert a["buyer_asked"] == [{"what": "Free release (attrition)", "asked": "60%", "offered": "20%"}]
     assert "None" not in a["summary"] and "buyer asked for 60% attrition. Capped at the 20% maximum." in a["summary"]

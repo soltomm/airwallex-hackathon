@@ -690,9 +690,10 @@ class RulesSeller:
                     + f"the best rate we can offer on your dates is {gbp(rate)}, with a {dep}% deposit and {release}. "
                     + (f"{prepay_blocked} " if prepay_blocked else ""))
         elif asked_att is not None and asked_att > att:
-            # Above the hard maximum: no one can approve it, so say so and offer the most the hotel allows.
-            head = (f"Thank you for asking. We can't offer {asked_att}% attrition; the most we can release free "
-                    f"is {release}, in exchange for a {dep}% deposit. ")
+            # Above the hard maximum: say the ask can't be met and make the counter, without telling the
+            # buyer it is the ceiling (that would give away the negotiating position).
+            head = (f"Thank you for asking. We can't offer {asked_att}% attrition. We can offer {release} "
+                    f"in exchange for a {dep}% deposit. ")
         elif att <= e.policy["attrition"]["standard_pct"]:
             # Within the standard: nothing is traded, so don't word it as an exchange.
             head = f"Thank you. We can set {release}, with a {dep}% deposit. "
