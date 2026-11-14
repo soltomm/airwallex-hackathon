@@ -142,7 +142,8 @@ class OfferDeskTests(unittest.TestCase):
         self.assertEqual(len(reply["offers"]), 1)
         self.assertEqual(reply["round"], 1)
         self.assertEqual(reply["seller_activity"][1], "checked a pricing option against the hotel's rules")
-        self.assertFalse(any("450" in a for a in reply["seller_activity"]))   # failed attempts reveal nothing
+        # Failed attempts reveal nothing. Skip the random offer id ("committed ofr_…: terms"): it can contain "450".
+        self.assertFalse(any("450" in a.split(": ", 1)[-1] for a in reply["seller_activity"]))
         self.assertIn("committed", reply["seller_activity"][-1])
         self.assertEqual(reply["offers"][0]["total"], "500.00 EUR")
         # The rejected 450 offer came back to the seller as not committed, with the floor.
