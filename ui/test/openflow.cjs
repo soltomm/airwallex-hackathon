@@ -38,12 +38,21 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.keyboard.press('Escape');
  await page.locator('#wbRules').click();await page.getByText('Seller rules',{exact:true}).last().waitFor();
  await page.getByRole('button',{name:'Overview',exact:true}).click();
- // New inquiry opens by keyboard, lists every preset from the server and offers the buyer-mode switch.
+ // New inquiry opens by keyboard with "Write your own" first; generated test inquiries are folded below it,
+ // list every preset the server offers, and there is no hand-picked traits form.
  await page.locator('#wbSimulate').focus();await page.keyboard.press('Enter');
  await page.waitForFunction(()=>document.activeElement?.id==='wbDrawerTitle',null,{timeout:2000});
+ await page.locator('#wbInbound').waitFor();
+ assert.equal(await page.locator('#wbInbound').isVisible(),true);
+ assert.equal(await page.locator('[data-preset="full_lifecycle"]').isVisible(),false,'generated inquiries start folded');
+ const order=await page.evaluate(()=>{const f=document.querySelector('#wbInbound'),g=document.querySelector('.wb-generated');return !!(f.compareDocumentPosition(g)&Node.DOCUMENT_POSITION_FOLLOWING);});
+ assert.equal(order,true,'write your own comes before generated inquiries');
+ assert.equal(await page.locator('#wbCustom, [id^="wbT_"]').count(),0,'no traits form');
+ await page.getByText('Generated test inquiries',{exact:true}).click();
  await page.locator('[data-preset="full_lifecycle"]').waitFor();
- for(const p of ['straight_booking','dates_short_haggle','full_lifecycle','payer_abroad','missing_details'])
+ for(const p of ['straight_booking','dates_short_haggle','full_lifecycle','missing_details'])
   assert.equal(await page.locator(`[data-preset="${p}"]`).count(),1,p);
+ assert.equal(await page.locator('[data-preset="payer_abroad"]').count(),0,'payer_abroad needs GS_FX=1');
  assert.equal(await page.locator('[data-buyer-mode="presenter"]').getAttribute('aria-pressed'),'true');
  await shot('simulator.png',false);
  // A bad seed is refused in the drawer; a good one sends the preset and opens the real deal.
@@ -57,17 +66,11 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.keyboard.press('Escape');
  await page.getByText('Generated · Full lifecycle with a refund · seed 4242',{exact:true}).waitFor();
  // Replaying the seed in the same run is refused, not merged into the first deal.
- await page.locator('#wbSimulate').click();await page.locator('#wbSeed').fill('4242');
+ await page.locator('#wbSimulate').click();await page.getByText('Generated test inquiries',{exact:true}).click();
+ await page.locator('#wbSeed').fill('4242');
  await page.locator('[data-preset="full_lifecycle"]').click();
  assert.match(await page.locator('#wbDrawer .wb-feedback').innerText(),/already has an inquiry/);
- // Traits chosen by hand: a payer abroad with details left out.
- await page.locator('#wbSeed').fill('77');
- await page.getByText('Or choose the traits yourself').click();
- await page.locator('#wbT_payer_country').selectOption('DE');
- await page.locator('[name=wbMissing][value=taxes]').check();
- await page.locator('#wbCustom').click();
- await page.locator('#liveDrawer[open]').waitFor();await page.keyboard.press('Escape');
- await page.getByText('Generated · Custom traits · seed 77',{exact:true}).waitFor();
+ await page.keyboard.press('Escape');await page.locator('#wbDrawer:not([open])').waitFor({state:'attached'});
  // The buyer-mode switch changes the server's setting.
  await page.locator('#wbSimulate').click();await page.locator('[data-buyer-mode="agent"]').click();
  await page.waitForFunction(()=>window.Harbour.state().runner.settings.buyer_mode==='agent');
@@ -85,7 +88,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  assert.equal(await page.locator('.wb-table tbody tr').count(),1);
  await page.locator('#wbSearch').fill('');
  await page.getByRole('button',{name:'All inquiries',exact:true}).click();
- assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+3);
+ assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+2);
  await page.getByRole('button',{name:'Payments',exact:true}).first().click();
  const pay=await page.locator('#wbBody').innerText();
  assert.match(pay,/Groupy simulated provider|Airwallex sandbox/);
@@ -101,8 +104,8 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.getByText('Property tools',{exact:true}).click();
  await shot('mobile.png');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- await page.locator('#wbSimulate').click();await page.locator('[data-preset="full_lifecycle"]').waitFor();
- await page.getByText('Or choose the traits yourself').click();
+ await page.locator('#wbSimulate').click();await page.locator('#wbInbound').waitFor();
+ await page.getByText('Generated test inquiries',{exact:true}).click();await page.locator('[data-preset="full_lifecycle"]').waitFor();
  await shot('mobile-simulator.png',false);
  assert.equal(await page.locator('#wbDrawer').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.keyboard.press('Escape');
@@ -110,6 +113,6 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  // The workbench only writes through the intended endpoints.
  assert.deepEqual([...new Set(posts)].sort(),['/api/inbox','/api/settings','/api/simulate/rfp']);
  assert.deepEqual(errors,[],'No browser runtime errors');
- console.log('PASS: connected Harbour detail/rules, presets from the server, seeded and custom generated inquiries, replay refused, buyer-mode switch, write your own, search/polling, filters, payments, keyboard focus, mobile.');
+ console.log('PASS: connected Harbour detail/rules, presets from the server, write your own first, folded seeded presets, no traits form, replay refused, buyer-mode switch, write your own, search/polling, filters, payments, keyboard focus, mobile.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});
