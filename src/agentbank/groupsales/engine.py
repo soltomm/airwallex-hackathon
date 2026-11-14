@@ -1661,7 +1661,7 @@ class Engine:
     def _recover(self, op):
         """An op whose creation outcome is unknown: look it up by our own references, never resubmit."""
         try:
-            if op["kind"] in ("deposit", "folio_payment"):
+            if op["kind"] in ("deposit", "folio_payment", "installment"):
                 found = [i for i in self.provider.find_intents(op["merchant_order_id"])
                          if i.get("request_id") in (None, op["request_id"])
                          and (i.get("metadata") or {}).get("operation_id") in (None, op["id"])]
@@ -1761,6 +1761,196 @@ class Engine:
                                  "version": op.get("version"), "at": self.now()})
         return True
 
+    # ================================================================ instalments
+    # After the deposit, the rest of the contract is due on the hotel's instalment schedule
+    # (policy.installments: a cumulative share paid by N days before arrival). The engine works out what
+    # is due from the signed contract; the seller only asks for it and checks it. One open request at a time.
+    INSTALLMENT_GRACE_DAYS = 3
+    OPEN_PAYMENT = ("submitting", "unknown", "created")
+
+    def _installment_ops(self, d):
+        return [o for o in self.s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "installment"]
+
+    def installments(self, d) -> dict | None:
+        """What the schedule says is due today, the open request (if any) and why nothing can be asked for.
+        None before a confirmed booking."""
+        b = d.get("booking")
+        if not b or b.get("status") != "confirmed" or not d.get("accepted_version"):
+            return None
+        fin = self.finance(d)
+        today = self.now()[:10]
+        sched = fin.get("schedule") or []
+        due = [m for m in sched[1:] if m["due"] and m["due"] <= today and m["amount"] > 0]
+        upcoming = next((m for m in sched[1:] if m["due"] and m["due"] > today and m["amount"] > 0), None)
+        ops = self._installment_ops(d)
+        open_op = next((o for o in reversed(ops) if o["status"] in self.OPEN_PAYMENT + ("mismatch",)), None)
+        blocked = None
+        if d.get("seller_paused"):
+            blocked = f"paused after {d['seller_paused']['what']} failed: hotel staff must retry first"
+        elif (d.get("folio") or {}).get("snapshot"):
+            blocked = "the final folio is in progress: the balance is collected there"
+        elif fin.get("collection_blocked") or fin.get("refund_owed"):
+            blocked = "a refund is unresolved: reconcile it before asking for more money"
+        elif d["status"] != "confirmed":
+            blocked = f"the booking is in {d['status']}: finish that first"
+        overdue = bool(open_op and open_op["status"] == "created" and open_op.get("due_by")
+                       and (calc.d(open_op["due_by"]) + timedelta(days=self.INSTALLMENT_GRACE_DAYS)).isoformat() < today)
+        return {"due_now": sum(m["amount"] for m in due), "due_by": due[-1]["due"] if due else None,
+                "milestones_due": [m["label"] for m in due], "next": upcoming, "blocked": blocked,
+                "open": open_op and {k: open_op.get(k) for k in ("id", "status", "amount", "due_by", "payment_intent_id",
+                                                                  "created_at")},
+                "overdue": overdue, "paid": sum(o["amount"] for o in ops if o["status"] == "succeeded")}
+
+    @staticmethod
+    def _long_date(day: str) -> str:
+        x = calc.d(day)
+        return f"{x.day} {x:%B %Y}"
+
+    @staticmethod
+    def _paid_share(paid: int, total: int) -> str:
+        return "100%" if paid >= total else f"{paid * 100 // total}%"
+
+    def balance_url(self, d, returned: bool = False) -> str:
+        return self.pay_url(d, "balance/return" if returned else "balance")
+
+    def request_balance(self, deal_id: str, actor: str = "seller") -> dict:
+        """Ask the buyer for the instalment(s) due under the signed contract: open a hosted payment page for
+        exactly that amount and email the buyer the link. Reuses an open request instead of making another."""
+        with self.lock:
+            d = self.deal(deal_id)
+            st = self.installments(d)
+            if st is None:
+                raise Refused("no confirmed booking")
+            if st["open"]:
+                op = next(o for o in self._installment_ops(d) if o["id"] == st["open"]["id"])
+                if op["status"] == "mismatch":
+                    raise Refused("the last instalment payment didn't match its request: hotel staff must reconcile it")
+                if op["status"] in ("submitting", "unknown"):
+                    self._recover(op)
+                    self._save()
+                return {"payment_url": self.balance_url(d), "operation": op["id"], "status": op["status"],
+                        "amount": gbp(op["amount"]), "note": "existing instalment request reused; check it, don't ask again"}
+            if st["blocked"]:
+                raise Refused(st["blocked"])
+            if st["due_now"] <= 0:
+                nxt = st["next"]
+                raise Refused("nothing is due yet" + (f": {nxt['label']} ({gbp(nxt['amount'])}) is due on {nxt['due']}"
+                                                      if nxt else ": the contract is paid in full"))
+            v = self._version(d, d["accepted_version"])
+            amount = st["due_now"]
+            oid = self._id("op_")
+            op = {"id": oid, "kind": "installment", "deal_id": d["id"], "run_id": self.s["run_id"], "version": v["n"],
+                  "version_hash": v["hash"], "amount": amount, "currency": "GBP", "due_by": st["due_by"],
+                  "milestones": st["milestones_due"], "request_id": f"{self.s['run_id']}-{oid}",
+                  "merchant_order_id": f"{self.s['run_id']}-{d['ref']}-inst-{oid}", "payment_intent_id": None,
+                  "status": "submitting", "created_at": self.now(), "provider_status": None}
+            self.s["operations"][oid] = op
+            self._save()   # persist the operation before calling the provider
+            meta = {"run_id": self.s["run_id"], "deal": d["ref"], "agreement_version": str(v["n"]),
+                    "agreement_hash": v["hash"], "operation_id": oid, "obligation": "contract instalment"}
+            try:
+                pi = self.provider.create_intent(op["request_id"], amount, "GBP", op["merchant_order_id"], meta,
+                                                 return_url=self.balance_url(d, returned=True),
+                                                 connected_account_id=self.hotel_account)
+                op.update(payment_intent_id=pi["id"], client_secret=pi.get("client_secret"), status="created",
+                          provider_status=pi["status"])
+            except AmbiguousResult as e:
+                op["status"] = "unknown"
+                op["note"] = str(e)
+                self._recover(op)
+            except AirwallexError as e:
+                op["status"] = "failed"
+                op["note"] = str(e)
+                self._pause_seller(d, "requesting an instalment", e)
+                self._save()
+                raise Refused(f"provider refused the payment intent: {e}")
+            total = v["pricing"]["total"]
+            paid_after = self.finance(d)["net_received"] + amount
+            self._seller_acted(d)
+            d["thread"].append({"id": self._id("msg"), "at": self.now(), "from": "seller", "channel": "email",
+                                "installment_op": oid,
+                                "text": f"Your next payment for booking {d['ref']} is due: {gbp(amount)}. Under the "
+                                        f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
+                                        f"total is due by {self._long_date(st['due_by'])}; this payment brings what "
+                                        f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
+                                        f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
+            self.log(d["id"], actor, "installment_requested", f"Instalment {gbp(amount)} requested for v{v['n']} "
+                     f"({', '.join(st['milestones_due'])}, due {st['due_by']}); payment page opened "
+                     f"(intent {op.get('payment_intent_id') or 'unknown'}).")
+            self._save()
+            return {"payment_url": self.balance_url(d), "operation": oid, "status": op["status"], "amount": gbp(amount)}
+
+    def check_balance_payment(self, deal_id: str, source: str = "seller") -> dict:
+        with self.lock:
+            d = self.deal(deal_id)
+            ops = self._installment_ops(d)
+            if not ops:
+                raise Refused("no instalment has been requested")
+            before = [o["status"] for o in ops]
+            for op in ops:
+                self._verify_installment(d, op, source)
+            self._save()
+            changed = [o["status"] for o in ops] != before
+            op = ops[-1]
+            out = {"operation": op["id"], "status": op["status"], "provider_status": op.get("provider_status"),
+                   "amount": gbp(op["amount"]), "still_due": gbp(self.finance(d).get("still_due") or 0)}
+        if changed:
+            self._wake("payment")
+        return out
+
+    def _verify_installment(self, d, op, source: str):
+        if op["status"] in ("submitting", "unknown"):
+            self._recover(op)
+            if op["status"] in ("submitting", "unknown"):
+                return
+        if op["status"] in ("failed", "cancelled", "mismatch", "succeeded") or not op.get("payment_intent_id"):
+            if op["status"] == "succeeded":
+                self._settle_installment_payouts(d)
+            return
+        pi = self.provider.get_intent(op["payment_intent_id"])
+        op["provider_status"] = pi["status"]
+        if pi["status"] in ("CANCELLED", "FAILED"):
+            op["status"] = pi["status"].lower()
+            return
+        if pi["status"] != "SUCCEEDED":
+            return
+        problems = []
+        if pi["amount"] != op["amount"] or (pi["currency"] or "").upper() != op["currency"]:
+            problems.append(f"amount/currency {pi['amount']} {pi['currency']} != obligation {op['amount']} {op['currency']}")
+        if pi.get("merchant_order_id") and pi["merchant_order_id"] != op["merchant_order_id"]:
+            problems.append("merchant_order_id mismatch")
+        if (pi.get("metadata") or {}).get("operation_id") not in (None, op["id"]):
+            problems.append("operation_id mismatch")
+        if problems:
+            op["status"] = "mismatch"
+            d["flags"].append("instalment payment mismatch: " + "; ".join(problems))
+            self.log(d["id"], "system", "payment_mismatch", "; ".join(problems))
+            return
+        op["status"] = "succeeded"
+        if self._ledger(f"receipt:{pi['id']}", d, "installment_received", op["amount"], op, pi["id"]):
+            self.fx_journal.process({'id': 'card:' + pi['id'], 'account': self.hotel_account or 'platform',
+                                     'deal_id': self.s['run_id'] + ':' + d['id'], 'currency': op['currency'],
+                                     'amount': str(Decimal(op['amount']) / 100),
+                                     'reference': op['merchant_order_id'], 'verified': True}, self.fx_provider)
+            self.log(d["id"], "system", "installment_paid", f"Instalment payment {pi['id']} verified with the provider "
+                     f"({source}); {gbp(op['amount'])} received and recorded once.")
+        self._settle_installment_payouts(d)
+
+    def _settle_installment_payouts(self, d):
+        """The hotel's share of each verified instalment, paid once by funds split (like the deposit's)."""
+        if not self.hotel_account:
+            return   # the deposit's payout already flags a missing connected account
+        for receipt in self._installment_ops(d):
+            if receipt["status"] != "succeeded":
+                continue
+            payouts = [o for o in self._payout_ops(d, "payout") if o["payment_intent_id"] == receipt["payment_intent_id"]
+                       and o["status"] != "superseded"]
+            if any(o["status"] == "failed" for o in payouts):
+                continue   # a refused payout waits for a person to retry it
+            payout = payouts[-1] if payouts else self._create_payout(d, receipt)
+            if payout["status"] in ("submitting", "unknown"):
+                self._recover_payout(payout)
+
     # ================================================================ amendments
     def prepare_reduction(self, deal_id: str, rooms_per_night: int | None = None, release: dict | None = None,
                           message: str = "", actor: str = "seller", waive: int = 0, justification: str = "") -> dict:
@@ -1772,6 +1962,8 @@ class Engine:
                 raise Refused("no confirmed booking")
             if (d.get("folio") or {}).get("snapshot"):
                 raise Refused("Post-stay folio is in progress; use a separately approved PMS adjustment, not a reservation amendment.")
+            if any(o["status"] in self.OPEN_PAYMENT for o in self._installment_ops(d)):
+                raise Refused("an instalment payment is open: check it (or let it settle) before changing the booking")
             base = self._version(d, d["accepted_version"])
             if release is None:
                 release = {n: int(rooms_per_night or 0) for n in base["terms"]["rooms"]}
@@ -2222,7 +2414,7 @@ class Engine:
         self.s["operations"][oid] = op
         self._save()   # persist the operation before calling the provider
         meta = {"run_id": self.s["run_id"], "deal": d["ref"], "operation_id": oid,
-                "obligation": "hotel share of final folio payment" if dep["kind"] == "folio_payment" else "hotel share of signing deposit", "commission": calc.gbp(fee)}
+                "obligation": {"folio_payment": "hotel share of final folio payment", "installment": "hotel share of contract instalment"}.get(dep["kind"], "hotel share of signing deposit"), "commission": calc.gbp(fee)}
         try:
             sp = self.provider.create_funds_split(op["request_id"], op["payment_intent_id"], op["amount"],
                                                   op["destination"], meta)
@@ -2361,6 +2553,7 @@ class Engine:
     # ================================================================ money trail
     TRAIL_KINDS = {
         "deposit": ("Deposit from the buyer", "Payment intent", 1),
+        "installment": ("Instalment from the buyer", "Payment intent", 1),
         "payout": ("Hotel's share paid out", "Funds split", 0),
         "refund": ("Refund to the buyer", "Refund", -1),
         "payout_reversal": ("Hotel's share of the refund taken back", "Funds split reversal", 0),
@@ -2378,8 +2571,11 @@ class Engine:
         rows = []
         for o in ops:
             label, obj, sign = self.TRAIL_KINDS[o["kind"]]
-            pid = o.get("payment_intent_id") if o["kind"] == "deposit" else o.get("provider_id")
-            if o["kind"] == "deposit":
+            pid = o.get("payment_intent_id") if o["kind"] in ("deposit", "installment") else o.get("provider_id")
+            if o["kind"] == "installment":
+                note = ("checked with the provider; recorded once" if o["status"] == "succeeded"
+                        else "waiting for the buyer to pay")
+            elif o["kind"] == "deposit":
                 note = ("checked with the provider before the booking was confirmed" if o["status"] == "succeeded"
                         else "waiting for the buyer to pay")
             elif o["kind"] == "refund":
@@ -2427,12 +2623,14 @@ class Engine:
             if run and run != self.s["run_id"]:
                 result = f"belongs to earlier run {run}: kept for reconciliation, not applied to current hotel state"
             elif name.startswith("payment_intent."):
-                op = next((o for o in self.s["operations"].values() if o.get("payment_intent_id") == obj.get("id") and o["kind"] in ("deposit", "folio_payment")), None)
+                op = next((o for o in self.s["operations"].values() if o.get("payment_intent_id") == obj.get("id") and o["kind"] in ("deposit", "folio_payment", "installment")), None)
                 if op:
                     if op["kind"] == "folio_payment":
                         self.check_folio_payment(op["deal_id"])
                     elif op["kind"] == "deposit":
                         self._verify_deposit(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
+                    elif op["kind"] == "installment":
+                        self._verify_installment(self.s["deals"][op["deal_id"]], op, source=f"webhook {name}")
                     result = f"re-read intent: {op.get('provider_status')}"
             elif name.startswith("refund."):
                 op = next((o for o in self.s["operations"].values() if o.get("provider_id") == obj.get("id")), None)
@@ -2703,6 +2901,17 @@ class Engine:
         st = d["status"]
         if d.get("unread") and st not in ("new",):
             return "seller: new input to read"
+        if st == "confirmed":
+            inst = self.installments(d)
+            if inst and not inst["blocked"]:
+                if inst["open"] and inst["open"]["status"] == "mismatch":
+                    return "hotel staff: instalment payment mismatch"
+                if inst["overdue"]:
+                    return "hotel staff: instalment overdue"
+                if inst["open"]:
+                    return "buyer: pay instalment"
+                if inst["due_now"]:
+                    return "seller: request instalment"
         return {"new": "seller: read inquiry", "intake": "seller: check records", "needs_info": "buyer: answers",
                 "offer_sent": "buyer: response to offer", "approved_to_send": "seller: send approved offer",
                 "revise": "seller: revise offer", "accepted": "seller: open checkout",
@@ -2757,6 +2966,17 @@ class Engine:
             return "read answers and quote" if d.get("unread") else "blocked: waiting for the buyer's answers"
         if st in ("offer_sent", "amendment_sent"):
             return "respond to the buyer's message" if d.get("unread") else "blocked: waiting for the buyer"
+        if st == "confirmed" and not d.get("unread"):
+            inst = self.installments(d)
+            if inst and not inst["blocked"]:
+                if inst["open"] and inst["open"]["status"] == "mismatch":
+                    return "an instalment payment didn't match its request: wait for hotel staff to reconcile it"
+                if inst["open"]:
+                    return (f"an instalment request for {gbp(inst['open']['amount'])} is open: waiting for the buyer "
+                            "(check_balance_payment verifies it; never request it again)")
+                if inst["due_now"]:
+                    return (f"{gbp(inst['due_now'])} is due under the contract's instalment schedule "
+                            f"({', '.join(inst['milestones_due'])}): call request_balance")
         return self.waiting_on(d) or st
 
     def ops_instructions(self, d) -> dict | None:

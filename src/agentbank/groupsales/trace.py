@@ -22,6 +22,7 @@ TOOLS = {
     "propose_offer": "propose_offer", "send_offer": "send_offer", "open_checkout": "open_checkout",
     "check_payment": "check_payment", "prepare_reduction": "prepare_reduction", "send_amendment": "send_amendment",
     "refund_excess": "refund_excess", "check_refund": "check_refund", "escalate": "escalate", "decline": "decline",
+    "request_balance": "request_balance", "check_balance_payment": "check_balance_payment",
     "note": "log_reasoning",
 }
 READS = {"list_queue", "read_deal", "vendor_workspace"}
@@ -98,6 +99,8 @@ def _summary(tool, step, res) -> str:
         return step["effects"][0]["text"]
     if tool == "check_payment" and isinstance(res, dict):
         return f"Checked the deposit with the provider: {res.get('status') or res.get('provider_status') or 'no change'}"
+    if tool == "check_balance_payment" and isinstance(res, dict):
+        return f"Checked the instalment with the provider: {res.get('status') or res.get('provider_status') or 'no change'}"
     return "Done"
 
 

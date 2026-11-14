@@ -157,6 +157,8 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["hotel"] = engine.hotel["name"]
     v["clock"] = engine.now()
     v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None
+    inst = engine.installments(d)
+    v["balance_pay_url"] = engine.balance_url(d) if inst and inst["open"] and inst["open"]["status"] == "created" else None
     v["suggestion"] = suggest(engine, d["id"])
     v["buyer_mode"] = runner.settings["buyer_mode"]
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
@@ -279,6 +281,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, fx.directory())
             if p.startswith("/pay/"):
                 parts = p.split("/")
+                if len(parts) > 3 and parts[3] == "balance":
+                    return self._pay_balance(parts[2], q.get("t", ""), returned=len(parts) > 4 and parts[4] == "return")
                 return self._pay(parts[2], q.get("t", ""), returned=len(parts) > 3 and parts[3] == "return")
             if p.startswith("/sim-hpp/"):
                 return self._sim_hpp(p.split("/")[2], q)
@@ -465,6 +469,39 @@ class Handler(BaseHTTPRequestHandler):
             "booking": d.get("booking") and d["booking"]["status"],
         }
         return self._send(200, PAY_PAGE.replace("__PAY__", json.dumps(info)), "text/html")
+
+    def _pay_balance(self, ref: str, token: str, returned: bool):
+        """The hosted page for a contract instalment the seller requested (one open request at a time)."""
+        d = engine.deal(ref)
+        if not hmac.compare_digest(token or "", d["buyer_token"]):
+            return self._send(403, "<h1>Not authorized</h1>", "text/html")
+        message = ""
+        if returned:
+            try:
+                engine.check_balance_payment(d["id"], source="return from hosted checkout")
+            except Exception as e:
+                message = f"Could not verify yet: {e}"
+        ops = engine._installment_ops(d)
+        op = ops[-1] if ops else None
+        v = engine._version(d, op["version"]) if op else None
+        fin = engine.finance(d)
+        payable = bool(op and op["status"] == "created")
+        success = engine.balance_url(d, returned=True)
+        info = {
+            "purpose": "installment", "hotel": engine.hotel["name"], "ref": d["ref"], "company": d["company"],
+            "status": d["status"], "op_status": op and op["status"], "provider": engine.provider.name,
+            "intent_id": op and op.get("payment_intent_id"), "client_secret": op.get("client_secret") if payable else None,
+            "currency": "GBP", "amount": op and gbp(op["amount"]), "version": op and op["version"],
+            "total": v and gbp(v["pricing"]["total"]), "paid": gbp(fin["net_received"]),
+            "lines": op and [{"item": f"Instalment under the v{op['version']} payment schedule, due by "
+                                      f"{engine._long_date(op['due_by'])}", "amount": gbp(op["amount"])}],
+            "expires_at": None, "hold_ok": payable or bool(op and op["status"] == "succeeded"), "message": message,
+            "success_url": success,
+            "sim_url": f"/sim-hpp/{op['payment_intent_id']}?ret=" + success.replace("&", "%26")
+            if op and op.get("payment_intent_id") else None,
+            "booking": None,
+        }
+        return self._send(200, PAY_PAGE.replace("__PAY__", json.dumps(info).replace("<", "\\u003c")), "text/html")
 
     def _sim_hpp(self, intent_id: str, q):
         if engine.provider.name != "simulated":
