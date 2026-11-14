@@ -32,7 +32,6 @@ from agentbank.config import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from agentbank.groupsales import generator  # noqa: E402
-from agentbank.groupsales.buyer import BuyerAgent, act, suggest  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
@@ -54,8 +53,7 @@ MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
 OPEN_PATHS = ("/folio/", "/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
-# token instead, so a buyer can use the link without the hotel's access token. Presenter tools
-# (/api/buyer/<id>/suggest and /agent) still need the dashboard token.
+# token instead, so a buyer can use the link without the hotel's access token.
 BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view)?)$")
 WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
@@ -258,8 +256,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, vendors.directory())
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
                 return self._send(200, engine.vendor_workspace(p.split('/')[3]))
-            if p.startswith("/api/buyer/") and p.endswith("/suggest"):
-                return self._send(200, {"suggestion": suggest(engine, p.split("/")[3])})
             if p.startswith("/inbox/"):
                 d = engine.deal(p.split("/")[2])
                 if not hmac.compare_digest(q.get("t", ""), d["buyer_token"]):
@@ -386,15 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/api/approvals/"):
                 return self._send(200, engine.decide_approval(p.split("/")[3], b.get("decision"), b.get("actor"),
                                                               b.get("note", "")))
-            if p.startswith("/api/buyer/") and p.endswith("/agent"):
-                did = p.split("/")[3]
-                if HAS_CLAUDE:
-                    r = BuyerAgent(engine).run(did)
-                else:
-                    s = suggest(engine, did)
-                    r = act(engine, did, s, actor="buyer agent") if s else None
-                return self._send(200, {"result": r})
-            if p.startswith("/api/buyer/"):
+            if re.fullmatch(r"/api/buyer/[^/]+", p):   # the buyer's own moves; nothing answers for the buyer
                 did = p.split("/")[3]
                 return self._send(200, engine.buyer_action(did, b.get("token", ""), b.get("action", ""),
                                                            b.get("text", ""), b.get("payload") or {},
