@@ -1820,6 +1820,7 @@ def test_hotel_paid_by_funds_split_and_share_of_refund_clawed_back(eng):
     pv = e.payout_view(n)
     assert (pv["hotel_paid"], pv["hotel_clawed_back"], pv["hotel_net"], pv["platform_fee"]) == (345600, 47520, 298080, 33120)
     assert pv["hotel_net"] + pv["platform_fee"] == e.finance(n)["net_received"]
+    assert (pv["platform"], pv["commission_pct"]) == ("Groupy", 10)   # the dashboard labels the fee "Groupy fee (10%)"
 
     # Late and repeated refund notifications take nothing back twice.
     e.release_notifications()
