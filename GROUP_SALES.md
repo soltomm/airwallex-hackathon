@@ -10,6 +10,9 @@ Third-party sourcing, partner capacity and bundled master proposals are document
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are
 tracked without transferring money. The feature is hidden unless `GS_VENDORS=1` is set.
+Payer origin and automated sandbox FX ([FX policy](docs/FX_POLICY.md)) are off unless `GS_FX=1` is set:
+no FX UI, no receipt scan, no conversions. Checkout is GBP; a buyer paying with a foreign card is converted by
+their card issuer.
 
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex
@@ -396,14 +399,14 @@ it, and the seller never sees the brief.
 
 An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
-(`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
+(`payer`, `taxes`, `layout`), `payer_country` (only with `GS_FX=1`), `change_rooms`. Presets are named combinations:
 
 | Preset | Path with the rules seller |
 |---|---|
 | `straight_booking` | quote, accept, deposit paid |
 | `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, paid |
 | `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
-| `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
+| `payer_abroad` | payer in Germany (records payer origin), paid in GBP, fewer rooms, refund. Only offered with `GS_FX=1` |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
 
 The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the

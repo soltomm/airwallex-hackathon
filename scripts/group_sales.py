@@ -8,6 +8,7 @@ Env: PAYMENTS=airwallex|simulated  SELLER_MODE=claude|rules  BUYER_MODE=presente
      GS_ACCESS_TOKEN: when set, the dashboard and API need it once (<url>/?k=<token>, then a cookie).
      GS_MAX_CLAUDE_RUNS_PER_DAY (default: no cap): set a number to fall back to the rules seller past it each day.
      GS_VENDORS=1: show third-party vendor management (inquiry workspace, Directory). Off by default.
+     GS_FX=1: turn on payer origin and automated sandbox FX (receipt monitoring, conversions). Off by default.
      DATABASE_URL: keep state in Postgres (storage.py) so a hosted instance survives spin-downs.
 """
 from __future__ import annotations
@@ -48,6 +49,9 @@ PUBLIC = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_U
 ACCESS = os.environ.get("GS_ACCESS_TOKEN", "")
 # Third-party vendor management stays in the engine but is off the demo path unless this is set.
 VENDORS = os.environ.get("GS_VENDORS", "").strip().lower() in ("1", "true", "yes", "on")
+# Payer origin and automated sandbox FX (docs/FX_POLICY.md) stay in the code but are off unless this is set: no
+# FX UI, no FX routes, no background receipt scan and no conversions. Card checkout charges GBP either way.
+FX = os.environ.get("GS_FX", "").strip().lower() in ("1", "true", "yes", "on")
 # No daily cap unless one is set (0 or unset = no cap). Spend is better bounded by the API key's own limits in the
 # Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
@@ -61,7 +65,7 @@ WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 provider = make_provider(None, VAR)
-engine = Engine(VAR, provider, public_base=PUBLIC)
+engine = Engine(VAR, provider, public_base=PUBLIC, fx_enabled=FX)
 
 
 class Runner:
@@ -111,7 +115,7 @@ class Runner:
                         engine.note(None, f"Daily cap of {MAX_CLAUDE_RUNS} Claude seller runs reached; using the rules "
                                     "seller until tomorrow.", actor="system")
                 self.busy = f"seller ({mode})"
-                seller = ClaudeSeller(engine) if mode == "claude" else RulesSeller(engine)
+                seller = ClaudeSeller(engine, vendors=VENDORS) if mode == "claude" else RulesSeller(engine)
                 self.last = seller.run(trigger) if isinstance(seller, ClaudeSeller) else seller.run(trigger=trigger)
             if self.settings["buyer_mode"] == "agent":
                 self.busy = "buyer agent"
@@ -175,12 +179,21 @@ def _vendor_route(p: str) -> bool:
     return p == '/api/vendor_directory' or p.startswith('/api/vendors/') or (p.startswith('/api/deals/') and p.endswith('/vendors'))
 
 
+def _fx_route(p: str) -> bool:
+    return p.startswith('/api/fx/') or p == '/assets/fx.js' or (
+        p.startswith('/api/deals/') and (p.endswith('/payer') or p.endswith('/fx_simulate')))
+
+
 def dashboard_html() -> str:
     page = (WEB / "group_sales.html").read_text()
     if not VENDORS:
         # Drop the Directory nav item and the vendor script; the rest of the dashboard checks window.Vendors.
         page = re.sub(r'\s*<button id="vendorDirectoryNav">.*?</button>', '', page, count=1)
         page = page.replace('<script src="/assets/vendors.js"></script>', '')
+    if not FX:
+        # Drop the FX script and its directory dialog; the dashboard checks window.FX for the rest.
+        page = re.sub(r'\s*<dialog id="fxDirectory".*?</dialog>', '', page, count=1, flags=re.S)
+        page = page.replace('<script src="/assets/fx.js"></script>', '')
     return page
 
 
@@ -253,6 +266,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/assets/openflow.js": ("openflow.js", "text/javascript"),
                       "/assets/fx.js": ("fx.js", "text/javascript"),
                       "/assets/vendors.js": ("vendors.js", "text/javascript")}
+            if not FX and _fx_route(p):
+                return self._send(404, {"error": "not found"})
             if p in assets and (VENDORS or p != "/assets/vendors.js"):
                 name, mime = assets[p]
                 return self._send(200, (WEB / name).read_text(), mime)
@@ -292,7 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/rules":
                 return self._send(200, engine.rules_view())
             if p == "/api/simulate/presets":
-                return self._send(200, {"presets": generator.PRESETS, "info": generator.PRESET_INFO,
+                presets = {k: v for k, v in generator.PRESETS.items() if FX or k not in generator.FX_PRESETS}
+                return self._send(200, {"presets": presets, "info": {k: generator.PRESET_INFO[k] for k in presets},
                                         "traits": generator.TRAITS, "defaults": generator.DEFAULTS,
                                         "buyer_mode": runner.settings["buyer_mode"]})
             if p == "/api/fx/countries":
@@ -326,6 +342,8 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/reset":
                 return self._send(200, engine.reset())
             if not VENDORS and _vendor_route(p):
+                return self._send(404, {"error": "not found"})
+            if not FX and _fx_route(p):
                 return self._send(404, {"error": "not found"})
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
                 did = p.split('/')[3]
@@ -386,12 +404,16 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/simulate/rfp":
                 # A generated inquiry: the RFP email plus its buyer's private brief. The seller and buyer agents
                 # take it from there; nothing else in the deal is simulated.
+                if not FX and (b.get("preset") in generator.FX_PRESETS or (b.get("traits") or {}).get("payer_country")):
+                    raise Refused("Payer origin and FX are turned off (GS_FX); pick another inquiry type.")
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
                                          seed=b.get("seed"))
                 return self._send(200, generator.send(engine, gen, third_party=vendors.simulation_options(b.get("third_party") if VENDORS else None)))
             if p == "/api/inbox":
                 if not (b.get("from") and b.get("body")):
                     return self._send(400, {"error": "from and body are required"})
+                if b.get('payer_country') and not FX:
+                    raise Refused("Payer origin is turned off (GS_FX).")
                 if b.get('payer_country'):
                     try:
                         fx.payer_profile(b['payer_country'], b.get('payer_currency'))
@@ -573,7 +595,8 @@ def main():
         while True:
             engine.scan_fx()
             time.sleep(30)
-    threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
+    if FX:
+        threading.Thread(target=watch_fx, daemon=True, name='sandbox-fx-agent').start()
     runner.wake("server started")       # pick up anything left actionable before a restart
     print(f"Groupy group sales on {PUBLIC}  (payments: {provider.name}, seller: {runner.settings['seller_mode']}, "
           f"buyer: {runner.settings['buyer_mode']}, run {engine.s['run_id']}, "
