@@ -8,7 +8,7 @@ from decimal import Decimal
 from . import vendors
 from .provider import AirwallexError, AmbiguousResult
 
-RECEIPTS = {'deposit_received', 'folio_received', 'folio_external_received'}
+RECEIPTS = {'deposit_received', 'installment_received', 'folio_received', 'folio_external_received'}
 CATEGORIES = {'accommodation','minibar','food_beverage','parking','incidentals','adjustment'}
 
 def digest(value):
@@ -115,7 +115,7 @@ class Service:
                  'guest_total':guest_total,'final_total':master+guest_total if snap else None,
                  'variance':master+guest_total-base['pricing']['total'] if snap else None,
                  'receipts':[{k:x[k] for k in ('type','amount','provider_id','at')} for x in e.s['ledger'] if x['deal_id']==d['id'] and x['type'] in RECEIPTS | {'refund_completed'}],
-                 'paid':credits,'airwallex_paid':sum(x['amount'] for x in e.s['ledger'] if x['deal_id']==d['id'] and x['type'] in ('deposit_received','folio_received','refund_completed')),'external_paid':sum(x['amount'] for x in e.s['ledger'] if x['deal_id']==d['id'] and x['type']=='folio_external_received'),'balance_due':max(0,balance) if balance is not None else None,
+                 'paid':credits,'airwallex_paid':sum(x['amount'] for x in e.s['ledger'] if x['deal_id']==d['id'] and x['type'] in ('deposit_received','installment_received','folio_received','refund_completed')),'external_paid':sum(x['amount'] for x in e.s['ledger'] if x['deal_id']==d['id'] and x['type']=='folio_external_received'),'balance_due':max(0,balance) if balance is not None else None,
                  'credit_due':max(0,-balance) if balance is not None else 0,'guest_balances':guests,
                  'approved':approved,'snapshot_hash':(snap or {}).get('hash'),'snapshot':copy.deepcopy(snap),
                  'receipt_journal':copy.deepcopy(f.get('receipt_journal',[])), 'blocks':blocks,
@@ -182,7 +182,7 @@ class Service:
                     if r['reference'] in known_refs:raise ValueError('A payment reference cannot be credited twice under different PMS receipt IDs.')
                     if any(x['id']!=d['id'] and any(p['reference']==r['reference'] for p in (x.get('folio') or {}).get('receipt_journal',[])) for x in e.s['deals'].values()):raise ValueError('This receipt reference is allocated to another reservation.')
                     if r['method']=='airwallex':
-                        match=next((x for x in e.s['ledger'] if x['deal_id']==d['id'] and x['provider_id']==r['reference'] and x['type'] in ('deposit_received','folio_received') and x['amount']==r['amount']),None)
+                        match=next((x for x in e.s['ledger'] if x['deal_id']==d['id'] and x['provider_id']==r['reference'] and x['type'] in ('deposit_received','installment_received','folio_received') and x['amount']==r['amount']),None)
                         if not match or r['payer']!='master':raise ValueError('Airwallex receipts must match a verified payment on this reservation.')
                     else:
                         if body.get('external_payments_attested') is not True:

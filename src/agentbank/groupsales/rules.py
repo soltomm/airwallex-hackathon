@@ -142,7 +142,7 @@ def describe(sc: dict, base: dict) -> dict:
         {"label": "Service prices", "text": "; ".join(services) + "." if services else "Fixed in the contract."},
         {"label": "Payment schedule", "text": "Deposit on signing, then " + ", ".join(
             f"{i['cumulative_pct']}% paid in total {i['days_before_arrival']} days before arrival"
-            for i in pol["installments"]) + ". Later instalments are shown, not charged automatically."},
+            for i in pol["installments"]) + ". The seller asks for each instalment on its due date by email with a payment link; the amount comes from the contract and the seller can't change it."},
         {"label": "Cancellation", "text": "; ".join(_cancel(c) for c in pol["cancellation"]) + "."},
         {"label": "Free release deadline", "text": f"Rooms can be released under the attrition allowance up to "
          f"{pol['attrition']['release_days_before_arrival']} days before arrival."},
