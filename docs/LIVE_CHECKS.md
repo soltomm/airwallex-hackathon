@@ -75,11 +75,9 @@ PYTHONPATH=src .venv/bin/python tests/fuzz_group_sales.py --cases 10 --steps 40 
 Pass when it prints `N/N cases passed` and the `claude:` line says `0 fell back to rules`. A fallback
 means a model call failed, so that case did not test Claude.
 
-## 4. Claude buyer (optional)
+## 4. Claude buyer (removed)
 
-Start check 2 again with `BUYER_MODE=agent` added at the front. The buyer side now answers on its own.
-
-Pass when it answers the hotel from its brief and reaches a paid booking.
+The website no longer has a buyer agent: buyers always reply from their mailbox. Nothing to check here.
 
 ## 5. Real phone (a person)
 

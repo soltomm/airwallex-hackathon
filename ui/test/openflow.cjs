@@ -15,8 +15,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  const shot=(name,fullPage=true)=>page.screenshot({path:path.join(screenshots,name),fullPage,style:'.toast, .wb-feedback { visibility:hidden; }'});
  page.on('pageerror',e=>errors.push(e.message));
  page.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname);});
- // Start from the seeded scenario: a second run would otherwise find seed 4242 already sent ("replay refused") and
- // wait forever for its deal to open. Resetting is only safe on an isolated, simulated, loopback server.
+ // Start from the seeded scenario, so the inquiry counts below are exact. Resetting is only safe on an isolated, simulated, loopback server.
  if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw Error('Use an isolated loopback server.');
  assert.equal((await (await context.request.get(base+'/api/state')).json()).provider,'simulated');
  assert.ok((await context.request.post(base+'/api/reset',{data:{}})).ok());
@@ -53,30 +52,26 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  for(const p of ['straight_booking','dates_short_haggle','full_lifecycle','missing_details'])
   assert.equal(await page.locator(`[data-preset="${p}"]`).count(),1,p);
  assert.equal(await page.locator('[data-preset="payer_abroad"]').count(),0,'payer_abroad needs GS_FX=1');
- assert.equal(await page.locator('[data-buyer-mode="presenter"]').getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('[data-buyer-mode], .wb-buyer-mode').count(),0,'no buyer agent switch');
  await shot('simulator.png',false);
- // A bad seed is refused in the drawer; a good one sends the preset and opens the real deal.
- await page.locator('#wbSeed').fill('abc');await page.locator('[data-preset="full_lifecycle"]').click();
- assert.match(await page.locator('#wbDrawer .wb-feedback').innerText(),/whole number/);
- await page.locator('#wbSeed').fill('4242');await page.locator('[data-preset="full_lifecycle"]').click();
+ // No seed field: each click sends a new inquiry and opens its real deal.
+ assert.equal(await page.locator('#wbSeed, .wb-seed').count(),0,'no seed field');
+ const generated=()=>page.evaluate(()=>window.Harbour.state().deals.filter(d=>d.generated));
+ await page.locator('[data-preset="full_lifecycle"]').click();
  await page.locator('#liveDrawer[open]').waitFor();
- const gen=await page.evaluate(()=>window.Harbour.state().deals.find(d=>d.generated?.seed===4242));
+ const [gen]=await generated();
  assert.equal(gen.generated.preset,'full_lifecycle');
  assert.match(await page.locator('#deal').innerText(),new RegExp(gen.company));
  await page.keyboard.press('Escape');
- await page.getByText('Generated · Full lifecycle with a refund · seed 4242',{exact:true}).waitFor();
- // Replaying the seed in the same run is refused, not merged into the first deal.
+ await page.getByText('Generated · Full lifecycle with a refund',{exact:true}).waitFor();
+ // The same preset again is a different inquiry, not a replay.
  await page.locator('#wbSimulate').click();await page.getByText('Generated test inquiries',{exact:true}).click();
- await page.locator('#wbSeed').fill('4242');
  await page.locator('[data-preset="full_lifecycle"]').click();
- assert.match(await page.locator('#wbDrawer .wb-feedback').innerText(),/already has an inquiry/);
- await page.keyboard.press('Escape');await page.locator('#wbDrawer:not([open])').waitFor({state:'attached'});
- // The buyer-mode switch changes the server's setting.
- await page.locator('#wbSimulate').click();await page.locator('[data-buyer-mode="agent"]').click();
- await page.waitForFunction(()=>window.Harbour.state().runner.settings.buyer_mode==='agent');
- assert.equal(await page.locator('[data-buyer-mode="agent"]').getAttribute('aria-pressed'),'true');
- await page.locator('[data-buyer-mode="presenter"]').click();
- await page.waitForFunction(()=>window.Harbour.state().runner.settings.buyer_mode==='presenter');
+ await page.locator('#liveDrawer[open]').waitFor();
+ const again=await generated();
+ assert.equal(again.length,2);assert.notEqual(again[0].company,again[1].company);
+ await page.keyboard.press('Escape');await page.locator('#liveDrawer:not([open])').waitFor({state:'attached'});
+ await page.locator('#wbSimulate').click();
  // Write your own: a real RFP with no brief.
  await page.locator('#wbInquiryFrom').fill('Jamie Chen <jamie@acme.example>');
  await page.locator('#wbInquiryText').fill('Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays.');
@@ -88,7 +83,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  assert.equal(await page.locator('.wb-table tbody tr').count(),1);
  await page.locator('#wbSearch').fill('');
  await page.getByRole('button',{name:'All inquiries',exact:true}).click();
- assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+2);
+ assert.equal(await page.locator('.wb-table tbody tr').count(),startCount+3);
  await page.getByRole('button',{name:'Payments',exact:true}).first().click();
  const pay=await page.locator('#wbBody').innerText();
  assert.match(pay,/Groupy simulated provider|Airwallex sandbox/);
@@ -111,8 +106,8 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.keyboard.press('Escape');
  assert.equal(await page.locator('#wbSimulate').evaluate(el=>el===document.activeElement),true);
  // The workbench only writes through the intended endpoints.
- assert.deepEqual([...new Set(posts)].sort(),['/api/inbox','/api/settings','/api/simulate/rfp']);
+ assert.deepEqual([...new Set(posts)].sort(),['/api/inbox','/api/simulate/rfp']);
  assert.deepEqual(errors,[],'No browser runtime errors');
- console.log('PASS: connected Harbour detail/rules, presets from the server, write your own first, folded seeded presets, no traits form, replay refused, buyer-mode switch, write your own, search/polling, filters, payments, keyboard focus, mobile.');
+ console.log('PASS: connected Harbour detail/rules, presets from the server, write your own first, folded presets, no traits form, no seed field, a new inquiry each click, no buyer agent switch, write your own, search/polling, filters, payments, keyboard focus, mobile.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

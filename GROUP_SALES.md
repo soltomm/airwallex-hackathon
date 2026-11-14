@@ -29,7 +29,7 @@ src/agentbank/groupsales/
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
   seller.py     ClaudeSeller (tools over the engine) and RulesSeller (deterministic, same tools)
   trace.py      record of each seller run and its tool calls, for the dashboard's AI Agent tab
-  buyer.py      buyer moves from the private brief (presenter mode) and an optional Claude buyer agent
+  buyer.py      draft buyer replies from the private brief, sent by a person from the mailbox
   extract.py    rule-based RFP extraction
 scripts/group_sales.py   server: dashboard, API, agent runner, payment page, webhooks
 web/group_sales.html     hotel dashboard          web/group_pay.html   booking payment page
@@ -49,8 +49,7 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/test_group_sales.py -q
 |---|---|---|
 | `PAYMENTS` | `airwallex` if sandbox keys are set, else `simulated` | where deposits and refunds go |
 | `SELLER_MODE` | `claude` if an Anthropic key is set, else `rules` | seller agent; switchable in the dashboard |
-| `BUYER_MODE` | `presenter` | `agent` lets the buyer side reply on its own |
-| `GS_SELLER_MODEL` / `GS_BUYER_MODEL` | `claude-opus-5-5` | models |
+| `GS_SELLER_MODEL` | `claude-opus-5-5` | seller model |
 | `PUBLIC_BASE_URL` | `http://localhost:8010` | return URL after hosted checkout |
 | `AWX_WEBHOOK_SECRET` | unset | accept signed Airwallex webhooks at `POST /webhooks/airwallex` |
 | `GS_PORT`, `GS_VAR` | `8010`, `var/groupsales` | port and state directory |
@@ -124,8 +123,7 @@ are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 Mar
 reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
 back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
-payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed). **＋ New inquiry → Buyer replies →
-Automatically (buyer agent)**, to let the buyer side answer on its own.
+payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed).
 
 ### Seller rules
 
@@ -397,9 +395,10 @@ a booking exception, plus deals handed to a person or declined.
 ### Generated inquiries
 
 `src/agentbank/groupsales/generator.py` writes new inquiries for automated runs and demos. Each one is an
-RFP email plus a private brief for the buyer agent (its answers, goals, limits and a later change). The
-generator only writes the inbound: the seller agent, the buyer agent and the engine handle everything after
-it, and the seller never sees the brief.
+RFP email plus a private brief (the buyer's answers, goals, limits and a later change), which drafts the
+buyer's replies in its mailbox for a person to send. The generator only writes the inbound: the seller agent
+and the engine handle everything after it, and the seller never sees the brief. There is no buyer agent:
+buyers always reply themselves.
 
 An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
