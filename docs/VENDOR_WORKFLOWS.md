@@ -125,8 +125,9 @@ PYTHONPATH=src .venv/bin/python -m pytest tests -q
 node --check web/vendors.js
 node --test tests/test_openflow_demo.cjs
 
-# Use an isolated local server, no real database or payment credentials:
-DATABASE_URL= PAYMENTS=simulated SELLER_MODE=rules GS_PORT=8018 \
+# Use an isolated local server, no real database or payment credentials.
+# GS_VENDORS=1 turns on vendor management; without it the UI under test is hidden.
+DATABASE_URL= PAYMENTS=simulated SELLER_MODE=rules GS_VENDORS=1 GS_PORT=8018 \
   GS_VAR=/tmp/vendor-test .venv/bin/python scripts/group_sales.py
 # In another terminal, with Playwright installed:
 NODE_PATH=/path/to/playwright/node_modules node ui/test/vendors.cjs
@@ -197,8 +198,12 @@ normal master proposal, hotel approval, buyer acceptance and checkout can procee
 No vendor is contacted or paid by these features. Accepted financial terms remain
 locked. Buyer-visible pricing continues to hide supplier costs and markup.
 
-Additional browser check (isolated local simulated server):
+Additional browser check (isolated local simulated server with vendor management on):
 
 ```bash
-VENDOR_TEST_URL=http://127.0.0.1:8023 node ui/test/vendor-history.cjs
+DATABASE_URL= PAYMENTS=simulated SELLER_MODE=rules GS_VENDORS=1 GS_PORT=8023 \
+  GS_VAR=/tmp/vendor-history-test .venv/bin/python scripts/group_sales.py
+# In another terminal, with Playwright installed:
+NODE_PATH=/path/to/playwright/node_modules \
+  VENDOR_TEST_URL=http://127.0.0.1:8023 node ui/test/vendor-history.cjs
 ```
