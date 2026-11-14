@@ -40,19 +40,20 @@ PRESETS: dict[str, dict] = {
 # What each preset shows, for the dashboard's New inquiry drawer.
 PRESET_INFO: dict[str, dict] = {
     "straight_booking": {"title": "Straight booking",
-                         "shows": "Rooms free and the quote fits the budget: accepted, deposit paid on Airwallex, the "
-                                  "hotel's share paid out."},
+                         "shows": "Rooms free and the quote fits the budget. Accept it and pay the deposit on "
+                                  "Airwallex; the hotel's share is paid out."},
     "dates_short_haggle": {"title": "Dates unavailable, then a haggle",
-                           "shows": "Asks for dates too soon to sell; the seller offers others. The buyer counters below "
-                                    "the seller's floor, the floor holds, and the buyer accepts."},
+                           "shows": "Asks for dates too soon to sell; the seller offers others. Ask for a rate below "
+                                    "the seller's floor and see the floor hold."},
     "full_lifecycle": {"title": "Full lifecycle with a refund",
-                       "shows": "Attrition traded for a bigger deposit (manager approval), deposit "
-                                "paid, then fewer rooms: partial refund and the hotel's payout share reversed."},
+                       "shows": "Ask for more attrition and see it traded for a bigger deposit (manager approval). "
+                                "After paying, release rooms: partial refund and the hotel's payout share reversed."},
     "payer_abroad": {"title": "Payer abroad",
-                     "shows": "A company in Germany paying from EUR, then a smaller block and a refund."},
+                     "shows": "A company in Germany paying from EUR. After booking, ask for a smaller block to see "
+                              "the refund."},
     "missing_details": {"title": "Missing details",
                         "shows": "The RFP leaves out who pays and whether the budget includes taxes: the seller asks, "
-                                 "the buyer answers from its brief."},
+                                 "and you answer."},
 }
 
 TRAITS: dict[str, tuple] = {

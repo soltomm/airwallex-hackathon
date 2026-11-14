@@ -23,8 +23,8 @@ be exceeded, and takes the deposit through Airwallex like any other deal. The dr
 
 - **Generated inquiries** (`POST /api/simulate/rfp`, see `src/agentbank/groupsales/generator.py`): one card
   per preset, or traits chosen by hand (dates, price pressure, attrition, room
-  type, payer country, a later reduction, a meeting room, details left out of the RFP). Each inquiry comes
-  with a private brief for the buyer agent; the seller never sees it. An optional seed replays the same
+  type, payer country, a later reduction, a meeting room, details left out of the RFP). You play the buyer
+  and type its replies; nothing is pre-written in the mailbox. An optional seed replays the same
   inquiry against the same calendar, for example after a reset.
 - **Buyer replies**: always by you, in the buyer's mailbox. There is no automatic buyer agent in the
   dashboard. Approvals and paying the deposit always stay with a person.

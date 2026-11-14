@@ -72,10 +72,16 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     return m;
   };
   const mclick = async (m, sel) => { await m.click(sel); await m.waitForTimeout(700); };
-  // The mailbox has one reply box; the buyer's brief prefills it. Wait for that draft, then Send.
-  const sendDraft = async m => {
-    await m.waitForFunction(() => { const d = document.getElementById('draft'); return d && d.value.trim(); }, null, { timeout: 10000 });
+  // The mailbox has one empty reply box: type the reply (as from a run sheet), then Send. Accept is a button.
+  const reply = async (m, text) => {
+    await m.waitForSelector('#draft', { timeout: 10000 });
+    check('the reply box starts empty (no pre-written draft)', (await m.inputValue('#draft')) === '');
+    await m.fill('#draft', text);
     await mclick(m, '[data-act=send]');
+  };
+  const accept = async m => {
+    await m.waitForSelector('#act [data-act=accept]', { timeout: 10000 });
+    await mclick(m, '#act [data-act=accept]');
   };
 
   try {
@@ -112,13 +118,15 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     // 2-3. In Northstar's mailbox: answers, then the counteroffer. v2 at £3,840 waits for the manager.
     const mb = await mailbox('Northstar');
     check('the mailbox shows the hotel\'s questions', /Before we can confirm/.test(await mb.innerText('#thread')));
-    await sendDraft(mb);                         // Send answers
+    await reply(mb, 'Classroom seating for the meeting room. The legal payer is Northstar Analytics Demo Ltd. '
+      + 'Our total budget is inclusive of taxes. Please confirm twin beds in the shared rooms and breakfast for 24 on all three mornings.');
     n = await settle('Northstar', ['offer_sent']);
     const v1 = n.versions[n.versions.length - 1];
     check('v1 £9,600, 30% deposit, 10% attrition', v1.pricing.total === 960000 && v1.terms.deposit_pct === 30 && v1.terms.attrition_pct === 10);
     await mb.waitForSelector('.att', { timeout: 10000 });
     check('the offer arrives in the mailbox with its figures', /£9,600/.test(await mb.innerText('#thread')));
-    await sendDraft(mb);                         // Send counteroffer
+    await reply(mb, 'Thank you, the £220 room rate works for us. Attendance is still uncertain, so we need a 20% '
+      + 'attrition allowance. We propose a 25% deposit.');
     n = await settle('Northstar', ['pending_approval']);
     const v2 = n.versions[n.versions.length - 1];
     check('v2 keeps £220 and asks 40% (£3,840)', v2.terms.rate === 22000 && v2.pricing.deposit === 384000);
@@ -127,7 +135,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     n = await settle('Northstar', ['offer_sent']);
 
     // 4. Accept v2 in the mailbox; the seller opens checkout.
-    await sendDraft(mb);
+    await accept(mb);
     n = await settle('Northstar', ['awaiting_payment']);
     const accMsg = n.thread.filter(m => m.from === 'buyer').pop().text;
     check('the accept message states no limits', !/£3,000|30% limit|budget/.test(accMsg), accMsg);
@@ -151,9 +159,10 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await settle('Summit', ['expired']);
     check('Summit lapsed at the jump', (await deal('Summit')).status === 'expired');
     await mb.reload();
-    await sendDraft(mb);                          // Send change request
+    await reply(mb, 'Four colleagues can no longer attend. Please reduce our block by two twin rooms for all three nights '
+      + 'and return any excess deposit under our agreement.');
     n = await settle('Northstar', ['amendment_sent']);
-    await sendDraft(mb);
+    await accept(mb);
     n = await settle('Northstar', ['refund_awaiting_approval']);
     const v3 = n.versions[n.versions.length - 1];
     check('v3 £8,280 with £528 owed', v3.pricing.total === 828000 && n.finance.refund_owed === 52800);

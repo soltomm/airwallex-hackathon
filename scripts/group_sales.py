@@ -124,7 +124,6 @@ def state():
     s["runner"] = {"busy": runner.busy, "settings": runner.settings, "last": runner.last[-6:],
                    "claude_available": HAS_CLAUDE}
     for d in s["deals"]:
-        d["buyer_suggestion"] = suggest(engine, d["id"])
         d["inbox_url"] = inbox_path(d)
     return s
 
@@ -147,7 +146,6 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None
     inst = engine.installments(d)
     v["balance_pay_url"] = engine.balance_url(d) if inst and inst["open"] and inst["open"]["status"] == "created" else None
-    v["suggestion"] = suggest(engine, d["id"])
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
     v["finance_view"] = engine.finance(d)
     if d.get("folio") and engine.folio_view(d["id"])["approved"]:
