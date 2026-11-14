@@ -67,6 +67,9 @@ The dashboard is the hotel's. You act only as the hotel: the seller agent works 
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
 hotel manager. There is no button to run it. The buyer answers by email, in its own **mailbox** page
 outside the dashboard (`/inbox/<ref>`): open it from the deal's card. Replies, acceptances and the payment link are all there.
+The mailbox has one reply box and one **Send** button. Nothing is pre-written: you type every reply, and the
+seller reads it like any email. While an offer or a change is open, an **Accept offer vN** / **Accept change vN**
+button accepts it in one click.
 
 Inquiries are rows in the overview table; clicking one opens its deal page in a side drawer.
 Each deal page has a coloured **next step** card:
@@ -82,7 +85,7 @@ action is marked in red). The **Activity** tab lists what each agent and person 
 The sidebar's property tools (on a phone, expand **Property tools** first) hold **Room availability**
 (rooms, the Thames Room and breakfast by night), **Seller rules** (the rules the seller works within, see
 below), **Hotel payout account**, **Demo clock** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
-hand-written RFP and sets who answers for the buyer.
+hand-written RFP; you then answer for the buyer in its mailbox.
 
 **Demo clock** moves the one scenario clock that every inquiry shares. It shows the scenario time, **Pick a day**
 (a calendar: any day after today, at 09:00), a **+24 hours** step, and **Payments coming up**: every confirmed
@@ -111,13 +114,13 @@ scenario date and time show at the top right of the dashboard; clicking it also 
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
 8. Final state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
-   back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
+   back for the refund, **£2,980.80 net to the hotel, £331.20 Groupy fee**. The simulated twin holds
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
 9. **Demo clock → Payments coming up: Wed, 3 Mar 2027 → Jump**: the day the last instalment falls due, 7 days before
    arrival. Both instalment dates have now passed, so the seller emails Maya one request for everything
    due: **£4,968**. In the mailbox, **Open payment page ↗** and pay with the same test card. The card reads
-   **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Group Desk fee**; the Payments tab
+   **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Groupy fee**; the Payments tab
    marks every instalment paid.
 
 Summit can be accepted at any point (**Accept offer v1** in Alex's mailbox). Its deposit is within Summit's
@@ -125,8 +128,9 @@ own limits, so checkout opens straight away.
 
 Other things to show: **＋ New inquiry → Write your own** with dates the hotel can't sell (for example 11–14 May).
 The seller doesn't hand it off: it replies that those dates aren't available and offers dates that
-are, checked against live inventory. In the buyer's mailbox, **Take 10 to 13 March 2027** (or type a
-reply naming the dates) and the seller quotes. A request for a service the hotel doesn't offer (a
+are, checked against live inventory. In the buyer's mailbox, type a
+reply naming one of the offered dates (for example "10 to 13 March 2027 works for us") and press **Send**. The
+seller quotes. A request for a service the hotel doesn't offer (a
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
 back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
 payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed).
@@ -166,7 +170,7 @@ payment schedule, cancellation, capacity, costs) are listed underneath.
 
 ### Hotel payouts (Airwallex Payments for Platforms)
 
-The hotel doesn't hold the card payments itself. The platform (**Group Desk**, `platform` in
+The hotel doesn't hold the card payments itself. The platform (**Groupy**, `platform` in
 `scenario.json`) has the Airwallex account; the hotel is one of its **connected accounts**
 (`GS_HOTEL_ACCOUNT`, `acct_…`), onboarded and verified by Airwallex. The platform collects each deposit
 for the hotel ("collect payments directly": the intent is tagged with `connected_account_id`), and once
@@ -177,7 +181,7 @@ hotel out to its own bank account.
 A refund to the buyer is paid by the platform, and a **funds split reversal** takes the hotel's share of
 it back; the platform returns its commission on the refunded part. In the demo:
 
-| | Buyer paid | To the hotel | Group Desk fee |
+| | Buyer paid | To the hotel | Groupy fee |
 |---|---|---|---|
 | Deposit | £3,840 | £3,456 (funds split) | £384 |
 | Refund | −£528 | −£475.20 (reversal) | −£52.80 |
@@ -218,7 +222,7 @@ due date is shown to hotel staff ("instalment overdue"); the seller doesn't chas
 
 For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb and £4,140 on 3 Mar. If the clock
 passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
-is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
+is the Groupy fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
 
 Step 9 of the demo shows the combined request. To see the two requests separately, jump to 8 Feb first in the
 **Demo clock**: the seller asks for £828, and after it's paid, jump to 3 Mar for the £4,140.
@@ -310,7 +314,7 @@ onboarded from the dashboard as a connected account named Harbour House under th
 | Refund to the buyer | £528.00 | `rfd_sgpvzc9hjhnzipknrw4_kulbcb` | ACCEPTED |
 | Funds split reversal (hotel's share of the refund) | £475.20 | `rev_sgpvn2l8vhnzipma9ic` | CREATED |
 
-Result on the dashboard: £3,312 net received, £2,980.80 net to the hotel, £331.20 Group Desk fee.
+Result on the dashboard: £3,312 net received, £2,980.80 net to the hotel, £331.20 Groupy fee.
 Airwallex accepted the split and the reversal, but both were still CREATED when checked, and the
 connected account's balance had not moved: the money follows when the card payment settles, which had
 not happened in the sandbox at the time. Not yet observed: the split reaching RELEASED/settled and the

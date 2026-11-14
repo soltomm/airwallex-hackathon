@@ -75,7 +75,7 @@
   },
   "platform": {
     "_note": "Airwallex Payments for Platforms. The platform collects each card payment for the hotel, which is a connected account (GS_HOTEL_ACCOUNT); a funds split pays the hotel its share and the commission stays with the platform. Commission in basis points (1000 = 10%).",
-    "name": "Group Desk",
+    "name": "Groupy",
     "commission_bps": 1000
   },
   "crm": {
