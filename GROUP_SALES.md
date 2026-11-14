@@ -79,8 +79,13 @@ action is marked in red). The **Activity** tab lists what each agent and person 
 **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
 The sidebar's property tools (on a phone, expand **Property tools** first) hold **Room availability**
 (rooms, the Thames Room and breakfast by night), **Seller rules** (the rules the seller works within, see
-below), **Hotel payout account** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
+below), **Hotel payout account**, **Demo clock** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
 hand-written RFP and sets who answers for the buyer.
+
+**Demo clock** moves the one scenario clock that every inquiry shares. It shows the scenario time, a **+24 hours**
+step, and the dates that matter next across all confirmed bookings (Northstar's room reduction, each booking's
+instalments), each with **Jump**. A jump warns when it would lapse an open quote. The clock only moves forward;
+**Reset scenario** starts over.
 
 1. **↻ Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
@@ -93,15 +98,15 @@ hand-written RFP and sets who answers for the buyer.
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
    When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
    shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
-6. **Jump to 20 Jan (demo)**, on Northstar's card. Summit's quote lapses. In the mailbox,
-   **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
+6. **Demo clock → Wed, 20 Jan 2027 → Jump**. It warns first that Summit's open quote lapses, and it does. In
+   the mailbox, **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
 8. Final state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
    back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
-9. **Jump to 3 Mar (demo)**, on Northstar's card: the day the last instalment falls due, 7 days before
+9. **Demo clock → Wed, 3 Mar 2027 → Jump**: the day the last instalment falls due, 7 days before
    arrival. Both instalment dates have now passed, so the seller emails Maya one request for everything
    due: **£4,968**. In the mailbox, **Open payment page ↗** and pay with the same test card. The card reads
    **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Group Desk fee**; the Payments tab
@@ -187,10 +192,9 @@ For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb an
 passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
 is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
 
-Step 9 of the demo shows the combined request. To see the two requests separately, move the clock to 8 Feb
-first (`POST /api/clock {"to": "2027-02-08T09:00:00+00:00"}`; no dashboard button): the seller asks for £828,
-and after it's paid the card offers **Jump to 3 Mar (demo)** for the £4,140. `scripts/e2e_demo.js` runs it
-that way.
+Step 9 of the demo shows the combined request. To see the two requests separately, jump to 8 Feb first in the
+**Demo clock**: the seller asks for £828, and after it's paid, jump to 3 Mar for the £4,140.
+`scripts/e2e_demo.js` runs it that way.
 
 ### When a payment provider refuses
 

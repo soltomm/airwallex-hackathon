@@ -57,6 +57,12 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
   const tab = async key => { await page.click(`[data-tab=${key}]`); await page.waitForTimeout(300); };
   const card = () => page.innerText('#deal');
   const click = async (sel) => { await page.click(sel); await page.waitForTimeout(500); };
+  const demoClock = async () => {                                      // the Demo clock drawer, from the property tools
+    await closeDrawers(); await tools(); await click('#wbClock');
+    await page.waitForSelector('#clockDrawer[open] #clockBody .clock-row', { timeout: 10000 });
+    return page.innerText('#clockBody');
+  };
+  const jumpTo = async iso => { await click(`#clockBody [data-clock-to="${iso}"]`); };
   // Presenter-only moves with no dashboard button (the demo script's held refund notification).
   const post = (path, body = {}) => page.evaluate(([p, b]) => fetch(p, {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(b)}).then(r => r.json()), [path, body]);
@@ -147,7 +153,10 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     // 6. Jump to 20 Jan: Summit lapses; Northstar reduces to v3 £8,280 with £528 owed.
     await page.waitForTimeout(500);
     await open('Northstar');
-    await click('#deal [data-act=jump]');
+    const clock1 = await demoClock();
+    check('the demo clock lists Northstar\'s room reduction on 20 Jan and warns Summit\'s quote lapses',
+          /20 Jan 2027[\s\S]*Northstar Analytics: the buyer asks to release rooms/.test(clock1) && /Lapses the open quote for Summit/.test(clock1), clock1);
+    await jumpTo('2027-01-20T09:00:00+00:00');
     await settle('Summit', ['expired']);
     check('Summit lapsed at the jump', (await deal('Summit')).status === 'expired');
     await mb.reload();
@@ -282,11 +291,12 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
       }
       return op;
     };
-    await open('Northstar');
-    check('the booking card offers the jump to 3 Mar', /Jump to 3 Mar \(demo\)/.test(await card()));
-    await click('#deal [data-act=jumpInst]');
+    const clock2 = await demoClock();
+    check('the demo clock lists the final instalment on 3 Mar', /3 Mar 2027[\s\S]*Northstar Analytics: instalment of £4,140 due \(100% paid\)/.test(clock2), clock2);
+    await jumpTo('2027-03-03T09:00:00+00:00');
     check('on 3 Mar the seller requests the remaining £4,140', !!(await createdInstalment(414000)));
     await page.waitForTimeout(1800);
+    await open('Northstar');
     check('the card says what the seller asked for', /asked for £4,140/.test(await card()));
     await tab('money');
     check('the Payments tab marks the requested instalment', (await scheduleStates()).includes('Requested'),
