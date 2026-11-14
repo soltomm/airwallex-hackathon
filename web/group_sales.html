@@ -567,8 +567,8 @@ function tabBody(d) {
   if (tab === 'money') {
     const ops = S.operations.filter(o => o.deal_id === d.id), led = S.ledger.filter(x => x.deal_id === d.id), f = d.finance_view;
     if (!ops.length) return '<p class="muted">No payments yet.</p>';
-    return `${f.schedule ? `<table class="t"><tr><th>Schedule</th><th>Due</th><th class="r">Amount</th></tr>${f.schedule.map(x => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {year: 'numeric'}) : '–'}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">Later instalments are shown, not charged automatically.</p>` : ''}
-      <div class="label" style="margin-top:12px">Airwallex</div><table class="t">${ops.map(o => `<tr><td>${o.kind} ${gbp(o.amount)}</td><td><code class="small">${esc(o.kind === 'deposit' ? o.payment_intent_id : o.provider_id || '–')}</code></td><td>${esc(o.provider_status || o.status)}</td></tr>`).join('')}</table>
+    return `${f.schedule ? `<table class="t"><tr><th>Schedule</th><th>Due</th><th class="r">Amount</th></tr>${f.schedule.map(x => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {year: 'numeric'}) : '–'}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">The seller asks for each instalment on its due date; the amounts come from the contract.</p>` : ''}
+      <div class="label" style="margin-top:12px">Airwallex</div><table class="t">${ops.map(o => `<tr><td>${o.kind} ${gbp(o.amount)}</td><td><code class="small">${esc((o.kind === 'deposit' || o.kind === 'installment') ? o.payment_intent_id : o.provider_id || '–')}</code></td><td>${esc(o.provider_status || o.status)}</td></tr>`).join('')}</table>
       <div class="label" style="margin-top:12px">Ledger</div><table class="t">${led.map(x => `<tr><td>${when(x.at)}</td><td>${esc(x.type.replaceAll('_', ' '))}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('') || '<tr><td class="muted">empty</td></tr>'}</table>
       ${d.pay_url ? `<p><a href="${d.pay_url}" target="_blank" class="small">Booking payment page ↗</a></p>` : ''}`;
   }

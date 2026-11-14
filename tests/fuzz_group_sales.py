@@ -296,7 +296,8 @@ class Case:
             self.log(f"approval {a['id']} by {actor} refused: {err}")
 
     def pay_move(self):
-        ops = [o for o in self.e.s["operations"].values() if o["kind"] == "deposit" and o.get("payment_intent_id")]
+        ops = [o for o in self.e.s["operations"].values() if o["kind"] in ("deposit", "installment")
+               and o.get("payment_intent_id")]
         if not ops:
             return
         op = self.rng.choice(ops)
@@ -304,7 +305,9 @@ class Case:
         self.provider.pay(op["payment_intent_id"], card)
         how = self.rng.random()
         try:
-            if how < 0.6:
+            if how < 0.6 and op["kind"] == "installment":
+                self.e.check_balance_payment(op["deal_id"], source="return page")
+            elif how < 0.6:
                 self.e.check_payment(op["deal_id"], source="return page")
             elif how < 0.85:
                 evt = {"id": f"evt_{op['payment_intent_id']}_{self.rng.randint(0, 2)}", "name": "payment_intent.succeeded",
@@ -317,7 +320,8 @@ class Case:
 
     def clock_move(self):
         if self.rng.random() < 0.3:
-            target = self.rng.choice(["2027-01-20T09:00:00+00:00", "2027-02-08T09:00:00+00:00", "2027-02-25T09:00:00+00:00"])
+            target = self.rng.choice(["2027-01-20T09:00:00+00:00", "2027-02-08T09:00:00+00:00", "2027-02-25T09:00:00+00:00",
+                                     "2027-03-03T09:00:00+00:00"])
             if target > self.e.now():
                 self.e.advance_clock(to=target)
                 self.log(f"clock to {target}")
@@ -632,6 +636,20 @@ def check(e: Engine, provider: SimulatedProvider):
         clean = pv["status"] == "paid" and refunds_done and not fin["refund_owed"] and not fin["refund_pending"]
         if clean and pv["hotel_net"] + pv["platform_fee"] != fin["net_received"]:
             _fail(f"{d['ref']}: hotel {pv['hotel_net']} + fee {pv['platform_fee']} != net received {fin['net_received']}")
+
+    # Instalments: at most one open request per deal, each for what the contract made due, and the contract
+    # is never collected twice over.
+    for d in s["deals"].values():
+        inst = [o for o in s["operations"].values() if o["deal_id"] == d["id"] and o["kind"] == "installment"]
+        if len([o for o in inst if o["status"] in ("submitting", "unknown", "created")]) > 1:
+            _fail(f"{d['ref']}: more than one open instalment request")
+        if inst and not (d.get("folio") or {}).get("snapshot"):
+            fin = e.finance(d)
+            if fin["total"] is not None and fin["net_received"] > fin["total"]:
+                _fail(f"{d['ref']}: received {fin['net_received']} net, more than the contract's {fin['total']}")
+        for o in inst:
+            if o["amount"] <= 0:
+                _fail(f"{d['ref']}: instalment request {o['id']} for {o['amount']}")
 
     # Approvals are decided only by the named approver.
     for x in s["activity"]:

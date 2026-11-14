@@ -167,6 +167,21 @@ namespaces), or share one by setting `GS_HOTEL_ACCOUNT`, which always wins. **Ch
 reads the account's status and capabilities. Your Airwallex account must have Payments for Platforms
 enabled and an API key allowed to create accounts; otherwise the drawer shows Airwallex's refusal.
 
+### Instalments
+
+After the deposit, the seller collects the rest of the contract on the hotel's schedule (`policy.installments`:
+50% paid in total 30 days before arrival, 100% 7 days before). On a due date it calls `request_balance`. The
+engine works out the amount from the signed contract, opens a hosted payment page for exactly that amount and
+emails the buyer the link (`/pay/<ref>/balance`). The seller can't choose, change or waive it. The payment is
+verified on return, by webhook or by `check_balance_payment`, recorded once, and the hotel's share is paid by
+funds split like the deposit's. One request is open at a time, nothing is requested while a refund is
+unresolved, and the booking can't be changed while a request is open. A request still unpaid 3 days after its
+due date is shown to hotel staff ("instalment overdue"); the seller doesn't chase with new requests.
+
+For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb and £4,140 on 3 Mar. If the clock
+passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
+is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
+
 ### When a payment provider refuses
 
 If Airwallex refuses the deposit intent or a refund, the seller stops on that deal instead of trying
@@ -405,5 +420,4 @@ The checks that need real keys, and a hand-off prompt for running them, are in `
 ## Not in this build
 
 Kit 10 (Merchant Onboarding). Payments for extra rooms, other dates, upgrades, custom services, split
-billing, forecasting, separate department interfaces. Later installments are shown as obligations
-and are not charged automatically.
+billing, forecasting, separate department interfaces.

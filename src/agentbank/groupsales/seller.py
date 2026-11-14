@@ -278,6 +278,9 @@ class RulesSeller:
             d = self.e.deal(x["deal_id"])
             return any(a["deal_id"] == d["id"] and a["subject"] == "refund" and a["status"] in ("approved", "rejected")
                        and not a.get("used") and not a.get("handled") for a in self.e.s["approvals"].values())
+        if st == "confirmed" and not x["unread_buyer_input"]:
+            inst = self.e.installments(self.e.deal(x["deal_id"]))
+            return bool(inst and not inst["blocked"] and not inst["open"] and inst["due_now"] > 0)
         return bool(x["unread_buyer_input"]) and st not in ("declined", "lost", "handoff")
 
     # ---- one step on one deal -------------------------------------------------------------
@@ -422,6 +425,9 @@ class RulesSeller:
                     return f"{ref}: escalated change ({err})"
                 return f"{ref}: reduction prepared ({r['status']})"
             return f"{ref}: read"
+        if st == "confirmed":
+            r = e.request_balance(deal_id)
+            return f"{ref}: instalment requested {r['amount']}"
         if st == "amendment_approved":
             v = d["versions"][-1]
             e.send_amendment(deal_id, v["n"])
@@ -940,6 +946,11 @@ How to work:
   or fact stops you (why_a_person) and what decision you need (what_a_person_should_do).
 - When the buyer accepts, open_checkout (the buyer pays on Airwallex's hosted page; you never see card
   data). Payments are verified by the back office.
+- After the deposit, the rest of the contract is due on the instalment schedule. When a deal's next
+  step says an instalment is due, call request_balance: the engine works out the amount from the signed
+  contract and emails the buyer a payment link (you never choose or change the amount, and never waive
+  it). If a request is already open, don't ask again; check_balance_payment verifies it. If the buyer
+  hasn't paid well after the due date, the hotel staff are told; you don't chase with new requests.
 - After booking, a change request: prepare_reduction for the rooms released. The engine prices it from
   the contract: room-nights within the attrition allowance and before the release deadline come off
   the total; any others are released but stay payable as an attrition charge. That needs no approval:
@@ -1092,6 +1103,8 @@ TOOLS = [
     _tool("send_offer", "Send an approved version.", {**_DEAL, "version": _I}),
     _tool("open_checkout", "Record the deposit due for the accepted version and open its hosted payment page.", _DEAL),
     _tool("check_payment", "Verify the deposit with the payment provider.", _DEAL),
+    _tool("request_balance", "Ask the buyer for the instalment due now under the contract's payment schedule: the engine computes the amount, opens a hosted payment page and emails the buyer the link. Reuses an open request instead of making another.", _DEAL),
+    _tool("check_balance_payment", "Verify requested instalment payments with the payment provider.", _DEAL),
     _tool("prepare_reduction", "Amendment releasing rooms from a confirmed booking (same number each night). "
           "Priced by the contract, including any attrition charge; a waiver of that charge needs the hotel manager.", {
         **_DEAL, "rooms_per_night": _I, "message_to_buyer": _S, "waive_gbp": {"type": "number"},
@@ -1189,6 +1202,10 @@ class ClaudeSeller:
             return e.open_checkout(did)
         if name == "check_payment":
             return e.check_payment(did)
+        if name == "request_balance":
+            return e.request_balance(did)
+        if name == "check_balance_payment":
+            return e.check_balance_payment(did)
         if name == "prepare_reduction":
             return e.prepare_reduction(did, rooms_per_night=a["rooms_per_night"], message=a.get("message_to_buyer", ""),
                                        waive=int(round((a.get("waive_gbp") or 0) * 100)),

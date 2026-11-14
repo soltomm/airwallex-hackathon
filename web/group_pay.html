@@ -33,15 +33,20 @@
   const $ = id => document.getElementById(id);
   const say = (t, c) => { $('status').textContent = t; $('status').className = c || ''; };
   const finalFolio=P.purpose==='folio';
+  const balance=P.purpose==='installment';
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   if(finalFolio)$('dueLabel').textContent='Outstanding final folio balance:';
+  if(balance)$('dueLabel').textContent='Instalment due now:';
   $('title').textContent = `${P.hotel} · ${P.company}`;
+  if(balance){$('paidSummary').hidden=false;$('paidSummary').textContent='Paid so far: '+P.paid;}
   if(finalFolio){$('paidSummary').hidden=false;$('paidSummary').textContent='Payments already reconciled: '+P.paid;}
   $('sub').textContent = finalFolio?`Final master folio · Reservation ${P.ref} · total ${P.total}`:`Booking ${P.ref}, agreement version ${P.version || '-'} · total ${P.total || '-'}`;
   $('lines').innerHTML = (P.lines || []).map(l => `<tr><td>${esc(l.item)}</td><td>${esc(l.amount)}</td></tr>`).join('');
   $('amount').textContent = P.amount ? `${P.amount} GBP` : '-';
   if (P.message) say(P.message, 'bad');
   if(finalFolio && P.op_status==='succeeded'){say('Final folio payment verified. Return to your mailbox for the reconciled statement.','ok');}
+  else if(balance && P.op_status==='succeeded'){say('Instalment verified with Airwallex. Thank you, your payment is recorded.','ok');}
+  else if(balance && !P.hold_ok){say(`This payment request is no longer open (${P.op_status || 'none requested'}). The hotel will send a new link if anything is due.`,'bad');}
   else if (P.booking === 'confirmed') {
     say('Payment verified with Airwallex. Your booking is confirmed.', 'ok');
   } else if (P.booking === 'exception') {
@@ -53,9 +58,9 @@
   } else if (!P.client_secret && P.provider !== 'simulated') {
     say(`Checkout is not available (${P.op_status || 'no payment opened'}).`, 'bad');
   } else if (P.provider === 'simulated') {
-    $('action').innerHTML = `<a class="btn" href="${P.sim_url}">${finalFolio?'Pay final balance':'Pay deposit'} (simulated hosted page)</a>`;
+    $('action').innerHTML = `<a class="btn" href="${P.sim_url}">${finalFolio?'Pay final balance':balance?'Pay instalment':'Pay deposit'} (simulated hosted page)</a>`;
   } else {
-    $('action').innerHTML = `<button id="pay">${finalFolio?'Pay final balance':'Pay deposit'} with Airwallex</button>`;
+    $('action').innerHTML = `<button id="pay">${finalFolio?'Pay final balance':balance?'Pay instalment':'Pay deposit'} with Airwallex</button>`;
     (async () => {
       const { payments } = await window.AirwallexComponentsSDK.init({ env: 'demo', enabledElements: ['payments'] });
       $('pay').onclick = () => payments.redirectToCheckout({
