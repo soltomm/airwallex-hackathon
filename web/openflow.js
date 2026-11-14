@@ -82,12 +82,13 @@
     try { catalog = await window.Harbour.presets(); }
     catch (err) { $('wbDrawerBody').innerHTML='<h2 id="wbDrawerTitle" tabindex="-1">Let the inquiry come to you.</h2><p class="wb-lede">Write a group inquiry the way a buyer would. (Generated test inquiries couldn’t be loaded.)</p>' + thirdPartyForm() + ownForm(); wireOwn(); return; }
     const S = actual(), b = S?.bookable;
-    const cards = Object.keys(catalog.presets).map(k => { const i = catalog.info[k] || {title: k, shows: ''};
-      return `<button class="wb-channel" data-preset="${html(k)}"><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry →</span></button>`; }).join('');
+    const keys = Object.keys(catalog.presets);
+    const cards = keys.map((k, n) => { const i = catalog.info[k] || {title: k, shows: ''};
+      return `<button class="wb-channel" data-preset="${html(k)}"><span class="wb-channel-index" aria-hidden="true">${String(n + 1).padStart(2, '0')}</span><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry <span class="wb-arrow" aria-hidden="true">→</span></span></button>`; }).join('');
     showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Write a group inquiry the way a buyer would. The seller agent reads it like any other email, and the backend’s rules decide what it can offer${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
       ${thirdPartyForm()}
       ${ownForm(b)}
-      <details class="wb-traits wb-generated"><summary>Generated test inquiries</summary>
+      <details class="wb-traits wb-generated"><summary><span class="wb-ni-icon" aria-hidden="true">✦</span><span class="wb-ni-sum"><span class="wb-ni-sum-title"><span>Generated test inquiries</span><span class="wb-ni-count">${keys.length}</span></span><span class="wb-ni-sum-sub">Scripted scenarios for demos and test runs</span></span><span class="wb-ni-chevron" aria-hidden="true"></span></summary>
         <p class="wb-sub">A new inquiry each time you click. You type the buyer’s replies in its mailbox; nothing is pre-written. The seller only sees the email, never which test it is.</p>
         <div class="wb-channel-grid">${cards}</div>
       </details>`, 'NEW INQUIRY');
@@ -108,14 +109,21 @@
   function thirdPartyForm(){if(!window.Vendors)return '';return `<fieldset class="card"><legend>Third-party simulation</legend><label><input id="wbThirdParty" type="checkbox"> Needs third-party services</label><label class="wb-field">Service<select id="wbThirdPartyCategory">${['av','catering','meeting','rooms','technician','amenities'].map(c=>`<option value="${c}">${c}</option>`).join('')}</select></label><label><input id="wbThirdPartyQuote" type="checkbox" checked> Include a hypothetical quote response</label><p class="small muted">Creates a simulated preferred-provider request once stay dates are recorded. Review the quote, approve it and simulate confirmation in the inquiry’s third-party workspace. No provider is contacted.</p></fieldset>`;}
   function thirdPartyOptions(){return $('wbThirdParty')?.checked?{category:$('wbThirdPartyCategory').value,quote_response:$('wbThirdPartyQuote').checked}:null;}
   function ownForm(b) {
-    const scope = b ? `for nights from ${longDate(b.first_night)} to ${longDate(b.last_night)}, with at least ${b.min_days_before_arrival} days’ notice` : 'for its bookable nights';
-    return `<form id="wbInbound"><h3>Write your own</h3>
-        <p class="wb-sub">A real, unscripted RFP. You reply as the buyer from its mailbox.</p>
-        <label class="wb-field">From<input id="wbInquiryFrom" required maxlength="200" value="Guest <guest@example.com>"></label>
-        <label class="wb-field">Subject<input id="wbInquirySubject" required maxlength="200" value="Group inquiry"></label>
-        <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="8" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>
-        <p class="wb-sub">Harbour House sells twin and king rooms, breakfast and the Thames Room (classroom layout) ${html(scope)}. Anything else is handed to hotel staff. Mention who pays and whether the budget includes taxes, or the agent will ask.</p>
-        <button class="wb-primary" type="submit" id="wbSend">Send inquiry to Harbour House</button></form>`;
+    const scope = b ? `Nights from ${longDate(b.first_night)} to ${longDate(b.last_night)}, with at least ${b.min_days_before_arrival} days’ notice` : 'Its bookable nights only';
+    return `<form id="wbInbound" class="wb-ni-card">
+        <div class="wb-ni-head"><span class="wb-ni-icon" aria-hidden="true">✉</span><div><h3>Write your own</h3>
+          <p class="wb-sub">A real, unscripted RFP. You reply as the buyer from its mailbox.</p></div></div>
+        <div class="wb-ni-pair">
+          <label class="wb-field">From<input id="wbInquiryFrom" type="text" required maxlength="200" autocomplete="off" value="Guest <guest@example.com>"></label>
+          <label class="wb-field">Subject<input id="wbInquirySubject" type="text" required maxlength="200" autocomplete="off" value="Group inquiry"></label>
+        </div>
+        <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="7" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>
+        <div class="wb-ni-scope"><b>What Harbour House can quote</b>
+          <ul><li>Twin and king rooms, breakfast and the Thames Room (classroom layout)</li>
+            <li>${html(scope)}</li>
+            <li>Anything else is handed to hotel staff</li></ul>
+          <p>Tip: mention who pays and whether the budget includes taxes, or the agent will ask.</p></div>
+        <div class="wb-ni-actions"><button class="wb-primary" type="submit" id="wbSend">Send inquiry to Harbour House <span class="wb-arrow" aria-hidden="true">→</span></button></div></form>`;
   }
   function wireOwn() {
     $('wbInbound').onsubmit=async e=>{
