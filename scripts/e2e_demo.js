@@ -243,6 +243,32 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await mb.setViewportSize({ width: 375, height: 800 }); await mb.waitForTimeout(300);
     if (await mb.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) wide.push('mailbox');
     check('no horizontal scroll at 375px', wide.length === 0, wide.join(', '));
+    await mb.setViewportSize({ width: 1100, height: 800 });
+
+    // 10. After the demo: on 8 Feb the seller asks for the first instalment (£828); the buyer pays it from the
+    // mailbox. Last, because it moves the clock past the demo's dates.
+    await post('/api/clock', {to: '2027-02-08T09:00:00+00:00'});
+    await post('/api/seller/run');
+    let t1 = Date.now(), inst;
+    while (Date.now() - t1 < 30000 && !inst) {
+      inst = (await state()).operations.find(o => o.kind === 'installment' && o.status === 'created');
+      if (!inst) await page.waitForTimeout(500);
+    }
+    check('on 8 Feb the seller requests the £828 instalment', inst && inst.amount === 82800);
+    await mb.reload();
+    await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
+    check('the mailbox offers the instalment payment', /Pay your next instalment/.test(await mb.innerText('#act')));
+    const [ipay] = await Promise.all([ctx.waitForEvent('page'), mb.click('button:has-text("Open payment page")')]);
+    await ipay.waitForLoadState();
+    await ipay.click('text=Pay instalment'); await ipay.waitForLoadState();
+    await ipay.click('button:has-text("Pay")'); await ipay.waitForLoadState();
+    await ipay.waitForTimeout(800);
+    check('return page shows the instalment verified', /Instalment verified/.test(await ipay.innerText('body')));
+    await ipay.close();
+    n = await deal('Northstar');
+    check('£4,140 net received after the instalment', n.finance_view.net_received === 414000, JSON.stringify(n.finance_view));
+    await mb.reload(); await mb.waitForSelector('#act .box', { timeout: 10000 });
+    check('the pay card goes once it is paid', !/Pay your next instalment/.test(await mb.innerText('#act')));
   } catch (e) {
     check('run completed', false, e.message);
     await shot('error');

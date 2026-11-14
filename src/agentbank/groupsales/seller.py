@@ -280,7 +280,9 @@ class RulesSeller:
                        and not a.get("used") and not a.get("handled") for a in self.e.s["approvals"].values())
         if st == "confirmed" and not x["unread_buyer_input"]:
             inst = self.e.installments(self.e.deal(x["deal_id"]))
-            return bool(inst and not inst["blocked"] and not inst["open"] and inst["due_now"] > 0)
+            if inst and not inst["blocked"] and inst["open"]:
+                return inst["open"]["status"] in ("submitting", "unknown")   # look the lost request up
+            return bool(inst and not inst["blocked"] and inst["due_now"] > 0)
         return bool(x["unread_buyer_input"]) and st not in ("declined", "lost", "handoff")
 
     # ---- one step on one deal -------------------------------------------------------------
@@ -426,6 +428,10 @@ class RulesSeller:
                 return f"{ref}: reduction prepared ({r['status']})"
             return f"{ref}: read"
         if st == "confirmed":
+            inst = e.installments(d)
+            if inst and inst["open"] and inst["open"]["status"] in ("submitting", "unknown"):
+                r = e.check_balance_payment(deal_id)
+                return f"{ref}: looked up the instalment request ({r['status']})"
             r = e.request_balance(deal_id)
             return f"{ref}: instalment requested {r['amount']}"
         if st == "amendment_approved":
