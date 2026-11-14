@@ -182,6 +182,11 @@ For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb an
 passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
 is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
 
+To try it after step 8 of the demo, move the clock (no dashboard button), from the dashboard's browser console:
+`fetch('/api/clock', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({to: '2027-02-08T09:00:00+00:00'})})`.
+The seller emails the £828 request; in Maya's mailbox, **Open payment page ↗** and pay. Use `2027-03-03` instead
+to see one request for £4,968. `scripts/e2e_demo.js` runs the 8 Feb case last.
+
 ### When a payment provider refuses
 
 If Airwallex refuses the deposit intent or a refund, the seller stops on that deal instead of trying
