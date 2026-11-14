@@ -2303,3 +2303,36 @@ def test_buyer_can_still_write_after_a_handoff(eng):
     d = deal_by(e, "vague.example")
     assert d["status"] == "handoff" and d["unread"]                       # with staff, flagged for them
     assert d["thread"][-1]["from"] == "buyer"                              # the seller agent doesn't answer it
+
+
+# ------------------------------------------------------------------------------ attrition asks outside the bands
+def _summit_counter(tmp_path, payload, text="Could you change the attrition?"):
+    e = Engine(tmp_path / "var", SimulatedProvider(tmp_path / "sim.json", refund_settle_seconds=0))
+    s = RulesSeller(e)
+    s.run()
+    d = deal_by(e, "Summit")
+    assert d["status"] == "offer_sent"
+    e.buyer_action(d["id"], d["buyer_token"], "counter", text, payload)
+    s.run()
+    return e, d
+
+
+def test_attrition_ask_above_the_maximum_is_capped_and_the_buyer_and_manager_are_told(tmp_path):
+    e, d = _summit_counter(tmp_path, {"attrition_pct": 60})
+    v = d["versions"][-1]
+    assert v["status"] == "pending_approval" and v["terms"]["attrition_pct"] == POL["attrition"]["max_pct_with_approval"]
+    assert v["message"].startswith("Thank you for asking. We can't offer 60% attrition. We can offer 20% attrition")
+    assert "most" not in v["message"] and "maximum" not in v["message"]     # don't reveal the ceiling
+    a = next(a for a in e.s["approvals"].values() if a["deal_id"] == d["id"] and a["status"] == "pending")
+    assert a["buyer_asked"] == [{"rule": "Free release (attrition)", "asked": "60%", "offered": "20%",
+                                 "note": "above the 20% maximum, even with your approval"}]
+    assert {r["rule"] for r in a["rules"]} >= {x["rule"] for x in a["buyer_asked"]}   # the card lines them up
+    assert "None" not in a["summary"] and "buyer asked for 60% attrition. Capped at the 20% maximum." in a["summary"]
+
+
+def test_attrition_ask_within_the_standard_is_not_worded_as_a_trade(tmp_path):
+    e, d = _summit_counter(tmp_path, {"attrition_pct": 5})
+    v = d["versions"][-1]
+    assert v["status"] == "sent" and v["terms"]["attrition_pct"] == 5
+    assert v["message"].startswith("Thank you. We can set 5% attrition") and "in exchange" not in v["message"]
+    assert not any(a["deal_id"] == d["id"] and a["status"] == "pending" for a in e.s["approvals"].values())
