@@ -90,7 +90,7 @@ dl.outcomes { margin-top: 8px; }
 <script>
 const CFG = __INBOX__;
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/\bHarbour\s+House\b/gi, 'Groupy').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const gbp = p => p == null ? '–' : (p < 0 ? '−' : '') + '£' + (Math.abs(p) / 100).toLocaleString('en-GB', {minimumFractionDigits: Math.abs(p) % 100 ? 2 : 0, maximumFractionDigits: 2});
 const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '–';
 let V = null, lastJSON = '', opened = new Set(), draftDirty = false;
@@ -132,7 +132,7 @@ function asked(m) {
   return h;
 }
 function render() {
-  const me = V.contact, hotelAddr = 'groups@groupy.example';
+  const me = V.contact, hotelAddr = 'groups@harbourhouse.example';
   $('title').innerHTML = `${esc(me)} <span>· ${esc(V.company)}</span>`;
   document.title = `${V.company} Mailbox`;
   $('subject').textContent = V.subject || 'Group booking';
@@ -177,15 +177,18 @@ function actions() {
   }
   if (V.hotel_busy) h += `<p class="small muted"><span class="dot pulse"></span>${esc(V.hotel)} is replying…</p>`;
   if (['lost', 'declined'].includes(V.status)) return h;
-  // One reply box, like an email client. A draft from the buyer's brief prefills it and, when sent, carries the
-  // brief's structured move (answers, counteroffer, acceptance, change request) so the seller can act on it.
-  const s = V.status === 'handoff' ? null : V.suggestion, booked = V.booking && V.booking.status === 'confirmed';
-  const hint = s ? `Draft from ${esc(V.company)}'s private brief. Edit it if you like.`
-    : V.status === 'handoff' ? `${esc(V.hotel)}'s group sales team has your request and will reply here.`
+  // One empty reply box, like an email client: the buyer writes every reply. The backend reads what it asks for
+  // (answers, other terms, acceptance, a change to the booking). Accepting the current offer also has a button.
+  const c = cur(), booked = V.booking && V.booking.status === 'confirmed';
+  const canAccept = c && c.status === 'sent' && ((V.status === 'offer_sent' && c.kind === 'offer') || (V.status === 'amendment_sent' && c.kind === 'amendment'));
+  const accept = canAccept ? `<div class="box"><div class="who">${c.kind === 'amendment' ? 'Change' : 'Offer'} v${c.n}</div><h3>${gbp(c.pricing.total)} total · ${gbp(c.pricing.deposit)} deposit</h3>
+    <p class="small muted">Accept it as it stands, or reply below to ask for different terms.</p>
+    <div class="row"><button class="btn-p" data-act="accept" data-v="${c.n}">Accept ${c.kind === 'amendment' ? 'change' : 'offer'} v${c.n}</button></div></div>` : '';
+  const hint = V.status === 'handoff' ? `${esc(V.hotel)}'s group sales team has your request and will reply here.`
     : V.waiting_on === 'hotel' ? `Waiting for ${esc(V.hotel)}. You can still write to them.`
     : booked ? 'Nothing needed from you right now.' : '';
-  return h + `<div class="box compose"><div class="who">Reply to ${esc(V.hotel)}</div>${hint ? `<p class="small muted">${hint}</p>` : ''}
-    <textarea id="draft" rows="5" placeholder="Write your reply…">${esc(s ? s.text : '')}</textarea>
+  return h + accept + `<div class="box compose"><div class="who">Reply to ${esc(V.hotel)}</div>${hint ? `<p class="small muted">${hint}</p>` : ''}
+    <textarea id="draft" rows="5" placeholder="Write your reply…"></textarea>
     <div class="row" style="margin-top:8px"><button class="btn-p" data-act="send">Send</button></div></div>`;
 }
 function refresh() { lastJSON = ''; draftDirty = false; load(); }
@@ -193,14 +196,21 @@ function wire() {
   if ($('draft')) $('draft').oninput = () => { draftDirty = true; };
   const act = (action, text, payload) => api(`/api/buyer/${CFG.id}`, {token: CFG.t, action, text, payload});
   document.querySelectorAll('[data-act=send]').forEach(b => b.onclick = async () => {
-    const s = V.status === 'handoff' ? null : V.suggestion, text = $('draft').value.trim();
+    const text = $('draft').value.trim();
     if (!text) { toast('Write a message first'); return; }
     b.disabled = true;
     try {
-      if (s) await act(s.action, text, s.payload);
-      // Free text: while the hotel is waiting on details or a date choice, the seller reads it as the reply.
-      else await act(['needs_info', 'dates_proposed'].includes(V.status) ? 'reply' : 'message', text, {});
+      // While the hotel is waiting on details or a date choice, the seller reads it as the reply.
+      await act(['needs_info', 'dates_proposed'].includes(V.status) ? 'reply' : 'message', text, {});
       toast('Sent to ' + V.hotel);
+    } catch (e) {} finally { b.disabled = false; refresh(); }
+  });
+  document.querySelectorAll('[data-act=accept]').forEach(b => b.onclick = async () => {
+    const n = Number(b.dataset.v), v = ver(n);
+    b.disabled = true;
+    try {
+      await act('accept', `We accept ${v.kind === 'amendment' ? 'the change' : 'the offer'} v${n}: total ${gbp(v.pricing.total)}, deposit ${gbp(v.pricing.deposit)}.`, {version: n});
+      toast('Accepted v' + n);
     } catch (e) {} finally { b.disabled = false; refresh(); }
   });
 }

@@ -26,7 +26,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  else await page.getByText('Northstar Analytics',{exact:true}).first().waitFor();
  await shot('before.png');
  await page.unroute(base+'/'); await page.reload();
- await page.getByText('Groupy · Connected',{exact:true}).first().waitFor();
+ await page.getByText('Harbour House · Connected',{exact:true}).first().waitFor();
  const startCount=await page.locator('.wb-table tbody tr').count();
  // Live Harbour detail and support tools retain their working controls.
  await page.getByRole('button',{name:'Northstar Analytics'}).first().click();
