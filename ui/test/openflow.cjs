@@ -43,6 +43,23 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.waitForFunction(()=>document.activeElement?.id==='wbDrawerTitle',null,{timeout:2000});
  await page.locator('#wbInbound').waitFor();
  assert.equal(await page.locator('#wbInbound').isVisible(),true);
+ for (const [id,hint] of [['wbInquiryFrom','e.g. Guest <guest@example.com>'],['wbInquirySubject','e.g. Group inquiry']]) {
+  const field=page.locator('#'+id);
+  assert.equal(await field.inputValue(),'','inquiry fields start empty');
+  assert.equal(await field.getAttribute('placeholder'),hint);
+  assert.equal(await field.getAttribute('maxlength'),'200');
+  assert.equal(await field.evaluate(el=>el.required && el.validity.valueMissing),true,'empty fields remain required');
+ }
+ await page.locator('#wbInquiryText').fill('Please quote rooms for our group.');
+ const postsBefore=posts.length;
+ await page.locator('#wbSend').click();
+ assert.equal(posts.length,postsBefore,'empty sender and subject block submission');
+ await page.locator('#wbInquiryFrom').fill('Guest <guest@example.com>');
+ await page.locator('#wbSend').click();
+ assert.equal(posts.length,postsBefore,'empty subject blocks submission');
+ await page.locator('#wbInquiryFrom').fill('');
+ await page.locator('#wbInquiryText').fill('');
+
  assert.equal(await page.locator('[data-preset="full_lifecycle"]').isVisible(),false,'generated inquiries start folded');
  const order=await page.evaluate(()=>{const f=document.querySelector('#wbInbound'),g=document.querySelector('.wb-generated');return !!(f.compareDocumentPosition(g)&Node.DOCUMENT_POSITION_FOLLOWING);});
  assert.equal(order,true,'write your own comes before generated inquiries');
@@ -73,6 +90,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.keyboard.press('Escape');await page.locator('#liveDrawer:not([open])').waitFor({state:'attached'});
  await page.locator('#wbSimulate').click();
  // Write your own: a real RFP with no brief.
+ await page.locator('#wbInquirySubject').fill('Acme group stay');
  await page.locator('#wbInquiryFrom').fill('Jamie Chen <jamie@acme.example>');
  await page.locator('#wbInquiryText').fill('Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays.');
  await page.locator('#wbSend').click();

@@ -111,8 +111,8 @@
     const scope = b ? `for nights from ${longDate(b.first_night)} to ${longDate(b.last_night)}, with at least ${b.min_days_before_arrival} days’ notice` : 'for its bookable nights';
     return `<form id="wbInbound"><h3>Write your own</h3>
         <p class="wb-sub">A real, unscripted RFP. You reply as the buyer from its mailbox.</p>
-        <label class="wb-field">From<input id="wbInquiryFrom" required maxlength="200" value="Guest <guest@example.com>"></label>
-        <label class="wb-field">Subject<input id="wbInquirySubject" required maxlength="200" value="Group inquiry"></label>
+        <label class="wb-field">From<input id="wbInquiryFrom" required maxlength="200" placeholder="e.g. Guest <guest@example.com>"></label>
+        <label class="wb-field">Subject<input id="wbInquirySubject" required maxlength="200" placeholder="e.g. Group inquiry"></label>
         <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="8" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>
         <p class="wb-sub">Groupy sells twin and king rooms, breakfast and the Thames Room (classroom layout) ${html(scope)}. Anything else is handed to hotel staff. Mention who pays and whether the budget includes taxes, or the agent will ask.</p>
         <button class="wb-primary" type="submit" id="wbSend">Send inquiry to Groupy</button></form>`;
