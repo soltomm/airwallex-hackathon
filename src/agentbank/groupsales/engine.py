@@ -1199,11 +1199,11 @@ class Engine:
             self._save()
             return res
 
-    @staticmethod
-    def _buyer_ask_differs(d: dict, terms: dict) -> list[dict]:
+    def _buyer_ask_differs(self, d: dict, terms: dict) -> list[dict]:
         """What the buyer's latest unanswered counter asked for, where this draft offers something else. Read
         from the thread, not from the seller, so the manager sees the real ask even when the seller offers
-        less (e.g. 60% attrition asked, above the hard maximum, and 20% drafted)."""
+        less (e.g. 60% attrition asked, above what anyone may approve, and 20% drafted). `rule` matches the
+        policy rule name on the approval, and `note` says when the ask is beyond what approval can grant."""
         ask = {}
         for m in reversed(d["thread"]):
             if m.get("from") == "seller":
@@ -1211,15 +1211,28 @@ class Engine:
             if m.get("from") == "buyer" and m.get("action") == "counter":
                 ask = m.get("payload") or {}
                 break
+        rt = terms["room_type"]
+        bands, dep_pol, att_pol = self.rms["rates"][rt], self.policy["deposit"], self.policy["attrition"]
+        pct = lambda x: f"{x}%"
+        checks = (
+            ("rate", f"{rt.capitalize()} rate", gbp,
+             lambda x: x < bands["absolute_min"] and f"below the {gbp(bands['absolute_min'])} absolute minimum"),
+            ("deposit_pct", "Deposit", pct,
+             lambda x: x < dep_pol["min_pct_with_approval"]
+             and f"below the {dep_pol['min_pct_with_approval']}% minimum, even with your approval"),
+            ("attrition_pct", "Free release (attrition)", pct,
+             lambda x: x > att_pol["max_pct_with_approval"]
+             and f"above the {att_pol['max_pct_with_approval']}% maximum, even with your approval"),
+        )
         out = []
-        for key, what, show in (("rate", "Rate", gbp), ("deposit_pct", "Deposit", lambda x: f"{x}%"),
-                                ("attrition_pct", "Free release (attrition)", lambda x: f"{x}%")):
+        for key, rule_name, show, beyond in checks:
             try:
                 asked = int(ask[key]) if ask.get(key) is not None else None
             except (TypeError, ValueError):
                 continue
             if asked is not None and asked != int(terms[key]):
-                out.append({"what": what, "asked": show(asked), "offered": show(int(terms[key]))})
+                out.append({"rule": rule_name, "asked": show(asked), "offered": show(int(terms[key])),
+                            "note": beyond(asked) or ""})
         return out
 
     def send_offer(self, deal_id: str, version: int, actor: str = "seller") -> dict:
