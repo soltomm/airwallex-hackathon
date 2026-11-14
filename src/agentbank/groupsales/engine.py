@@ -1943,7 +1943,7 @@ class Engine:
                                     f"payment schedule in v{v['n']}, {self._paid_share(paid_after, total)} of the "
                                     f"total is due by {self._long_date(op['due_by'])}; this payment brings what "
                                     f"you have paid to {gbp(paid_after)} of {gbp(total)}.\n\nYou can pay on "
-                                    f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Groupy"})
+                                    f"Airwallex's secure hosted page: {self.balance_url(d)}\n\nGroup Sales, Harbour House"})
         op["emailed_at"] = self.now()
 
     def check_balance_payment(self, deal_id: str, source: str = "seller") -> dict:
@@ -2407,7 +2407,7 @@ class Engine:
     def _run_onboarding(self, request_id: str, account: str | None):
         h = self.hotel
         try:
-            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@groupy.example",
+            ok = self.provider.onboard_account(h["name"], h.get("email") or "groups@harbourhouse.example",
                                                request_id, account, self._onboarding_step)
             final, error = ("ready", None) if ok else ("capabilities_pending",
                                                        "card payments not enabled yet; retry in a minute")
