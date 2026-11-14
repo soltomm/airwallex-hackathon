@@ -4,12 +4,15 @@ Internal pricing decisions and the revenue-manager demo are documented in
 [Revenue pricing review](docs/REVENUE_REVIEW.md).
 
 Post-stay PMS folios and incremental balance collection are documented in
-[Post-stay reconciliation](docs/POST_STAY_RECONCILIATION.md).
+[Post-stay reconciliation](docs/POST_STAY_RECONCILIATION.md). They are hidden unless `GS_FOLIO=1` is set.
 
 Third-party sourcing, partner capacity and bundled master proposals are documented
 in [Vendor workflows](docs/VENDOR_WORKFLOWS.md). They are inquiry-owned persisted
 workflows; provider delivery/confirmation is simulated and vendor payouts are
 tracked without transferring money. The feature is hidden unless `GS_VENDORS=1` is set.
+Payer origin and automated sandbox FX ([FX policy](docs/FX_POLICY.md)) are off unless `GS_FX=1` is set:
+no FX UI, no receipt scan, no conversions. Checkout is GBP; a buyer paying with a foreign card is converted by
+their card issuer.
 
 A hotel dashboard where a seller agent handles group inquiries from the first email to negotiation,
 booking, deposit, amendment and refund. It works against simulated hotel systems and Airwallex
@@ -26,7 +29,7 @@ src/agentbank/groupsales/
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
   seller.py     ClaudeSeller (tools over the engine) and RulesSeller (deterministic, same tools)
   trace.py      record of each seller run and its tool calls, for the dashboard's AI Agent tab
-  buyer.py      buyer moves from the private brief (presenter mode) and an optional Claude buyer agent
+  buyer.py      draft buyer replies from the private brief, sent by a person from the mailbox
   extract.py    rule-based RFP extraction
 scripts/group_sales.py   server: dashboard, API, agent runner, payment page, webhooks
 web/group_sales.html     hotel dashboard          web/group_pay.html   booking payment page
@@ -46,7 +49,7 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/test_group_sales.py -q
 |---|---|---|
 | `PAYMENTS` | `airwallex` if sandbox keys are set, else `simulated` | where deposits and refunds go |
 | `SELLER_MODE` | `claude` if an Anthropic key is set, else `rules` | seller agent; switchable in the dashboard |
-| `GS_SELLER_MODEL` / `GS_BUYER_MODEL` | `claude-opus-5-5` | models |
+| `GS_SELLER_MODEL` | `claude-opus-5-5` | seller model |
 | `PUBLIC_BASE_URL` | `http://localhost:8010` | return URL after hosted checkout |
 | `AWX_WEBHOOK_SECRET` | unset | accept signed Airwallex webhooks at `POST /webhooks/airwallex` |
 | `GS_PORT`, `GS_VAR` | `8010`, `var/groupsales` | port and state directory |
@@ -58,7 +61,7 @@ checkout redirected back to `http://localhost` in our tests. Webhooks need a pub
 tunnel. Without one, the backend checks outcomes by asking Airwallex directly: on return from checkout,
 through the seller's `check_payment`/`check_refund`, and when a hold expires.
 
-## Demo script (about 6 minutes)
+## Demo script (about 7 minutes)
 
 The dashboard is the hotel's. You act only as the hotel: the seller agent works on its own, waking on
 every new email, buyer reply, decision, payment and clock move, and stops at decisions that need the
@@ -78,8 +81,13 @@ action is marked in red). The **Activity** tab lists what each agent and person 
 **Conversation** tab shows the newest message first; older emails fold under "earlier messages".
 The sidebar's property tools (on a phone, expand **Property tools** first) hold **Room availability**
 (rooms, the Thames Room and breakfast by night), **Seller rules** (the rules the seller works within, see
-below), **Hotel payout account** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
+below), **Hotel payout account**, **Demo clock** and **↻ Reset scenario**. **＋ New inquiry** sends a generated or
 hand-written RFP and sets who answers for the buyer.
+
+**Demo clock** moves the one scenario clock that every inquiry shares. It shows the scenario time, a **+24 hours**
+step, and the dates that matter next across all confirmed bookings (Northstar's room reduction, each booking's
+instalments), each with **Jump**. A jump warns when it would lapse an open quote. The clock only moves forward;
+**Reset scenario** starts over.
 
 1. **↻ Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
@@ -95,15 +103,20 @@ hand-written RFP and sets who answers for the buyer.
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
    When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
    shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
-6. **Jump to 20 Jan (demo)**, on Northstar's card. Summit's quote lapses. In the mailbox, type *"Four
-   colleagues can no longer attend. Please reduce our block by two twin rooms for all three nights."*, then
-   **Accept change v3**: **£8,280**, with **£528** owed to the buyer.
+6. **Demo clock → Wed, 20 Jan 2027 → Jump**. It warns first that Summit's open quote lapses, and it does. In
+   the mailbox, type *"Four colleagues can no longer attend. Please reduce our block by two twin rooms for all
+   three nights."*, then **Accept change v3**: **£8,280**, with **£528** owed to the buyer.
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
 8. Final state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
    back for the refund, **£2,980.80 net to the hotel, £331.20 Group Desk fee**. The simulated twin holds
    back the refund's notification; delivering it late (`POST /api/notifications/release`, no dashboard
    button) changes nothing, and `scripts/e2e_demo.js` checks that.
+9. **Demo clock → Wed, 3 Mar 2027 → Jump**: the day the last instalment falls due, 7 days before
+   arrival. Both instalment dates have now passed, so the seller emails Maya one request for everything
+   due: **£4,968**. In the mailbox, **Open payment page ↗** and pay with the same test card. The card reads
+   **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Group Desk fee**; the Payments tab
+   marks every instalment paid.
 
 Summit can be accepted at any point (**Accept offer v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
@@ -204,6 +217,10 @@ due date is shown to hotel staff ("instalment overdue"); the seller doesn't chas
 For Northstar after the reduction (v3, £8,280, £3,312 paid): £828 on 8 Feb and £4,140 on 3 Mar. If the clock
 passes both dates first, one request covers both: **£4,968**, of which £4,471.20 goes to the hotel and £496.80
 is the Group Desk fee. The whole contract then nets £7,452 to the hotel and £828 to the platform.
+
+Step 9 of the demo shows the combined request. To see the two requests separately, jump to 8 Feb first in the
+**Demo clock**: the seller asks for £828, and after it's paid, jump to 3 Mar for the £4,140.
+`scripts/e2e_demo.js` runs it that way.
 
 ### When a payment provider refuses
 
@@ -409,14 +426,14 @@ tests). The generator only writes the inbound, and the seller never sees the bri
 
 An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
-(`payer`, `taxes`, `layout`), `payer_country`, `change_rooms`. Presets are named combinations:
+(`payer`, `taxes`, `layout`), `payer_country` (only with `GS_FX=1`), `change_rooms`. Presets are named combinations:
 
 | Preset | Path with the rules seller |
 |---|---|
 | `straight_booking` | quote, accept, deposit paid |
 | `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, paid |
 | `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
-| `payer_abroad` | payer in Germany paying from EUR, paid, fewer rooms, refund |
+| `payer_abroad` | payer in Germany (records payer origin), paid in GBP, fewer rooms, refund. Only offered with `GS_FX=1` |
 | `missing_details` | the seller asks who pays and about taxes, the buyer answers, paid |
 
 The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the

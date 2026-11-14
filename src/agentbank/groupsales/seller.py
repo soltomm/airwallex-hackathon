@@ -280,7 +280,9 @@ class RulesSeller:
                        and not a.get("used") and not a.get("handled") for a in self.e.s["approvals"].values())
         if st == "confirmed" and not x["unread_buyer_input"]:
             inst = self.e.installments(self.e.deal(x["deal_id"]))
-            return bool(inst and not inst["blocked"] and not inst["open"] and inst["due_now"] > 0)
+            if inst and not inst["blocked"] and inst["open"]:
+                return inst["open"]["status"] in ("submitting", "unknown")   # look the lost request up
+            return bool(inst and not inst["blocked"] and inst["due_now"] > 0)
         return bool(x["unread_buyer_input"]) and st not in ("declined", "lost", "handoff")
 
     # ---- one step on one deal -------------------------------------------------------------
@@ -426,6 +428,10 @@ class RulesSeller:
                 return f"{ref}: reduction prepared ({r['status']})"
             return f"{ref}: read"
         if st == "confirmed":
+            inst = e.installments(d)
+            if inst and inst["open"] and inst["open"]["status"] in ("submitting", "unknown"):
+                r = e.check_balance_payment(deal_id)
+                return f"{ref}: looked up the instalment request ({r['status']})"
             r = e.request_balance(deal_id)
             return f"{ref}: instalment requested {r['amount']}"
         if st == "amendment_approved":
@@ -958,6 +964,10 @@ How to work:
   or fact stops you (why_a_person) and what decision you need (what_a_person_should_do).
 - When the buyer accepts, open_checkout (the buyer pays on Airwallex's hosted page; you never see card
   data). Payments are verified by the back office.
+- Currency: every price, deposit, instalment and refund is in GBP, and the payment page charges GBP by
+  card. If a buyer asks to pay in another currency (USD, EUR, ...), answer in your next email: the hotel
+  invoices and charges in GBP, and their card issuer converts the amount at its own rate. Don't quote
+  converted amounts or exchange rates, and don't offer another payment currency or a bank transfer.
 - After the deposit, the rest of the contract is due on the instalment schedule. When a deal's next
   step says an instalment is due, call request_balance: the engine works out the amount from the signed
   contract and emails the buyer a payment link (you never choose or change the amount, and never waive
@@ -1005,12 +1015,22 @@ def meeting_room_facts(engine) -> str:
             "repeats them in short form for the buyer's answer form.")
 
 
-def system_prompt(engine) -> str:
+# Third-party vendor management is off the demo path unless the server has GS_VENDORS=1: without it the seller
+# isn't told about it and doesn't get its tools.
+VENDOR_TOOLS = {"vendor_workspace", "request_vendor_quote"}
+VENDOR_PROMPT = ("\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its "
+                 "simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot "
+                 "approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose "
+                 "vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff "
+                 "to resolve them.")
+
+
+def system_prompt(engine, vendors: bool = False) -> str:
     """SYSTEM with the hotel's current rule values (rules.seller_brief), so the prompt matches the engine."""
     return (SYSTEM.replace("{RULES}", rules.seller_brief(engine.scenario) + meeting_room_facts(engine))
             .replace("{REFUND_LIMIT}", gbp(engine.policy["seller_refund_limit"]))
             .replace("{WINDOW}", f"{window_text(engine.hotel)} only, arriving at least "
-                                 f"{engine.policy['min_days_before_arrival']} days ahead") + "\nThird-party services: only hotel staff enable this workflow. Inspect vendor_workspace for its simulated directory and readiness. You may issue sub-RFPs with request_vendor_quote, but cannot approve quotes, confirm vendors or pay them. Do not promise unavailable hotel stock or disclose vendor costs/markup. Pending vendor confirmations prevent a firm master proposal; ask hotel staff to resolve them.")
+                                 f"{engine.policy['min_days_before_arrival']} days ahead") + (VENDOR_PROMPT if vendors else ""))
 
 
 _I = {"type": "integer"}
@@ -1140,10 +1160,12 @@ TOOLS = [
 class ClaudeSeller:
     name = "claude"
 
-    def __init__(self, engine: Engine, client=None, model: str = SELLER_MODEL):
+    def __init__(self, engine: Engine, client=None, model: str = SELLER_MODEL, vendors: bool = False):
         self.e = engine
         self.model = model
         self._client = client
+        self.vendors = vendors
+        self.tools = TOOLS if vendors else [t for t in TOOLS if t["name"] not in VENDOR_TOOLS]
 
     @property
     def client(self):
@@ -1155,6 +1177,8 @@ class ClaudeSeller:
     def _do(self, name: str, a: dict):
         e = self.e
         did = a.get("deal_id")
+        if name in VENDOR_TOOLS and not self.vendors:
+            raise Refused(f"unknown tool {name}")
         if name == 'vendor_workspace':
             return e.vendor_workspace(did)
         if name == 'request_vendor_quote':
@@ -1252,9 +1276,9 @@ class ClaudeSeller:
         while calls < MAX_TOOL_CALLS:
             try:
                 resp = self.client.beta.messages.create(
-                    model=self.model, max_tokens=8000, system=[{"type": "text", "text": system_prompt(raw),
+                    model=self.model, max_tokens=8000, system=[{"type": "text", "text": system_prompt(raw, self.vendors),
                                                                "cache_control": {"type": "ephemeral"}}],
-                    tools=TOOLS, messages=messages, output_config={"effort": "medium"},
+                    tools=self.tools, messages=messages, output_config={"effort": "medium"},
                     betas=["server-side-fallback-2026-07-01"], fallbacks="default")
             except anthropic.APIStatusError as err:
                 raw.note(None, f"Seller model call failed ({err.status_code}: {str(err.message)[:200]}); falling back to rules for this run.")
@@ -1277,7 +1301,7 @@ class ClaudeSeller:
             for b in uses:
                 calls += 1
                 try:
-                    tool = next((t for t in TOOLS if t["name"] == b.name), None)
+                    tool = next((t for t in self.tools if t["name"] == b.name), None)
                     bad = (schema_errors(b.input, tool["input_schema"]) if tool else [f"unknown tool {b.name}"])
                     if bad:
                         # The tools aren't strict (see _tool): a call that doesn't match its schema goes back to the

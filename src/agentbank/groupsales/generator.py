@@ -37,6 +37,9 @@ PRESETS: dict[str, dict] = {
     "missing_details": {"missing": ["payer", "taxes"]},
 }
 
+# Presets that exercise payer origin / automated FX. The server only offers them with GS_FX=1.
+FX_PRESETS = {"payer_abroad"}
+
 # What each preset shows, for the dashboard's New inquiry drawer.
 PRESET_INFO: dict[str, dict] = {
     "straight_booking": {"title": "Straight booking",
@@ -49,8 +52,8 @@ PRESET_INFO: dict[str, dict] = {
                        "shows": "Ask for more attrition and see it traded for a bigger deposit (manager approval). "
                                 "After paying, release rooms: partial refund and the hotel's payout share reversed."},
     "payer_abroad": {"title": "Payer abroad",
-                     "shows": "A company in Germany paying from EUR. After booking, ask for a smaller block to see "
-                              "the refund."},
+                     "shows": "A company in Germany (payer origin recorded), paying the GBP deposit. After booking, "
+                              "ask for a smaller block to see the refund."},
     "missing_details": {"title": "Missing details",
                         "shows": "The RFP leaves out who pays and whether the budget includes taxes: the seller asks, "
                                  "and you answer."},

@@ -32,6 +32,8 @@ textarea { width: 100%; resize: vertical; }
 header { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10; flex-wrap: wrap; }
 header h1 { margin: 0; font-size: 16px; } header h1 span { color: var(--muted); font-weight: 500; }
 .pill { padding: 3px 10px; border-radius: 99px; background: var(--sunk); border: 1px solid var(--line); font-size: 12.5px; white-space: nowrap; }
+.clock-row { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); }
+.clock-row button { flex:none; }
 .pill.live { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .spacer { flex: 1; }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }
@@ -216,6 +218,7 @@ dl.outcomes { margin-top: 8px; }
   <details class="wb-bottom" open><summary class="wb-tools-label">Property tools</summary><small>YOUR PROPERTY</small><div class="wb-property">Groupy <span class="muted">⌄</span></div>
     <button id="wbAvailability">Room availability ↗</button><button id="wbRules">Seller rules ↗</button>
     <button id="wbAccount">Hotel payout account ↗</button>
+    <button id="wbClock">Demo clock ↗</button>
     <button id="reset">↻ Reset scenario</button>
     <div class="wb-confirm" id="resetAsk" role="group" aria-label="Confirm reset" hidden>Start the demo over? Deals, holds and the ledger reset; Airwallex records are kept.
       <div class="row"><button id="resetYes">Yes, reset</button><button id="resetNo">Cancel</button></div></div>
@@ -231,6 +234,7 @@ dl.outcomes { margin-top: 8px; }
 <dialog id="wbDrawer" class="wb-drawer" aria-labelledby="wbDrawerTitle"><div class="wb-drawer-head"><span id="wbDrawerLabel">NEW INQUIRY</span><button class="wb-close" aria-label="Close drawer" data-wb-close>×</button></div><div class="wb-drawer-body" id="wbDrawerBody"></div></dialog>
 <dialog id="acctDrawer" class="wb-drawer" aria-label="Hotel payout account"><div class="wb-drawer-head"><span>AIRWALLEX · HOTEL PAYOUT ACCOUNT</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="acctBody"></div></dialog>
 <dialog id="fxDirectory" class="wb-drawer" aria-labelledby="fxDirectoryTitle"><div class="wb-drawer-head"><span>SELLER RULES · CURRENCY POLICY</span><button class="wb-close" aria-label="Close currency directory" data-wb-close>×</button></div><div class="wb-drawer-body" id="fxDirectoryBody"></div></dialog>
+<dialog id="clockDrawer" class="wb-drawer" aria-label="Demo clock"><div class="wb-drawer-head"><span>DEMO · SCENARIO CLOCK</span><button class="wb-close" aria-label="Close" data-wb-close>×</button></div><div class="wb-drawer-body" id="clockBody"></div></dialog>
 <dialog id="liveDrawer" class="wb-drawer" aria-label="Groupy inquiry"><div class="wb-drawer-head"><span>GROUPY · LIVE WORKFLOW</span><button class="wb-close" aria-label="Close inquiry" data-wb-close>×</button></div><div id="liveDrawerBody"></div></dialog>
 <header hidden>
   <h1>Groupy <span>· Group sales</span></h1>
@@ -320,11 +324,13 @@ function renderHeader() {
   $('clock').textContent = new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'});
   const busy = S.runner.busy;
   $('agent').className = 'pill' + (busy ? ' live' : '');
-  $('agent').innerHTML = busy ? `<span class="dot pulse"></span>${busy.startsWith('seller') ? 'Seller agent is working…' : 'Buyer agent is working…'}`
+  $('agent').innerHTML = busy ? `<span class="dot pulse"></span>Seller agent is working…`
     : `<span class="dot" style="color:var(--ok)"></span>Seller agent (${S.runner.settings.seller_mode === 'claude' ? 'Claude' : 'rules'}) is watching the inbox`;
   $('pay').textContent = S.provider === 'airwallex' ? 'Payments: Airwallex sandbox' : 'Payments: simulated';
 }
 function render() {
+  $('wbClock').textContent = `Demo clock · ${day(S.clock, {year: 'numeric'})} ↗`;
+  if ($('clockDrawer').open) renderClock();
   const deals = [...S.deals].sort((a, b) => (a.reply_by || '9') < (b.reply_by || '9') ? -1 : 1);
   if (!deals.find(d => d.id === sel)) sel = deals[0] && deals[0].id;
   $('queue').innerHTML = deals.map(d => {
@@ -341,6 +347,19 @@ function render() {
   $('rulesSub').textContent = changed ? 'Changed by hotel staff · see what the seller may agree' : 'What the seller may agree, and how to change it';
 }
 
+// What the booking card says about the contract's instalments, and the demo's jump to the last due date.
+function instalmentHtml(d) {
+  const i = d.installments;
+  if (!i || i.blocked) return '';
+  const o = i.open;
+  if (o && o.status === 'mismatch') return `<p><b>The last instalment payment didn't match its request.</b> Check it in Airwallex before anything more is collected.</p>`;
+  if (i.overdue) return `<p><b>The ${gbp(o.amount)} instalment due ${day(o.due_by)} is unpaid.</b> The seller doesn't chase with new requests: contact the buyer.</p>`;
+  if (o && o.status !== 'created') return `<p class="small">The seller is confirming a ${gbp(o.amount)} instalment request with Airwallex before it emails the buyer.</p>`;
+  if (o) return `<p class="small">The seller asked for ${gbp(o.amount)} (due ${day(o.due_by)}) by email with a payment link. Waiting for the buyer to pay on Airwallex's hosted page.</p>`;
+  if (i.due_now || !i.next || !i.final_due || i.final_due <= S.clock.slice(0, 10)) return '';
+  return `<p class="small">The rest of the contract is due by ${day(i.final_due)}. The seller asks for it on the due date.</p>`;
+}
+
 // ---- the next step, in one place. The dashboard is the hotel's: the buyer answers by email ------
 const SELLER_TURN = ['new', 'intake', 'approved_to_send', 'accepted', 'refund_due', 'amendment_approved', 'revise', 'refund_awaiting_approval'];
 const contactOf = d => (d.sender || '').split('<')[0].trim() || d.company;
@@ -349,7 +368,7 @@ function nextOf(d) {
   if (d.pricing_review?.status==='pending') return {cls:'you',short:d.pricing_review.stale?'Refresh revenue review':'Awaiting revenue review',who:'Pricing decision · Revenue team',pricing:true};
   if (d.seller_paused) return {cls: 'bad', short: 'Seller paused', who: 'Needs you · seller paused', paused: d.seller_paused};
   const f=d.folio_summary;
-  if(d.status==='confirmed'&&f?.checkout_reached&&f.status!=='finalized')return {cls:'you',short:({not_imported:'Import final PMS folio',review_required:'Review final folio',balance_due:'Collect final balance',credit_due:'Reconcile folio credit',guest_balances_open:'Reconcile guest balances',settled:'Issue final folio'})[f.status]||'Reconcile final folio',who:'Post-stay reconciliation',folio:f};
+  if(window.Folios&&d.status==='confirmed'&&f?.checkout_reached&&f.status!=='finalized')return {cls:'you',short:({not_imported:'Import final PMS folio',review_required:'Review final folio',balance_due:'Collect final balance',credit_due:'Reconcile folio credit',guest_balances_open:'Reconcile guest balances',settled:'Issue final folio'})[f.status]||'Reconcile final folio',who:'Post-stay reconciliation',folio:f};
   if (ap) return {cls: 'you', short: 'Manager to approve', who: 'Your decision · Hotel manager', ap};
   if (['handoff', 'refund_failed', 'payment_received_booking_exception'].includes(st))
     return {cls: 'bad', short: 'With hotel staff', who: 'Handed to a person · not an approval', title: esc(cap(d.handoff ? d.handoff.reason : 'Needs staff attention')),
@@ -365,7 +384,13 @@ function nextOf(d) {
   // apply): show that hand-off until the buyer writes again.
   if (st === 'confirmed' && d.handoff && !d.thread.some(m => m.from === 'buyer' && m.at > d.handoff.at))
     return {cls: 'bad', short: 'With hotel staff', who: 'Booked · handed to a person · not an approval', confirmed: true, handoff: d.handoff};
-  if (st === 'confirmed') return {cls: 'done', short: 'Booked', who: 'Booking confirmed', confirmed: true};
+  if (st === 'confirmed') {
+    const i = d.installments, open = i && !i.blocked && i.open;
+    if (open && (open.status === 'mismatch' || i.overdue))
+      return {cls: 'bad', short: open.status === 'mismatch' ? 'Instalment mismatch' : 'Instalment overdue', who: 'Booking confirmed · needs hotel staff', confirmed: true};
+    if (open) return {cls: 'buyer', short: 'Instalment requested', who: 'Booking confirmed · waiting for the buyer to pay', confirmed: true};
+    return {cls: 'done', short: d.finance_view && d.finance_view.still_due === 0 ? 'Paid in full' : 'Booked', who: 'Booking confirmed', confirmed: true};
+  }
   if (['needs_info', 'offer_sent', 'amendment_sent', 'expired'].includes(st)) return {cls: 'buyer', short: 'Buyer to reply', who: 'Waiting for the buyer', mail: true,
     title: st === 'needs_info' ? `The seller asked ${co} some questions` : st === 'expired' ? 'The offer lapsed'
       : `${v && v.kind === 'amendment' ? 'Change' : 'Offer'} v${v && v.n} is with ${co}`,
@@ -416,10 +441,13 @@ function nextCard(d) {
     h += S.runner.busy ? `<h3><span class="dot pulse"></span>Working on it…</h3>` : `<h3>The seller agent is picking this up</h3>`;
   } else if (n.confirmed) {
     const rooms = d.booking && d.booking.rooms ? Math.max(...Object.values(d.booking.rooms)) : null;
-    h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${gbp(d.finance_view.net_received)} paid</h3>`;
-    h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
+    const full = d.finance_view.still_due === 0;
+    h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${full ? `paid in full (${gbp(d.finance_view.net_received)})` : `${gbp(d.finance_view.net_received)} paid`}</h3>`;
+    if (window.Folios) h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
     if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
-    if (d.company.startsWith('Northstar') && S.clock < '2027-01-20') h += `<p class="small">Northstar's room reduction comes on 20 Jan.</p><div class="row"><button data-act="jump">Jump to 20 Jan (demo)</button></div>`;
+    const jumpReduction = d.company.startsWith('Northstar') && S.clock < '2027-01-20';
+    if (jumpReduction) h += `<p class="small">Northstar's room reduction comes on 20 Jan (Demo clock in the property tools).</p>`;
+    else h += instalmentHtml(d);
     h += mailLink(d);
   } else {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
@@ -550,7 +578,8 @@ function payoutCard(d) {
 }
 const TABS = [['conv', 'Conversation'], ['agent', 'AI Agent'], ['act', 'Activity'], ['req', 'Request'], ['rec', 'Records checked'], ['hist', 'Versions'], ['money', 'Payments'], ['ops', 'Hand-off'], ['folio','Final folio']];
 function tabBody(d) {
-  if(tab==='folio')return `<section id="folioWorkspace" data-folio-deal="${esc(d.id)}"><p>Loading final folio…</p></section>`;
+  if(tab==='folio'&&!window.Folios)tab='conv';   // a remembered Final folio tab while GS_FOLIO is off
+  if(tab==='folio'&&window.Folios)return `<section id="folioWorkspace" data-folio-deal="${esc(d.id)}"><p>Loading final folio…</p></section>`;
   if (tab === 'conv') {
     // Keep every message readable in full, newest first.
     const msg = m => `<div class="msg ${m.from}"><div class="h">${m.from === 'buyer' ? esc(d.company) : 'Groupy'} · ${when(m.at)}${m.action && !['reply', 'message'].includes(m.action) ? ' · ' + m.action.replace('_', ' ') : ''}</div><div class="b">${m.subject ? `<b>${esc(m.subject)}</b>\n` : ''}${esc(m.text || '(no text)')}</div></div>`;
@@ -579,7 +608,10 @@ function tabBody(d) {
   if (tab === 'money') {
     const ops = S.operations.filter(o => o.deal_id === d.id), led = S.ledger.filter(x => x.deal_id === d.id), f = d.finance_view;
     if (!ops.length) return '<p class="muted">No payments yet.</p>';
-    return `${f.schedule ? `<table class="t"><tr><th>Schedule</th><th>Due</th><th class="r">Amount</th></tr>${f.schedule.map(x => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {year: 'numeric'}) : '–'}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">The seller asks for each instalment on its due date; the amounts come from the contract.</p>` : ''}
+    const io = d.installments && d.installments.open, today = S.clock.slice(0, 10);
+    const payState = (x, k) => !x.amount ? 'Paid' : k && io && (io.milestones || []).includes(x.label) ? 'Requested'
+      : x.due && x.due <= today ? 'Due' : 'Upcoming';
+    return `${f.schedule ? `<table class="t"><tr><th>Schedule</th><th>Due</th><th>Status</th><th class="r">Still to pay</th></tr>${f.schedule.map((x, k) => `<tr><td>${esc(x.label)}</td><td>${x.due ? day(x.due, {year: 'numeric'}) : '–'}</td><td>${payState(x, k)}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('')}</table><p class="small muted">The seller asks for each instalment on its due date; the amounts come from the contract.</p>` : ''}
       <div class="label" style="margin-top:12px">Airwallex</div><table class="t">${ops.map(o => `<tr><td>${o.kind} ${gbp(o.amount)}</td><td><code class="small">${esc((o.kind === 'deposit' || o.kind === 'installment') ? o.payment_intent_id : o.provider_id || '–')}</code></td><td>${esc(o.provider_status || o.status)}</td></tr>`).join('')}</table>
       <div class="label" style="margin-top:12px">Ledger</div><table class="t">${led.map(x => `<tr><td>${when(x.at)}</td><td>${esc(x.type.replaceAll('_', ' '))}</td><td class="r">${gbp(x.amount)}</td></tr>`).join('') || '<tr><td class="muted">empty</td></tr>'}</table>
       ${d.pay_url ? `<p><a href="${d.pay_url}" target="_blank" class="small">Booking payment page ↗</a></p>` : ''}`;
@@ -598,7 +630,7 @@ function renderDeal(d) {
   $('deal').innerHTML = `<div class="card"><div class="title"><h2>${esc(d.company)}</h2><span class="muted">${d.ref}</span>${d.pricing_review?.status==='pending'?'<span class="chip warn">Revenue review</span>':chip(d.status)}</div>
       <div class="small muted" style="margin-top:2px">${esc(sub || d.subject)}</div>${stepsOf(d)}${buyerMailboxCard(d)}</div>
     ${nextCard(d)}${negotiationCard(d)}${trailCard(d)}${offerCard(d)}
-    <div class="card"><div class="tabs">${TABS.filter(([k])=>k!=='folio'||d.booking?.status==='confirmed').map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
+    <div class="card"><div class="tabs">${TABS.filter(([k])=>k!=='folio'||(window.Folios&&d.booking?.status==='confirmed')).map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>${tabBody(d)}</div>`;
   wire(d);
   if (window.Folios) window.Folios.mount(d);
   if (window.FX) window.FX.mount(d);
@@ -617,7 +649,6 @@ function wire(d) {
       else if (a === 'chkRef') { await api(`/api/deals/${d.id}/check_refund`, {}); toast('Checked with Airwallex'); }
       else if (a === 'retry') { await api(`/api/deals/${d.id}/retry`, {}); toast('The seller is retrying'); }
       else if (a === 'retryPayout') { const r = await api(`/api/deals/${d.id}/retry_payout`, {}); toast(r.status === 'paid' ? 'Hotel paid' : 'Payout still pending'); }
-      else if (a === 'jump') await api('/api/clock', {to: '2027-01-20T09:00:00+00:00'});
       else if (a === 'handBack') { await api(`/api/deals/${d.id}/hand_back`, {instruction: ($('instr') || {}).value || ''}); toast('Handed back to the seller'); }
       else if (a === 'close') { await api(`/api/deals/${d.id}/close`, {}); toast('Inquiry closed'); }
     } catch (e) {} finally { b.disabled = false; lastJSON = ''; load(); }
@@ -846,7 +877,7 @@ function renderRules() {
   const changes = S ? S.activity.filter(a => a.kind === 'rules_changed').slice(-5).reverse() : [];
   $('rules').innerHTML = `<button class="btn-ghost back" id="rulesBack">← Back to deals</button><h2>Seller rules</h2>
     <p class="lede">The seller agent works inside these rules. They are enforced in code, not just in the prompt: an offer outside them is refused, and anything between the seller's limit and the hard limit waits for the hotel manager. Nothing in a buyer's email can change them.</p>
-    <div class="card"><div class="label">Automated FX policy</div><p class="small muted">Stable foreign currency: hold. Unstable foreign currency: convert to GBP after verified sandbox receipt. Current GBP card deposits are already in hotel currency.</p><button id="fxDirectoryOpen">Countries & currency risk ↗</button></div>
+    ${window.FX ? `<div class="card"><div class="label">Automated FX policy</div><p class="small muted">Stable foreign currency: hold. Unstable foreign currency: convert to GBP after verified sandbox receipt. Current GBP card deposits are already in hotel currency.</p><button id="fxDirectoryOpen">Countries & currency risk ↗</button></div>` : ''}
     <div class="card"><div class="label">Who decides</div><div style="overflow-x:auto"><table class="t"><tr><th></th><th>Seller alone</th><th>Hotel manager approves</th><th>Never</th></tr>
       ${decisions().map(r => `<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="muted">${esc(r[3])}</td></tr>`).join('')}</table></div></div>
     <div class="card"><div class="label"><span>Change the rules</span><span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">${R.changed ? R.changed + ' changed from the defaults' : 'All at their defaults'}</span></div>
@@ -929,6 +960,52 @@ async function renderAccount(check) {
   if (a.running && $('acctDrawer').open) acctTimer = setTimeout(() => renderAccount(), 2000);
 }
 $('wbAccount').onclick = () => { $('acctDrawer').showModal(); renderAccount(true); };
+
+// ---- demo clock: one scenario clock for every inquiry, so its controls live here, not on a deal's card --------
+// The dates that matter next, across all inquiries, from data the dashboard already has.
+function clockEvents() {
+  const today = S.clock.slice(0, 10), out = [];
+  for (const d of S.deals) {
+    if (d.booking?.status !== 'confirmed') continue;
+    if (d.company.startsWith('Northstar') && S.clock < '2027-01-20')   // the scripted buyer's change date (scenario.json)
+      out.push({at: '2027-01-20', who: d.company, what: 'the buyer asks to release rooms'});
+    if (d.installments) for (const m of (d.finance_view.schedule || []).slice(1))
+      if (m.due && m.due > today && m.amount > 0) out.push({at: m.due, who: d.company, what: `instalment of ${gbp(m.amount)} due (${m.label})`});
+  }
+  const byDay = {};
+  for (const x of out.sort((a, b) => a.at < b.at ? -1 : 1)) (byDay[x.at] = byDay[x.at] || []).push(x);
+  return Object.entries(byDay);
+}
+// Open quotes whose 24-hour hold would lapse if the clock moved to `to`.
+function lapses(to) {
+  return S.deals.filter(d => !d.booking && d.hold?.status === 'active' && d.hold.expires_at <= to).map(d => d.company);
+}
+function clockTarget(to, label, extra) {
+  const gone = lapses(to);
+  return `<div class="clock-row"><div><b>${label}</b>${extra || ''}${gone.length ? `<div class="small" style="color:var(--bad)">Lapses ${gone.length === 1 ? 'the open quote' : gone.length + ' open quotes'} for ${esc(gone.join(', '))}</div>` : ''}</div>
+    <button data-clock-to="${esc(to)}">Jump</button></div>`;
+}
+let clockLast = '';
+function renderClock() {
+  const plus = new Date(new Date(S.clock).getTime() + 864e5).toISOString().replace('.000Z', '+00:00');
+  const events = clockEvents();
+  const html = `<h2 style="margin:0 0 6px">${new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'})}</h2>
+    <p class="wb-lede" style="margin-bottom:16px">One scenario clock for every inquiry. Moving it moves them all: open quotes lapse after 24 hours, and the seller acts on anything that falls due. It only moves forward; <b>Reset scenario</b> starts over.</p>
+    ${clockTarget(plus, '+24 hours', '<div class="small muted">Open quotes lapse after 24 hours</div>')}
+    <div class="label" style="margin:16px 0 6px">Coming up</div>
+    ${events.length ? events.map(([at, xs]) => clockTarget(at + 'T09:00:00+00:00', day(at, {weekday: 'short', year: 'numeric'}),
+        xs.map(x => `<div class="small">${esc(x.who)}: ${esc(x.what)}</div>`).join(''))).join('')
+      : '<p class="small muted">Nothing scheduled yet. Dates appear here once a booking is confirmed: room changes and instalments.</p>'}`;
+  if (html === clockLast) return;
+  clockLast = html;
+  $('clockBody').innerHTML = html;
+  document.querySelectorAll('#clockBody [data-clock-to]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await api('/api/clock', {to: b.dataset.clockTo}); toast('Clock moved to ' + day(b.dataset.clockTo, {year: 'numeric'})); $('clockDrawer').close(); }
+    catch (e) {} finally { lastJSON = ''; load(); }
+  });
+}
+$('wbClock').onclick = () => { clockLast = ''; $('clockDrawer').showModal(); renderClock(); };
 $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>

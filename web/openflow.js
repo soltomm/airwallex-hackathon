@@ -37,10 +37,10 @@
     const s=actual(); $('wbConnection').textContent=s ? `Groupy connected · ${s.provider==='airwallex'?'Airwallex sandbox':'Simulated Groupy payments'} · ${s.runner.busy || 'Seller watching inbox'}` : 'Connecting to Groupy…';
     if (view==='payments') renderPayments(all); else renderPipeline(all);
   }
-  const source = d => d.generated ? `Generated · ${presetTitle(d.generated)} · seed ${d.generated.seed}` : 'Groupy · Connected';
+  const source = d => d.generated ? `Generated · ${presetTitle(d.generated)}` : 'Groupy · Connected';
   function table(all) {
     const filtered=all.filter(d=>(filter==='all'||filter==='new'&&NEW.includes(d.status)||filter===d.status) && `${d.company} ${d.contact||''} ${d.payer?.origin?.country||''} ${d.payer?.origin?.local_currency||''}`.toLowerCase().includes(search.toLowerCase()));
-    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th><th>Payer origin</th><th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(source(d))}</span></button></td><td>${window.FX?.summary(d.payer)||'<span class="muted">Not recorded</span>'}</td><td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="6" class="wb-empty">No inquiries match. Try another filter or send a new inquiry.</td></tr>'}</tbody></table></div>`;
+    return `<div class="wb-table-scroll"><table class="wb-table"><thead><tr><th>Group / organizer</th>${window.FX?'<th>Payer origin</th>':''}<th>Stay dates</th><th>Rooms</th><th>Proposal value</th><th>Status</th></tr></thead><tbody>${filtered.map(d=>`<tr data-open="${html(d.id)}"><td><button class="wb-inquiry" data-open="${html(d.id)}">${html(d.company)}<span class="wb-source">${html(source(d))}</span></button></td>${window.FX?`<td>${window.FX.summary(d.payer)}</td>`:''}<td>${date(d.arrival)} – ${date(d.departure)}</td><td>${d.rooms || '—'}</td><td>${d.total ? money(d.total) : 'Not quoted'}</td><td><span class="wb-status ${d.status}">${html(d.label)}</span><span class="wb-next">${html(d.next)}</span></td></tr>`).join('') || '<tr><td colspan="${window.FX?6:5}" class="wb-empty">No inquiries match. Try another filter or send a new inquiry.</td></tr>'}</tbody></table></div>`;
   }
   function renderPipeline(all) {
     const moves=all.filter(d=>d.review).slice(0,6);
@@ -76,76 +76,41 @@
     $('wbDrawerTitle').focus();
   }
 
-  // ---- New inquiry: generated (RFP + private buyer brief) or written by hand ----------------------------
-  const COUNTRIES = [['', 'United Kingdom (GBP)'], ['DE', 'Germany (EUR)'], ['FR', 'France (EUR)'], ['NL', 'Netherlands (EUR)'],
-    ['US', 'United States (USD)'], ['AU', 'Australia (AUD)'], ['SG', 'Singapore (SGD)'], ['JP', 'Japan (JPY)']];
-  const TRAIT_LABEL = {fits:'Rooms free on the dates', short_rooms:'Fewer rooms free than asked', too_soon:'Too soon to sell to a group',
-    comfortable:'Comfortable budget', tight:'Tight: at the seller’s floor', below_floor:'Below the seller’s floor'};
-  const opts = (name, values, pick) => `<select id="wbT_${name}">${values.map(([v, l]) => `<option value="${html(v)}" ${String(v)===String(pick ?? '')?'selected':''}>${html(l)}</option>`).join('')}</select>`;
-  function traitForm(c) {
-    const d = c.defaults, t = c.traits, pairs = k => t[k].map(v => [v, TRAIT_LABEL[v] || v]);
-    return `<details class="wb-traits"><summary>Or choose the traits yourself</summary>
-      <p class="wb-sub">Dates, rooms and budget are worked out from the live calendar and the hotel’s own rate bands.</p>
-      <div class="wb-terms">
-        <label class="wb-field">Dates${opts('availability', pairs('availability'), d.availability)}</label>
-        <label class="wb-field">Price pressure${opts('price', pairs('price'), d.price)}</label>
-        <label class="wb-field">Attrition the buyer wants${opts('attrition', [['', 'Hotel standard'], ['20', '20% (traded for a bigger deposit)']], d.attrition)}</label>
-        <label class="wb-field">Room type${opts('room_type', [['', 'Either'], ['twin', 'Twin'], ['king', 'King']], d.room_type)}</label>
-        <label class="wb-field">Payer${opts('payer_country', COUNTRIES, d.payer_country)}</label>
-        <label class="wb-field">Later change${opts('change_rooms', [['0', 'None'], ['1', '1 room fewer a night, then a refund'], ['2', '2 rooms fewer a night, then a refund']], d.change_rooms)}</label>
-        <label class="wb-field">Meeting room${opts('meeting', [['', 'Not needed'], ['1', 'Thames Room, one day']], d.meeting ? '1' : '')}</label>
-      </div>
-      <fieldset class="wb-missing"><legend>Leave out of the RFP (the seller has to ask)</legend>
-        ${t.missing.map(m => `<label><input type="checkbox" name="wbMissing" value="${html(m)}"> ${html({payer:'Who pays', taxes:'Whether the budget includes taxes', layout:'Meeting layout'}[m] || m)}</label>`).join('')}</fieldset>
-      <button class="wb-primary" type="button" id="wbCustom">Send this inquiry to Groupy</button></details>`;
-  }
-  function readTraits() {
-    const v = k => $('wbT_' + k).value, out = {availability: v('availability'), price: v('price'),
-      change_rooms: Number(v('change_rooms')), meeting: v('meeting') === '1',
-      missing: [...document.querySelectorAll('[name=wbMissing]:checked')].map(x => x.value)};
-    if (v('attrition')) out.attrition = Number(v('attrition'));
-    if (v('room_type')) out.room_type = v('room_type');
-    if (v('payer_country')) out.payer_country = v('payer_country');
-    return out;
-  }
+  // ---- New inquiry: written by hand (the main path), or a generated test inquiry ----
   async function simulator() {
     showDrawer('Let the inquiry come to you.', '<p class="wb-lede">Loading inquiry types…</p>');
     try { catalog = await window.Harbour.presets(); }
-    catch (err) { $('wbDrawerBody').innerHTML='<h2 id="wbDrawerTitle" tabindex="-1">Let the inquiry come to you.</h2><p class="wb-lede">Couldn’t load the inquiry types. Write your own below instead.</p>' + thirdPartyForm() + ownForm(); wireOwn(); return; }
+    catch (err) { $('wbDrawerBody').innerHTML='<h2 id="wbDrawerTitle" tabindex="-1">Let the inquiry come to you.</h2><p class="wb-lede">Write a group inquiry the way a buyer would. (Generated test inquiries couldn’t be loaded.)</p>' + thirdPartyForm() + ownForm(); wireOwn(); return; }
     const S = actual(), b = S?.bookable;
     const cards = Object.keys(catalog.presets).map(k => { const i = catalog.info[k] || {title: k, shows: ''};
       return `<button class="wb-channel" data-preset="${html(k)}"><b>${html(i.title)}</b><p>${html(i.shows)}</p><span class="wb-channel-action">Send this inquiry →</span></button>`; }).join('');
-    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Send Groupy a generated group inquiry. From the email on, the seller agent and the backend’s rules run the hotel side; you reply as the buyer from its mailbox${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
+    showDrawer('Let the inquiry come to you.', `<p class="wb-lede">Write a group inquiry the way a buyer would. The seller agent reads it like any other email, and the backend’s rules decide what it can offer${S?.provider==='airwallex' ? ', with real Airwallex sandbox payments' : ''}.</p>
       ${thirdPartyForm()}
-      <label class="wb-field wb-seed">Seed (optional)<input id="wbSeed" inputmode="numeric" pattern="[0-9]*" placeholder="Leave blank for a new inquiry each time"></label>
-      <p class="wb-sub">The same seed sends the same inquiry against the same calendar. After a reset, reuse a seed to replay a run.</p>
-      <div class="wb-channel-grid">${cards}</div>
-      ${traitForm(catalog)}
-      ${ownForm(b)}`, 'NEW INQUIRY');
+      ${ownForm(b)}
+      <details class="wb-traits wb-generated"><summary>Generated test inquiries</summary>
+        <p class="wb-sub">A new inquiry each time you click. You type the buyer’s replies in its mailbox; nothing is pre-written. The seller only sees the email, never which test it is.</p>
+        <div class="wb-channel-grid">${cards}</div>
+      </details>`, 'NEW INQUIRY');
     wireOwn();
-    $('wbCustom').onclick = () => generate({traits: readTraits()});
   }
   async function generate(body) {
     body.third_party = thirdPartyOptions();
-    const seed = $('wbSeed')?.value.trim();
-    if (seed && !/^\d+$/.test(seed)) { notify('The seed is a whole number, or leave it blank.'); return; }
-    if (seed) body.seed = Number(seed);
-    document.querySelectorAll('[data-preset],#wbCustom').forEach(x => x.disabled = true);
+    document.querySelectorAll('[data-preset]').forEach(x => x.disabled = true);
     try {
       const r = await window.Harbour.generate(body);
       $('wbDrawer').close(); refresh(); window.Harbour.open(r.deal_id);
-      notify(`Sent: ${presetTitle(r)} · seed ${r.seed}. Reuse the seed after a reset to replay it.`);
+      notify(`Sent: ${presetTitle(r)}.`);
     } catch (err) {
       notify(err.message);
-      document.querySelectorAll('[data-preset],#wbCustom').forEach(x => x.disabled = false);
+      document.querySelectorAll('[data-preset]').forEach(x => x.disabled = false);
     }
   }
   function thirdPartyForm(){if(!window.Vendors)return '';return `<fieldset class="card"><legend>Third-party simulation</legend><label><input id="wbThirdParty" type="checkbox"> Needs third-party services</label><label class="wb-field">Service<select id="wbThirdPartyCategory">${['av','catering','meeting','rooms','technician','amenities'].map(c=>`<option value="${c}">${c}</option>`).join('')}</select></label><label><input id="wbThirdPartyQuote" type="checkbox" checked> Include a hypothetical quote response</label><p class="small muted">Creates a simulated preferred-provider request once stay dates are recorded. Review the quote, approve it and simulate confirmation in the inquiry’s third-party workspace. No provider is contacted.</p></fieldset>`;}
   function thirdPartyOptions(){return $('wbThirdParty')?.checked?{category:$('wbThirdPartyCategory').value,quote_response:$('wbThirdPartyQuote').checked}:null;}
   function ownForm(b) {
     const scope = b ? `for nights from ${longDate(b.first_night)} to ${longDate(b.last_night)}, with at least ${b.min_days_before_arrival} days’ notice` : 'for its bookable nights';
-    return `<form id="wbInbound"><h3>Or write your own</h3>
-        <p class="wb-sub">A real, unscripted RFP. Reply as the buyer from its mailbox.</p>
+    return `<form id="wbInbound"><h3>Write your own</h3>
+        <p class="wb-sub">A real, unscripted RFP. You reply as the buyer from its mailbox.</p>
         <label class="wb-field">From<input id="wbInquiryFrom" required maxlength="200" value="Guest <guest@example.com>"></label>
         <label class="wb-field">Subject<input id="wbInquirySubject" required maxlength="200" value="Group inquiry"></label>
         <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="8" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>

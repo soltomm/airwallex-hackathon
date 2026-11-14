@@ -138,6 +138,7 @@ def test_verified_airwallex_receipt_is_matched_not_credited_again(eng):
 
 
 def test_hotel_folio_api_and_document_are_access_controlled(server,monkeypatch):
+    monkeypatch.setattr(server,'FOLIO',True)
     monkeypatch.setattr(server,'ACCESS','folio-access')
     did=next(iter(server.engine.s['deals']))
     for path in (f'/api/deals/{did}/folio','/assets/folio.js'):
@@ -204,6 +205,7 @@ def test_final_import_requires_checkout_and_demo_advance_is_explicit(eng):
 
 
 def test_buyer_checkout_and_printable_document_escape_pms_content(server,monkeypatch):
+    monkeypatch.setattr(server,'FOLIO',True)
     e=server.engine;d=booking(e);p=payload(e,d)
     p['lines'][1]['description']='Incidental </script><script>window.injected=1</script>'
     e.folio_action(d['id'],'import',p);approve(e,d);e.folio_action(d['id'],'checkout',{})
@@ -229,3 +231,21 @@ def test_post_stay_collection_cannot_bypass_the_accepted_contract_price(eng):
     assert eng.folio_view(d['id'])['balance_due']==250000
     with pytest.raises(Refused,match='below the accepted contract'):eng.folio_action(d['id'],'checkout',{})
     assert not operations(eng,d)
+
+
+def test_final_folio_is_hidden_unless_enabled(server):
+    """GS_FOLIO is off by default: no folio script on the dashboard, no folio API, no buyer folio pages."""
+    assert server.FOLIO is False
+    code,_,page=_req(server,'/');assert code==200
+    assert '/assets/folio.js' not in page
+    did=next(iter(server.engine.s['deals']))
+    for path in ['/assets/folio.js',f'/api/deals/{did}/folio',f'/api/deals/{did}/folio/report','/folio/GS-1001/pay?t=x']:
+        assert _req(server,path)[0]==404,path
+    assert _req(server,f'/api/deals/{did}/folio',{'command':'demo_checkout'})[0]==404
+
+
+def test_final_folio_shows_when_enabled(server,monkeypatch):
+    monkeypatch.setattr(server,'FOLIO',True)
+    page=_req(server,'/')[2]
+    assert '/assets/folio.js' in page
+    assert _req(server,'/assets/folio.js')[0]==200

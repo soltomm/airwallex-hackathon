@@ -166,6 +166,10 @@ function actions() {
     h += `<div class="box warn"><div class="who">Payment</div><h3>Pay the ${gbp(v && v.pricing.deposit)} deposit</h3><p>On Airwallex's hosted page. Sandbox test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
       <div class="row"><a href="${esc(V.pay_url)}" target="_blank"><button class="btn-p">Open payment page ↗</button></a></div></div>`;
   }
+  if (V.balance_pay_url) {
+    h += `<div class="box warn"><div class="who">Payment</div><h3>Pay your next instalment</h3><p>The amount and due date are in ${esc(V.hotel)}'s email above. You pay on Airwallex's hosted page. Sandbox test card <b>4035 5010 0000 0008</b>, any future expiry, any CVC.</p>
+      <div class="row"><a href="${esc(V.balance_pay_url)}" target="_blank"><button class="btn-p">Open payment page ↗</button></a></div></div>`;
+  }
   if (V.booking && V.booking.status === 'confirmed') {
     const f = V.finance_view, rooms = V.booking.rooms ? Math.max(...Object.values(V.booking.rooms)) : null;
     h += `<div class="box ok"><div class="who">Booked</div><h3>${rooms ? `${rooms} ${esc(V.booking.room_type)} rooms a night` : 'Confirmed'} · ${gbp(f.net_received)} paid</h3>

@@ -198,7 +198,7 @@ def test_quote_expiry_blocks_customer_acceptance_before_payment(eng):
 
 
 def test_seller_tools_refuse_incomplete_requests_without_type_errors(eng):
-    seller=object.__new__(ClaudeSeller);seller.e=eng
+    seller=object.__new__(ClaudeSeller);seller.e=eng;seller.vendors=True
     with pytest.raises(Refused,match='Supply'):seller._do('request_vendor_quote',{'deal_id':next(iter(eng.s['deals']))})
 
 
@@ -345,3 +345,17 @@ def test_vendor_management_shows_when_enabled(server,monkeypatch):
     page=_req(server,'/')[2]
     assert 'vendorDirectoryNav' in page and '/assets/vendors.js' in page
     assert _req(server,'/assets/vendors.js')[0]==200
+
+
+def test_claude_seller_gets_vendor_tools_and_prompt_only_when_enabled(eng):
+    from agentbank.groupsales.seller import ClaudeSeller, VENDOR_TOOLS, system_prompt
+    off=ClaudeSeller(eng,client=object())
+    assert not VENDOR_TOOLS & {t['name'] for t in off.tools}
+    assert 'Third-party services' not in system_prompt(eng)
+    did=next(iter(eng.s['deals']))
+    with pytest.raises(Refused):
+        off._do('vendor_workspace',{'deal_id':did})
+    on=ClaudeSeller(eng,client=object(),vendors=True)
+    assert VENDOR_TOOLS <= {t['name'] for t in on.tools}
+    assert 'Third-party services' in system_prompt(eng,vendors=True)
+    assert on._do('vendor_workspace',{'deal_id':did}) is not None

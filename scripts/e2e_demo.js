@@ -57,6 +57,12 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
   const tab = async key => { await page.click(`[data-tab=${key}]`); await page.waitForTimeout(300); };
   const card = () => page.innerText('#deal');
   const click = async (sel) => { await page.click(sel); await page.waitForTimeout(500); };
+  const demoClock = async () => {                                      // the Demo clock drawer, from the property tools
+    await closeDrawers(); await tools(); await click('#wbClock');
+    await page.waitForSelector('#clockDrawer[open] #clockBody .clock-row', { timeout: 10000 });
+    return page.innerText('#clockBody');
+  };
+  const jumpTo = async iso => { await click(`#clockBody [data-clock-to="${iso}"]`); };
   // Presenter-only moves with no dashboard button (the demo script's held refund notification).
   const post = (path, body = {}) => page.evaluate(([p, b]) => fetch(p, {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(b)}).then(r => r.json()), [path, body]);
@@ -155,7 +161,10 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     // 6. Jump to 20 Jan: Summit lapses; Northstar reduces to v3 £8,280 with £528 owed.
     await page.waitForTimeout(500);
     await open('Northstar');
-    await click('#deal [data-act=jump]');
+    const clock1 = await demoClock();
+    check('the demo clock lists Northstar\'s room reduction on 20 Jan and warns Summit\'s quote lapses',
+          /20 Jan 2027[\s\S]*Northstar Analytics: the buyer asks to release rooms/.test(clock1) && /Lapses the open quote for Summit/.test(clock1), clock1);
+    await jumpTo('2027-01-20T09:00:00+00:00');
     await settle('Summit', ['expired']);
     check('Summit lapsed at the jump', (await deal('Summit')).status === 'expired');
     await mb.reload();
@@ -252,6 +261,77 @@ const check = (name, ok, detail = '') => { results.push({ name, ok: !!ok, detail
     await mb.setViewportSize({ width: 375, height: 800 }); await mb.waitForTimeout(300);
     if (await mb.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) wide.push('mailbox');
     check('no horizontal scroll at 375px', wide.length === 0, wide.join(', '));
+    await mb.setViewportSize({ width: 1100, height: 800 });
+
+    // 10. After the demo: on 8 Feb the seller asks for the first instalment (£828); the buyer pays it from the
+    // mailbox. Last, because it moves the clock past the demo's dates.
+    await post('/api/clock', {to: '2027-02-08T09:00:00+00:00'});
+    await post('/api/seller/run');
+    let t1 = Date.now(), inst;
+    while (Date.now() - t1 < 30000 && !inst) {
+      inst = (await state()).operations.find(o => o.kind === 'installment' && o.status === 'created');
+      if (!inst) await page.waitForTimeout(500);
+    }
+    check('on 8 Feb the seller requests the £828 instalment', inst && inst.amount === 82800);
+    await mb.reload();
+    await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
+    check('the mailbox offers the instalment payment', /Pay your next instalment/.test(await mb.innerText('#act')));
+    const [ipay] = await Promise.all([ctx.waitForEvent('page'), mb.click('button:has-text("Open payment page")')]);
+    await ipay.waitForLoadState();
+    await ipay.click('text=Pay instalment'); await ipay.waitForLoadState();
+    await ipay.click('button:has-text("Pay")'); await ipay.waitForLoadState();
+    await ipay.waitForTimeout(800);
+    check('return page shows the instalment verified', /Instalment verified/.test(await ipay.innerText('body')));
+    await ipay.close();
+    n = await deal('Northstar');
+    check('£4,140 net received after the instalment', n.finance_view.net_received === 414000, JSON.stringify(n.finance_view));
+    await mb.reload(); await mb.waitForSelector('#act .box', { timeout: 10000 });
+    check('the pay card goes once it is paid', !/Pay your next instalment/.test(await mb.innerText('#act')));
+
+    // 11. Demo step 9: the card offers the jump to the last due date (3 Mar); the seller asks for the rest of the
+    // contract (£4,140 here, after the 8 Feb payment) and the buyer pays it from the mailbox.
+    const scheduleStates = () => page.$$eval('#deal table.t tr', rs => rs.filter(r => r.cells.length === 4 && r.querySelector('td'))
+      .map(r => r.cells[2].innerText.trim()));
+    const createdInstalment = async amount => {
+      let t = Date.now(), op;
+      while (Date.now() - t < 30000 && !op) {
+        op = (await state()).operations.find(o => o.kind === 'installment' && o.status === 'created' && o.amount === amount);
+        if (!op) await page.waitForTimeout(500);
+      }
+      return op;
+    };
+    const clock2 = await demoClock();
+    check('the demo clock lists the final instalment on 3 Mar', /3 Mar 2027[\s\S]*Northstar Analytics: instalment of £4,140 due \(100% paid\)/.test(clock2), clock2);
+    await jumpTo('2027-03-03T09:00:00+00:00');
+    check('on 3 Mar the seller requests the remaining £4,140', !!(await createdInstalment(414000)));
+    await page.waitForTimeout(1800);
+    await open('Northstar');
+    check('the card says what the seller asked for', /asked for £4,140/.test(await card()));
+    await tab('money');
+    check('the Payments tab marks the requested instalment', (await scheduleStates()).includes('Requested'),
+          (await scheduleStates()).join(', '));
+    await mb.reload();
+    await mb.waitForSelector('button:has-text("Open payment page")', { timeout: 10000 });
+    const [ipay2] = await Promise.all([ctx.waitForEvent('page'), mb.click('button:has-text("Open payment page")')]);
+    await ipay2.waitForLoadState();
+    await ipay2.click('text=Pay instalment'); await ipay2.waitForLoadState();
+    await ipay2.click('button:has-text("Pay")'); await ipay2.waitForLoadState();
+    await ipay2.waitForTimeout(800);
+    check('return page shows the second instalment verified', /Instalment verified/.test(await ipay2.innerText('body')));
+    await ipay2.close();
+    n = await deal('Northstar');
+    check('paid in full: £8,280 net received, nothing still due',
+          n.finance_view.net_received === 828000 && n.finance_view.still_due === 0, JSON.stringify(n.finance_view));
+    if (n.payout_view.status === 'paid')
+      check('hotel net + platform fee = what the buyer paid net', n.payout_view.hotel_net + n.payout_view.platform_fee === 828000,
+            JSON.stringify(n.payout_view));
+    await page.waitForTimeout(1800);
+    await open('Northstar');
+    check('the card reads paid in full', /paid in full \(£8,280\)/.test(await card()));
+    await tab('money');
+    const finalStates = await scheduleStates();
+    check('the Payments tab marks every instalment paid', finalStates.length === 3 && finalStates.every(x => x === 'Paid'),
+          finalStates.join(', '));
   } catch (e) {
     check('run completed', false, e.message);
     await shot('error');

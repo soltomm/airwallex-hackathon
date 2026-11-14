@@ -1739,7 +1739,23 @@ def test_buyer_mailbox(server):
     assert _req(mod, f"/api/buyer/{n['id']}/view?t=wrong")[0] == 400
 
 
-def test_generated_inquiry_endpoint(server):
+def test_the_website_has_no_buyer_agent(server):
+    """Buyers always reply themselves from their mailbox: nothing on the site lets an agent answer for them."""
+    st, _, body = _req(server, "/api/settings", {"buyer_mode": "agent"})
+    assert st == 200 and "buyer_mode" not in json.loads(body)
+    assert "buyer_mode" not in server.runner.settings
+    d = server.engine.deal("GS-1001")
+    before = len(d["thread"])
+    assert _req(server, "/api/buyer/GS-1001/agent", {})[0] == 404      # no agent route, and it can't reach buyer moves
+    assert len(d["thread"]) == before
+    view = server.buyer_view(d["id"], d["buyer_token"])
+    assert "buyer_mode" not in view and "suggestion" not in view       # nothing pre-written for the buyer
+    st, _, page = _req(server, "/assets/openflow.js")
+    assert st == 200 and "buyer agent" not in page.lower() and "data-buyer-mode" not in page
+
+
+def test_generated_inquiry_endpoint(server, monkeypatch):
+    monkeypatch.setattr(server, "FX", True)
     st, _, body = _req(server, "/api/simulate/presets")
     cat = json.loads(body)
     assert st == 200 and "full_lifecycle" in cat["presets"] and cat["info"]["full_lifecycle"]["title"]
