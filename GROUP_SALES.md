@@ -87,7 +87,8 @@ hand-written RFP and sets who answers for the buyer.
 **Demo clock** moves the one scenario clock that every inquiry shares. It shows the scenario time, **Pick a day**
 (a calendar: any day after today, at 09:00), a **+24 hours** step, and **Payments coming up**: every confirmed
 booking's instalment dates, each with **Jump**. Each choice warns when it would lapse an open quote. Buyers' plans
-(Northstar's scripted change) never show there. The clock only moves forward; **Reset scenario** starts over.
+(Northstar's scripted change) never show there. The clock only moves forward; **Reset scenario** starts over. The
+scenario date and time show at the top right of the dashboard; clicking it also opens the Demo clock.
 
 1. **↻ Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the

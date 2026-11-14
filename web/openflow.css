@@ -22,6 +22,7 @@ a { color:var(--accent); }
 .wb-top strong { color:#35433f; font-weight:500; }
 .wb-top .row { gap:20px; }
 .wb-demo-badge { font-size:9px; letter-spacing:1.3px; border:1px solid #dce4df; border-radius:4px; padding:4px 8px; color:#62796b; }
+button.wb-demo-badge { background:transparent; cursor:pointer; font-size:12px; letter-spacing:0; padding:5px 10px; white-space:nowrap; }
 .wb-avatar { background:#edf0ec; color:#496050; width:30px; height:30px; border-radius:50%; display:grid; place-items:center; font-size:10px; font-weight:600; }
 .wb-content { margin-left:224px; padding:34px 36px 48px; max-width:1800px; }
 .wb-heading { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom:26px; }

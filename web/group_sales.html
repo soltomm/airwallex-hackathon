@@ -224,7 +224,7 @@ dl.outcomes { margin-top: 8px; }
       <div class="row"><button id="resetYes">Yes, reset</button><button id="resetNo">Cancel</button></div></div>
   </details>
 </aside>
-<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Groupy">G</span></div></div>
+<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><button class="wb-demo-badge" id="wbDate" title="Scenario date: open the Demo clock" aria-label="Scenario date, open the Demo clock"></button><span class="wb-avatar" aria-label="Groupy">G</span></div></div>
 <main class="wb-content" id="workbench">
   <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ New inquiry</button></div>
   <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
@@ -329,7 +329,7 @@ function renderHeader() {
   $('pay').textContent = S.provider === 'airwallex' ? 'Payments: Airwallex sandbox' : 'Payments: simulated';
 }
 function render() {
-  $('wbClock').textContent = `Demo clock · ${day(S.clock, {year: 'numeric'})} ↗`;
+  $('wbDate').textContent = new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'});
   if ($('clockDrawer').open) renderClock();
   const deals = [...S.deals].sort((a, b) => (a.reply_by || '9') < (b.reply_by || '9') ? -1 : 1);
   if (!deals.find(d => d.id === sel)) sel = deals[0] && deals[0].id;
@@ -1023,7 +1023,7 @@ function renderClock() {
     catch (e) {} finally { lastJSON = ''; load(); }
   });
 }
-$('wbClock').onclick = () => { clockLast = ''; $('clockDrawer').showModal(); renderClock(); };
+$('wbClock').onclick = $('wbDate').onclick = () => { clockLast = ''; $('clockDrawer').showModal(); renderClock(); };
 $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
