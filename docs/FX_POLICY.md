@@ -109,7 +109,8 @@ node --check web/fx.js
 node --check web/openflow.js
 
 # Isolated test server; do not use a real database or hosted dashboard.
-DATABASE_URL= PAYMENTS=simulated SELLER_MODE=rules GS_PORT=8014 \
+# GS_FX=1 turns on payer origin and FX; without it the UI under test is hidden.
+DATABASE_URL= PAYMENTS=simulated SELLER_MODE=rules GS_FX=1 GS_PORT=8014 \
   GS_VAR=/tmp/harbour-fx-test .venv/bin/python scripts/group_sales.py
 # In a second terminal with Playwright available:
 NODE_PATH=/path/to/playwright/node_modules node ui/test/fx.cjs

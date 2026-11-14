@@ -26,7 +26,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  else await page.getByText('Northstar Analytics',{exact:true}).first().waitFor();
  await shot('before.png');
  await page.unroute(base+'/'); await page.reload();
- await page.getByText('Groupy · Connected',{exact:true}).first().waitFor();
+ await page.getByText('Harbour House · Connected',{exact:true}).first().waitFor();
  const startCount=await page.locator('.wb-table tbody tr').count();
  // Live Harbour detail and support tools retain their working controls.
  await page.getByRole('button',{name:'Northstar Analytics'}).first().click();
@@ -69,7 +69,7 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.locator('[data-preset="full_lifecycle"]').click();
  await page.locator('#liveDrawer[open]').waitFor();
  const again=await generated();
- assert.equal(again.length,2);assert.notEqual(again[0].company,again[1].company);
+ assert.equal(again.length,2);assert.notEqual(again[0].id,again[1].id);assert.notEqual(again[0].generated.seed,again[1].generated.seed);
  await page.keyboard.press('Escape');await page.locator('#liveDrawer:not([open])').waitFor({state:'attached'});
  await page.locator('#wbSimulate').click();
  // Write your own: a real RFP with no brief.
@@ -77,6 +77,8 @@ const screenshots=path.resolve(__dirname,'../../docs/screenshots/openflow');
  await page.locator('#wbInquiryText').fill('Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays.');
  await page.locator('#wbSend').click();
  await page.locator('#liveDrawer[open]').waitFor();await page.keyboard.press('Escape');
+ // Closing hands focus back to the page in a later task; let it land before typing, as a person would.
+ await page.locator('#liveDrawer:not([open])').waitFor({state:'attached'});await page.waitForTimeout(300);
  // Search keeps focus through a polling tick; filters work.
  await page.locator('#wbSearch').fill('Acme');await page.waitForTimeout(1700);
  assert.equal(await page.locator('#wbSearch').evaluate(el=>el===document.activeElement),true);

@@ -1426,7 +1426,7 @@ def test_access_token_gate(server, monkeypatch):
         code, _, body = _req(mod, path, {"token": "wrong", "action": "message", "text": "hi"},
                              {"Content-Type": "application/json"})
         assert code == 400 and "buyer" in body, path
-    for path in ("/", "/api/state", "/api/hotel_account", "/api/buyer/GS-1001/suggest", "/assets/openflow.css",
+    for path in ("/", "/api/state", "/api/hotel_account", "/assets/openflow.css",
                  "/assets/openflow.js", "/api/simulate/presets"):
         assert _req(mod, path)[0] == 401, path
         assert _req(mod, path, headers={"Cookie": "gs_k=wrong"})[0] == 401, path
@@ -1436,6 +1436,10 @@ def test_access_token_gate(server, monkeypatch):
         code, _, body = _req(mod, path, {"hours": 1}, {"Content-Type": "application/json"})
         assert code == 401 and "access token required" in body, path
     assert mod.engine.s["run_id"] == run_id                                       # the refused reset changed nothing
+    # Nothing drafts or sends the buyer's replies any more: the old presenter tools are gone, even with the token.
+    auth = {"Cookie": "gs_k=demo-token", "Content-Type": "application/json"}
+    assert _req(mod, "/api/buyer/GS-1001/suggest", headers=auth)[0] == 404
+    assert _req(mod, "/api/buyer/GS-1001/agent", {}, auth)[0] == 404
     code, h, _ = _req(mod, "/?k=demo-token")
     assert code == 303 and "gs_k=demo-token" in h.get("Set-Cookie", "") and "HttpOnly" in h["Set-Cookie"]
     assert _req(mod, "/api/state", headers={"Cookie": "gs_k=demo-token"})[0] == 200
@@ -1742,9 +1746,10 @@ def test_the_website_has_no_buyer_agent(server):
     assert "buyer_mode" not in server.runner.settings
     d = server.engine.deal("GS-1001")
     before = len(d["thread"])
-    assert _req(server, "/api/buyer/GS-1001/agent", {})[0] == 400      # no agent route: refused like any buyer move
+    assert _req(server, "/api/buyer/GS-1001/agent", {})[0] == 404      # no agent route, and it can't reach buyer moves
     assert len(d["thread"]) == before
-    assert "buyer_mode" not in server.buyer_view(d["id"], d["buyer_token"])
+    view = server.buyer_view(d["id"], d["buyer_token"])
+    assert "buyer_mode" not in view and "suggestion" not in view       # nothing pre-written for the buyer
     st, _, page = _req(server, "/assets/openflow.js")
     assert st == 200 and "buyer agent" not in page.lower() and "data-buyer-mode" not in page
 
