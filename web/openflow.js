@@ -114,8 +114,8 @@
         <div class="wb-ni-head"><span class="wb-ni-icon" aria-hidden="true">✉</span><div><h3>Write your own</h3>
           <p class="wb-sub">A real, unscripted RFP. You reply as the buyer from its mailbox.</p></div></div>
         <div class="wb-ni-pair">
-          <label class="wb-field">From<input id="wbInquiryFrom" type="text" required maxlength="200" autocomplete="off" value="Guest <guest@example.com>"></label>
-          <label class="wb-field">Subject<input id="wbInquirySubject" type="text" required maxlength="200" autocomplete="off" value="Group inquiry"></label>
+          <label class="wb-field">From<input id="wbInquiryFrom" type="text" required maxlength="200" autocomplete="off" placeholder="e.g. Guest <guest@example.com>"></label>
+          <label class="wb-field">Subject<input id="wbInquirySubject" type="text" required maxlength="200" autocomplete="off" placeholder="e.g. Group inquiry"></label>
         </div>
         <label class="wb-field">Inquiry<textarea id="wbInquiryText" rows="7" required maxlength="5000" placeholder="e.g. Please quote 6 king rooms for 12 colleagues arriving 10 May and departing 13 May 2027, with breakfast. Our budget is £4,500 inclusive of taxes. Acme Demo Ltd pays."></textarea></label>
         <div class="wb-ni-scope"><b>What Harbour House can quote</b>
