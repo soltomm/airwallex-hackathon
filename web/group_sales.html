@@ -224,7 +224,7 @@ dl.outcomes { margin-top: 8px; }
       <div class="row"><button id="resetYes">Yes, reset</button><button id="resetNo">Cancel</button></div></div>
   </details>
 </aside>
-<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><span class="wb-demo-badge">INTERACTIVE DEMO</span><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
+<div class="wb-top"><div>Workspace <span class="muted"> / </span><strong id="wbBreadcrumb">Overview</strong></div><div class="row"><button class="wb-demo-badge" id="wbDate" title="Scenario date: open the Demo clock" aria-label="Scenario date, open the Demo clock"></button><span class="wb-avatar" aria-label="Harbour House">HH</span></div></div>
 <main class="wb-content" id="workbench">
   <div class="wb-heading"><div><h1 id="wbTitle">A little more room to grow.</h1><p>Your group business, from first inquiry to final check-in.</p></div><button class="wb-primary" id="wbSimulate">＋ New inquiry</button></div>
   <div id="wbMetrics" class="wb-kpis" aria-label="Group business summary"></div>
@@ -329,7 +329,7 @@ function renderHeader() {
   $('pay').textContent = S.provider === 'airwallex' ? 'Payments: Airwallex sandbox' : 'Payments: simulated';
 }
 function render() {
-  $('wbClock').textContent = `Demo clock · ${day(S.clock, {year: 'numeric'})} ↗`;
+  $('wbDate').textContent = new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'});
   if ($('clockDrawer').open) renderClock();
   const deals = [...S.deals].sort((a, b) => (a.reply_by || '9') < (b.reply_by || '9') ? -1 : 1);
   if (!deals.find(d => d.id === sel)) sel = deals[0] && deals[0].id;
@@ -445,9 +445,7 @@ function nextCard(d) {
     h += `<h3>${rooms ? rooms + ' ' + esc(d.booking.room_type) + ' rooms a night' : 'Booked'} · ${full ? `paid in full (${gbp(d.finance_view.net_received)})` : `${gbp(d.finance_view.net_received)} paid`}</h3>`;
     if (window.Folios) h += `<div class="row"><button data-tab="folio">Reconcile final folio</button></div>`;
     if (n.handoff) h += `<p><b>${esc(cap(n.handoff.reason))}</b></p>${handoffWhy(n.handoff)}`;
-    const jumpReduction = d.company.startsWith('Northstar') && S.clock < '2027-01-20';
-    if (jumpReduction) h += `<p class="small">Northstar's room reduction comes on 20 Jan (Demo clock in the property tools).</p>`;
-    else h += instalmentHtml(d);
+    h += instalmentHtml(d);
     h += mailLink(d);
   } else {
     h += `<h3>${n.title || ''}</h3>${n.text ? `<p class="small">${esc(n.text)}</p>` : ''}`;
@@ -962,13 +960,12 @@ async function renderAccount(check) {
 $('wbAccount').onclick = () => { $('acctDrawer').showModal(); renderAccount(true); };
 
 // ---- demo clock: one scenario clock for every inquiry, so its controls live here, not on a deal's card --------
-// The dates that matter next, across all inquiries, from data the dashboard already has.
+// Payment dates coming up, across all bookings, from data the dashboard already has. Only what the hotel knows:
+// a buyer's plans (the scenario's scripted changes) never show here.
 function clockEvents() {
   const today = S.clock.slice(0, 10), out = [];
   for (const d of S.deals) {
     if (d.booking?.status !== 'confirmed') continue;
-    if (d.company.startsWith('Northstar') && S.clock < '2027-01-20')   // the scripted buyer's change date (scenario.json)
-      out.push({at: '2027-01-20', who: d.company, what: 'the buyer asks to release rooms'});
     if (d.installments) for (const m of (d.finance_view.schedule || []).slice(1))
       if (m.due && m.due > today && m.amount > 0) out.push({at: m.due, who: d.company, what: `instalment of ${gbp(m.amount)} due (${m.label})`});
   }
@@ -985,27 +982,48 @@ function clockTarget(to, label, extra) {
   return `<div class="clock-row"><div><b>${label}</b>${extra || ''}${gone.length ? `<div class="small" style="color:var(--bad)">Lapses ${gone.length === 1 ? 'the open quote' : gone.length + ' open quotes'} for ${esc(gone.join(', '))}</div>` : ''}</div>
     <button data-clock-to="${esc(to)}">Jump</button></div>`;
 }
-let clockLast = '';
+let clockLast = '', clockPick = '';
+const clockDay = iso => iso + 'T09:00:00+00:00';
+function clockPickUpdate() {
+  const tomorrow = $('clockPick').min, ok = !!clockPick && clockPick >= tomorrow, gone = ok ? lapses(clockDay(clockPick)) : [];
+  $('clockPickGo').disabled = !ok;
+  $('clockPickNote').innerHTML = !clockPick ? 'Any day after today. The clock moves to 09:00 that day.'
+    : !ok ? 'The clock only moves forward: pick a day after today.'
+    : `Moves to ${esc(day(clockPick, {weekday: 'short', year: 'numeric'}))}, 09:00.` +
+      (gone.length ? `<div style="color:var(--bad)">Lapses ${gone.length === 1 ? 'the open quote' : gone.length + ' open quotes'} for ${esc(gone.join(', '))}</div>` : '');
+}
 function renderClock() {
   const plus = new Date(new Date(S.clock).getTime() + 864e5).toISOString().replace('.000Z', '+00:00');
+  const tomorrow = new Date(Date.parse(S.clock.slice(0, 10) + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10);
   const events = clockEvents();
   const html = `<h2 style="margin:0 0 6px">${new Date(S.clock).toLocaleString('en-GB', {timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'})}</h2>
     <p class="wb-lede" style="margin-bottom:16px">One scenario clock for every inquiry. Moving it moves them all: open quotes lapse after 24 hours, and the seller acts on anything that falls due. It only moves forward; <b>Reset scenario</b> starts over.</p>
+    <div class="clock-row"><div><label class="small" for="clockPick" style="display:block;margin-bottom:4px"><b>Pick a day</b></label>
+      <input type="date" id="clockPick" min="${tomorrow}" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit">
+      <div class="small muted" id="clockPickNote" style="margin-top:6px"></div></div><button id="clockPickGo" disabled>Jump</button></div>
     ${clockTarget(plus, '+24 hours', '<div class="small muted">Open quotes lapse after 24 hours</div>')}
-    <div class="label" style="margin:16px 0 6px">Coming up</div>
+    <div class="label" style="margin:16px 0 6px">Payments coming up</div>
     ${events.length ? events.map(([at, xs]) => clockTarget(at + 'T09:00:00+00:00', day(at, {weekday: 'short', year: 'numeric'}),
         xs.map(x => `<div class="small">${esc(x.who)}: ${esc(x.what)}</div>`).join(''))).join('')
-      : '<p class="small muted">Nothing scheduled yet. Dates appear here once a booking is confirmed: room changes and instalments.</p>'}`;
+      : '<p class="small muted">No upcoming payments. Instalment dates show here for confirmed bookings with money still due.</p>'}`;
   if (html === clockLast) return;
   clockLast = html;
   $('clockBody').innerHTML = html;
+  $('clockPick').value = clockPick;                 // kept out of the html, so a poll never resets what was picked
+  $('clockPick').oninput = () => { clockPick = $('clockPick').value; clockPickUpdate(); };
+  clockPickUpdate();
+  $('clockPickGo').onclick = async () => {
+    $('clockPickGo').disabled = true;
+    try { await api('/api/clock', {to: clockDay(clockPick)}); toast('Clock moved to ' + day(clockPick, {year: 'numeric'})); clockPick = ''; $('clockDrawer').close(); }
+    catch (e) {} finally { lastJSON = ''; load(); }
+  };
   document.querySelectorAll('#clockBody [data-clock-to]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try { await api('/api/clock', {to: b.dataset.clockTo}); toast('Clock moved to ' + day(b.dataset.clockTo, {year: 'numeric'})); $('clockDrawer').close(); }
     catch (e) {} finally { lastJSON = ''; load(); }
   });
 }
-$('wbClock').onclick = () => { clockLast = ''; $('clockDrawer').showModal(); renderClock(); };
+$('wbClock').onclick = $('wbDate').onclick = () => { clockLast = ''; $('clockDrawer').showModal(); renderClock(); };
 $('acctDrawer').addEventListener('close', () => clearTimeout(acctTimer));
 showView(); load(); setInterval(load, 1500);
 </script>
