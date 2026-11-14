@@ -34,7 +34,6 @@ from agentbank.config import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from agentbank.groupsales import generator  # noqa: E402
-from agentbank.groupsales.buyer import suggest  # noqa: E402
 from agentbank.groupsales.calc import gbp  # noqa: E402
 from agentbank.groupsales.engine import Engine, Refused  # noqa: E402
 from agentbank.groupsales import fx  # noqa: E402
@@ -61,8 +60,7 @@ MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
 OPEN_PATHS = ("/folio/", "/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
-# token instead, so a buyer can use the link without the hotel's access token. Presenter tools
-# (/api/buyer/<id>/suggest) still need the dashboard token.
+# token instead, so a buyer can use the link without the hotel's access token.
 BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view)?)$")
 WEB = ROOT / "web"
 HAS_CLAUDE = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
@@ -131,7 +129,6 @@ def state():
     s["runner"] = {"busy": runner.busy, "settings": runner.settings, "last": runner.last[-6:],
                    "claude_available": HAS_CLAUDE}
     for d in s["deals"]:
-        d["buyer_suggestion"] = suggest(engine, d["id"])
         d["inbox_url"] = inbox_path(d)
     return s
 
@@ -154,7 +151,6 @@ def buyer_view(deal_id: str, token: str) -> dict:
     v["pay_url"] = engine.pay_url(d) if d["status"] == "awaiting_payment" else None
     inst = engine.installments(d)
     v["balance_pay_url"] = engine.balance_url(d) if inst and inst["open"] and inst["open"]["status"] == "created" else None
-    v["suggestion"] = suggest(engine, d["id"])
     v["hotel_busy"] = bool(runner.busy and runner.busy.startswith("seller"))
     v["finance_view"] = engine.finance(d)
     if FOLIO and d.get("folio") and engine.folio_view(d["id"])["approved"]:
@@ -287,8 +283,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, vendors.directory())
             if p.startswith('/api/deals/') and p.endswith('/vendors'):
                 return self._send(200, engine.vendor_workspace(p.split('/')[3]))
-            if p.startswith("/api/buyer/") and p.endswith("/suggest"):
-                return self._send(200, {"suggestion": suggest(engine, p.split("/")[3])})
             if p.startswith("/inbox/"):
                 d = engine.deal(p.split("/")[2])
                 if not hmac.compare_digest(q.get("t", ""), d["buyer_token"]):
@@ -399,8 +393,8 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/notifications/release":
                 return self._send(200, engine.release_notifications())
             if p == "/api/simulate/rfp":
-                # A generated inquiry: the RFP email plus its buyer's private brief, which drafts the buyer's replies
-                # in the mailbox. The seller agent takes it from there; nothing else in the deal is simulated.
+                # A generated inquiry: the RFP email (its private brief only drives automated runs; the person
+                # playing the buyer types every reply). The seller agent takes it from there.
                 if not FX and (b.get("preset") in generator.FX_PRESETS or (b.get("traits") or {}).get("payer_country")):
                     raise Refused("Payer origin and FX are turned off (GS_FX); pick another inquiry type.")
                 gen = generator.generate(engine, traits=b.get("traits") or {}, preset=b.get("preset") or None,
@@ -424,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/api/approvals/"):
                 return self._send(200, engine.decide_approval(p.split("/")[3], b.get("decision"), b.get("actor"),
                                                               b.get("note", "")))
-            if p.startswith("/api/buyer/"):
+            if re.fullmatch(r"/api/buyer/[^/]+", p):   # the buyer's own moves; nothing answers for the buyer
                 did = p.split("/")[3]
                 return self._send(200, engine.buyer_action(did, b.get("token", ""), b.get("action", ""),
                                                            b.get("text", ""), b.get("payload") or {},

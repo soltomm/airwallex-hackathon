@@ -24,9 +24,10 @@ be exceeded, and takes the deposit through Airwallex like any other deal. The dr
 - **Write your own**, first and open: a real, unscripted RFP (`POST /api/inbox`, the same intake as an email).
   You reply as the buyer from its mailbox.
 - **Generated test inquiries** (`POST /api/simulate/rfp`, see `src/agentbank/groupsales/generator.py`), folded
-  below it: one card per preset. Each inquiry comes with a private brief that drafts the buyer's replies; the seller never
-  sees it, or which preset it came from. Each click sends a new inquiry: the drawer has no seed field and no
-  hand-picked traits form. The API still accepts `seed` and `traits` for scripted runs and tests.
+  below it: one card per preset. You type the buyer's replies; nothing is pre-written in the mailbox. Each
+  inquiry's private brief only drives automated runs, and the seller never sees it, or which preset it came
+  from. Each click sends a new inquiry: the drawer has no seed field and no hand-picked traits form. The API
+  still accepts `seed` and `traits` for scripted runs and tests.
 - **Buyer replies** are always by you, in the buyer's mailbox (there is no buyer agent). Approvals and
   paying the deposit always stay with a person.
 

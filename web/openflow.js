@@ -1,7 +1,7 @@
 /* OpenFlow presentation over Groupy's live state, and the New inquiry drawer.
-   Every inquiry here goes to Groupy itself: generated ones (an RFP plus a private brief that drafts the
-   buyer's replies, see generator.py) or one you write. You reply as the buyer from its mailbox; the seller agent
-   and the backend's rules do the rest; nothing in this file prices, approves or moves money. */
+   Every inquiry here goes to Groupy itself: generated ones (an RFP, see generator.py) or one you write.
+   You reply as the buyer from its mailbox; the seller agent and the backend's rules do the rest.
+   Nothing in this file prices, approves or moves money. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -76,7 +76,7 @@
     $('wbDrawerTitle').focus();
   }
 
-  // ---- New inquiry: written by hand (the main path), or a generated test inquiry with a private buyer brief ----
+  // ---- New inquiry: written by hand (the main path), or a generated test inquiry ----
   async function simulator() {
     showDrawer('Let the inquiry come to you.', '<p class="wb-lede">Loading inquiry types…</p>');
     try { catalog = await window.Harbour.presets(); }
@@ -88,7 +88,7 @@
       ${thirdPartyForm()}
       ${ownForm(b)}
       <details class="wb-traits wb-generated"><summary>Generated test inquiries</summary>
-        <p class="wb-sub">A new inquiry each time you click. Each one comes with a private brief that drafts the buyer’s replies in its mailbox; the seller only sees the email, never the brief or which test it is.</p>
+        <p class="wb-sub">A new inquiry each time you click. You type the buyer’s replies in its mailbox; nothing is pre-written. The seller only sees the email, never which test it is.</p>
         <div class="wb-channel-grid">${cards}</div>
       </details>`, 'NEW INQUIRY');
     wireOwn();

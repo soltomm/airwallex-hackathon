@@ -92,16 +92,20 @@ instalments), each with **Jump**. A jump warns when it would lapse an open quote
 1. **↻ Reset scenario → Yes, reset.** The seller starts on its own. Northstar gets three
    questions. Summit gets a quote: **£4,920, deposit £1,476**. Summit's **Activity** tab explains why the
    seller moved to Summit first. The **Records checked** tab lists the systems consulted, with timestamps.
-2. Open **Maya's mailbox ↗** from Northstar's card and click **Send answers**. The seller quotes v1:
-   **£9,600**, 30% deposit, 10% attrition. It arrives in the mailbox with the offer attached.
-3. In the mailbox, **Send counteroffer** (20% attrition, 25% deposit). The seller keeps £220 and asks for a
-   **40% deposit (£3,840)** in return. On the dashboard, click **Approve** as the hotel manager.
-4. In the mailbox, **Accept v2.**
+2. Open **Maya's mailbox ↗** from Northstar's card. The reply box is empty: you type every reply (the lines
+   below are a run sheet, not drafts on screen). Type *"Classroom seating for the meeting room. The legal payer
+   is Northstar Analytics Demo Ltd. Our total budget is inclusive of taxes."* and **Send**. The seller quotes
+   v1: **£9,600**, 30% deposit, 10% attrition. It arrives in the mailbox with the offer attached.
+3. Type *"Thank you, the £220 room rate works for us. Attendance is still uncertain, so we need a 20% attrition
+   allowance. We propose a 25% deposit."* The backend reads that as a counter. The seller keeps £220 and asks
+   for a **40% deposit (£3,840)** in return. On the dashboard, click **Approve** as the hotel manager.
+4. In the mailbox, **Accept offer v2** (or type *"We accept."*).
 5. The seller opens checkout. In the mailbox, **Open payment page ↗** and pay with `4035 5010 0000 0008`.
    When you return, the booking is verified with Airwallex and confirmed. The **Hotel payout** card
    shows £3,456 paid to the hotel's connected account by funds split and £384 kept as the fee.
 6. **Demo clock → Wed, 20 Jan 2027 → Jump**. It warns first that Summit's open quote lapses, and it does. In
-   the mailbox, **Send change request**, then **Accept v3**: **£8,280**, with **£528** owed to the buyer.
+   the mailbox, type *"Four colleagues can no longer attend. Please reduce our block by two twin rooms for all
+   three nights."*, then **Accept change v3**: **£8,280**, with **£528** owed to the buyer.
 7. On the dashboard, **Approve** the £528 refund (it's over the seller's £500 limit). The seller creates
    the refund in Airwallex, checks it rather than creating another, and the ledger updates once.
 8. Final state: **£3,312 net received, £4,968 still due**, 10 twins for 20 guests. Hotel payout: £475.20 taken
@@ -114,7 +118,7 @@ instalments), each with **Jump**. A jump warns when it would lapse an open quote
    **paid in full (£8,280)**. Hotel payout: **£7,452 net to the hotel, £828 Group Desk fee**; the Payments tab
    marks every instalment paid.
 
-Summit can be accepted at any point (**Accept v1** in Alex's mailbox). Its deposit is within Summit's
+Summit can be accepted at any point (**Accept offer v1** in Alex's mailbox). Its deposit is within Summit's
 own limits, so checkout opens straight away.
 
 Other things to show: **＋ New inquiry → Write your own** with dates the hotel can't sell (for example 11–14 May).
@@ -124,6 +128,27 @@ reply naming the dates) and the seller quotes. A request for a service the hotel
 group dinner) is handed to a person: the buyer gets an acknowledgement, and the card offers **Hand
 back to seller**, with an optional instruction the seller follows, or **Close inquiry**. Fail the next booking commit before paying (`POST /api/sim {"fail_next_commit": true}`;
 payment received – booking exception). **Reject** on the refund (the reduction stands and £528 stays owed).
+
+### Run sheet: replies that trigger each behaviour
+
+Nothing is pre-written in the buyer's mailbox: keep these lines off screen and type them (or your own wording).
+The backend reads what a reply asks for (`src/agentbank/groupsales/intent.py`) and the engine checks it like
+any other move. A reply it can't read stays a plain message for the seller. Figures use the current seller
+rules and Summit's king rooms (quoted at £190, floor £180); staff can change them on the Seller rules page.
+
+| Type, while… | What happens |
+|---|---|
+| an offer is open: *"Could you do £185 per room-night?"* | at or above the seller's floor: a new version at £185, no approval |
+| *"Could you do £178 per room-night?"* | below the floor: £178 traded for 50% on signing, with the floor rate as the alternative |
+| *"Could you do £172 per room-night?"* | in the revenue band: the deal waits for a revenue pricing review on the dashboard |
+| *"Could you do £160 per room-night?"* | below the absolute minimum: the prepayment trade at the lowest rate allowed |
+| *"We need a 20% attrition allowance. We propose a 25% deposit."* | attrition traded for a 40% deposit, waits for the manager (Northstar) |
+| *"We accept."* / *"Agreed, please go ahead."* | accepts the current version (same as the **Accept** button); a hedged reply (*"if"*, *"but"*, a question) doesn't |
+| *"I'm taking it to our organizer."* | stays a message; nothing changes |
+| questions pending: *"The legal payer is … Ltd. Our budget is inclusive of taxes. Classroom seating."* | answers recorded, then a quote |
+| dates offered: *"10 to 13 March works for us."* | those dates recorded, then a quote |
+| booked: *"Please reduce our block by two twin rooms for all three nights."* | an amendment priced from the contract; *"release 3 rooms each night"*, *"4 fewer rooms"*, *"down to 9 rooms"* work too |
+| booked: *"We need fewer rooms."* (no number) | handed to a person to ask how many |
 
 ### Seller rules
 
@@ -395,10 +420,9 @@ a booking exception, plus deals handed to a person or declined.
 ### Generated inquiries
 
 `src/agentbank/groupsales/generator.py` writes new inquiries for automated runs and demos. Each one is an
-RFP email plus a private brief (the buyer's answers, goals, limits and a later change), which drafts the
-buyer's replies in its mailbox for a person to send. The generator only writes the inbound: the seller agent
-and the engine handle everything after it, and the seller never sees the brief. There is no buyer agent:
-buyers always reply themselves.
+RFP email plus a private brief (its answers, goals, limits and a later change). On the dashboard you play
+the buyer and type the replies; the brief only drives automated runs (`tests/test_generator.py`, the fuzz
+tests). The generator only writes the inbound, and the seller never sees the brief.
 
 An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_soon`), `price`
 (`comfortable`, `tight`, `below_floor`), `deposit` (`standard`, `low`), `attrition`, `meeting`, `missing`
@@ -410,7 +434,7 @@ An inquiry is described by traits: `availability` (`fits`, `short_rooms`, `too_s
 | `dates_short_haggle` | dates too soon, other dates offered and taken, counter below the floor, floor held, paid |
 | `full_lifecycle` | attrition traded for a 40% deposit (manager approval), paid, fewer rooms, partial refund, hotel payout reversed |
 | `payer_abroad` | payer in Germany (records payer origin), paid in GBP, fewer rooms, refund. Only offered with `GS_FX=1` |
-| `missing_details` | the seller asks who pays and about taxes, the buyer answers from its brief, paid |
+| `missing_details` | the seller asks who pays and about taxes, the buyer answers, paid |
 
 The same seed and traits give the same inquiry against the same calendar; the sender's domain includes the
 seed, so replaying a seed in the same run is refused rather than merged. From the server:
