@@ -1,6 +1,6 @@
 # Recorded demo: shot list (about 3 minutes)
 
-A shorter cut of the live demo script in [GROUP_SALES.md](../GROUP_SALES.md#demo-script-about-6-minutes).
+A shorter cut of the live demo script in [GROUP_SALES.md](../GROUP_SALES.md#demo-script-about-7-minutes).
 Buttons are named as they appear on the dashboard.
 
 ## Before you record

@@ -1,3 +1,7 @@
+> **This is the earlier Hotel Negotiation Desk project, not Groupy.** The group-sales demo script is in
+> [GROUP_SALES.md](GROUP_SALES.md#demo-script-about-7-minutes), and its recorded-demo shot list in
+> [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md).
+
 # Demo script (3 minutes)
 
 The guide asks every demo to show the user's goal, the agent's plan, new information, the revised
