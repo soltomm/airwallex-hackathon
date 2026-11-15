@@ -44,7 +44,8 @@ node scripts/e2e_demo.js                                    # with the server ru
    should fail on the old code. Say in the PR what you ran and what you could not verify.
 3. Open the PR against `main`. GitHub Actions (`.github/workflows/tests.yml`) runs the full suite.
 4. A teammate reviews and merges. **Agents never approve or merge PRs.**
-5. After the merge, staging redeploys. A person checks it and promotes to the live demo.
+5. After the merge, the live demo and staging both redeploy from `main` (the live demo at once, staging
+   after CI passes). A person checks them; the PR is the last gate before the live demo.
 
 Testing before merge: CI on the PR, plus a local run (`gh pr checkout <n>`, the server and
 `node scripts/e2e_demo.js`) for anything visible. Changes that touch payments can only be tested
@@ -55,7 +56,7 @@ against live Airwallex by deploying the branch to staging; ask a person to do th
 | | URL | Deploys | Data |
 |---|---|---|---|
 | Staging | https://harbour-house-preview.onrender.com | `main`, after CI passes | `STORAGE_NAMESPACE=groupsales_staging` |
-| Live demo | https://harbour-house-group-sales.onrender.com | `main`, manual deploy by a person | `groupsales` |
+| Live demo | https://harbour-house-group-sales.onrender.com | `main`, on every commit | `groupsales` |
 
 Details: [docs/DEPLOY.md](docs/DEPLOY.md). Agents don't change Render services, environment
 variables or GitHub settings, and don't trigger deploys. Ask a person.

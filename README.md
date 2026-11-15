@@ -21,6 +21,13 @@ Full product notes, enforced rules and the live demo script: **[GROUP_SALES.md](
 Recorded-demo shot list: [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md). Testing, staging and the live
 demo: [docs/DEPLOY.md](docs/DEPLOY.md). Working on the repository: [AGENTS.md](AGENTS.md).
 
+## Demo
+
+<!-- Demo video: add the link here once it is recorded, e.g. "- Video: [3-minute walkthrough](https://...)" -->
+- Live: https://harbour-house-group-sales.onrender.com (needs an access link with a token; ask the team).
+  It sleeps when idle, so the first request can take about a minute.
+- Script to follow: [GROUP_SALES.md](GROUP_SALES.md#demo-script-about-7-minutes).
+
 ## Run it
 
 Offline, with no keys (simulated Airwallex twin, rules seller):
@@ -181,3 +188,7 @@ Only what [GROUP_SALES.md](GROUP_SALES.md#verified-live-airwallex-sandbox) recor
   hotel's balance changing have not been observed.
 - 2026-11-02: one full run on the sandbox with the rules seller (deposit and partial refund), before
   payouts, and one run of the Claude seller on simulated payments.
+
+## License
+
+[MIT](LICENSE).

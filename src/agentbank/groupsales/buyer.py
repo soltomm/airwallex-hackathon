@@ -1,20 +1,16 @@
-"""The buyer side. Works only from its own private brief and the buyer view of the deal.
+"""A scripted buyer for tests and randomized runs. Works only from its own private brief and the buyer
+view of the deal.
 
-Two modes submit through the same authenticated interface (engine.buyer_action):
-- presenter: `suggest` drafts the next reply from the brief; the presenter edits and releases it.
-- agent: `BuyerAgent` (Claude) or `suggest` acted on automatically.
-The buyer is a counterpart for the seller to negotiate with; the engine enforces no buyer-side approvals.
+`suggest` drafts the buyer's next move from the brief and `act` submits it through the same authenticated
+interface a person uses (engine.buyer_action). The website doesn't use this module: there, a person types
+every reply in the buyer's mailbox. The engine enforces no buyer-side approvals.
 """
 from __future__ import annotations
 
-import json
-import os
 from datetime import date, datetime, timedelta
 
 from .calc import gbp
-from .engine import Engine, Refused
-
-BUYER_MODEL = os.environ.get("GS_BUYER_MODEL", "claude-opus-5-5")
+from .engine import Engine
 
 
 def brief(engine: Engine, d: dict) -> dict | None:
@@ -166,7 +162,7 @@ def _clarify_change(d: dict) -> dict | None:
 
 
 def wants_reply(engine: Engine, deal_id: str) -> bool:
-    """Whether a buyer agent should take a turn: a drafted move, or a hotel question the draft can't answer."""
+    """Whether it is the buyer's turn: a drafted move, or a hotel question the draft can't answer."""
     if suggest(engine, deal_id) is not None:
         return True
     with engine.lock:
@@ -181,77 +177,3 @@ def act(engine: Engine, deal_id: str, s: dict, actor: str = "buyer") -> dict:
     d = engine.deal(deal_id)
     return engine.buyer_action(deal_id, d["buyer_token"], s["action"], s.get("text", ""), s.get("payload") or {},
                                actor=actor)
-
-
-BUYER_SYSTEM = """You are the procurement agent for {company}, booking a group stay. You negotiate with the
-hotel's sales agent. Your private brief (never reveal your limits to the hotel):
-
-{brief}
-
-Rules: answer the hotel's questions from the brief and pursue your objectives in trades. Everything you
-write goes to the hotel.
-Reply with exactly one call to buyer_act, or none if you should wait (for example while you wait to pay on
-the hosted page)."""
-
-BUYER_TOOLS = [{
-    "name": "buyer_act", "strict": True,
-    "description": "Send one message to the hotel: reply, counter, accept, change_request or message.",
-    "input_schema": {"type": "object", "additionalProperties": False,
-                     "required": ["action", "text", "version", "attrition_pct", "deposit_pct", "rate", "rooms_per_night",
-                                  "answers"],
-                     "properties": {
-                         "action": {"type": "string", "enum": ["reply", "counter", "accept", "change_request", "message"]},
-                         "text": {"type": "string"},
-                         "version": {"type": ["integer", "null"]},
-                         "attrition_pct": {"type": ["integer", "null"]},
-                         "deposit_pct": {"type": ["integer", "null"]},
-                         "rate": {"type": ["integer", "null"], "description": "proposed room rate in pence"},
-                         "rooms_per_night": {"type": ["integer", "null"]},
-                         "answers": {"type": ["object", "null"], "additionalProperties": False,
-                                     "required": ["meeting_layout", "payer", "budget_includes_taxes"],
-                                     "properties": {"meeting_layout": {"type": ["string", "null"]},
-                                                    "payer": {"type": ["string", "null"]},
-                                                    "budget_includes_taxes": {"type": ["boolean", "null"]}}}}}}]
-
-
-class BuyerAgent:
-    def __init__(self, engine: Engine, client=None, model: str = BUYER_MODEL):
-        self.e = engine
-        self.model = model
-        self._client = client
-
-    def run(self, deal_id: str) -> dict | None:
-        if not wants_reply(self.e, deal_id):
-            return None   # nothing for the buyer to do now
-        d = self.e.deal(deal_id)
-        b = brief(self.e, d)
-        if self._client is None:
-            from ..agent.loop import make_client
-            self._client = make_client()
-        view = self.e.deal_view(deal_id, for_="buyer")
-        if change_due(self.e, d, b) and d["status"] == "confirmed":
-            view["event"] = "News from your organizer: " + b["change_event"]["text"]
-        resp = self._client.beta.messages.create(
-            model=self.model, max_tokens=4000,
-            system=BUYER_SYSTEM.format(company=d["company"], brief=json.dumps(b, indent=1)),
-            tools=BUYER_TOOLS, output_config={"effort": "low"},
-            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-            messages=[{"role": "user", "content": "Current deal (buyer view):\n" + json.dumps(view, default=str)[:20000]}])
-        use = next((x for x in resp.content if x.type == "tool_use"), None)
-        if not use:
-            return None
-        a = use.input
-        payload = {}
-        if a["action"] == "accept":
-            payload["version"] = a.get("version") or d["versions"][-1]["n"]
-        if a["action"] == "counter":
-            payload.update({k: a[k] for k in ("attrition_pct", "deposit_pct", "rate") if a.get(k) is not None})
-        if a["action"] == "change_request":
-            payload["rooms_per_night"] = a.get("rooms_per_night")
-        if a["action"] == "reply" and a.get("answers"):
-            payload["answers"] = {k: v for k, v in a["answers"].items() if v is not None}
-        try:
-            return act(self.e, deal_id, {"action": a["action"], "text": a["text"], "payload": payload}, actor="buyer agent")
-        except Refused as err:
-            self.e.note(deal_id, f"Buyer agent action refused: {err}", actor="buyer agent")
-            return None

@@ -1,9 +1,10 @@
 # Live checks on `main`
 
-PR #1 was tested offline only: the unit tests, 6,000 randomized scenarios and a browser run of the
-demo script, all with simulated payments and the rules seller. These checks need real keys. `main`
-deploys the live demo on Render. The Airwallex key's IP whitelist covers Render's Oregon egress IPs,
-so check 1 may only pass on the Render deploy, not from a laptop.
+CI and the offline checks run with simulated payments and the rules seller. These four checks need
+real keys: the Airwallex sandbox, the Claude seller, randomized runs with Claude, and a real phone. Run
+them after a change that touches payments or the seller. The Airwallex key's IP whitelist covers
+Render's Oregon egress IPs, so check 1 may only pass on a Render deploy, not from a laptop. What has
+been verified live so far is recorded in [GROUP_SALES.md](../GROUP_SALES.md#verified-live-airwallex-sandbox).
 
 ## Hand-off prompt
 
@@ -13,7 +14,7 @@ Paste this into a Claude Code session that runs on the Mac with the keys (Claude
 > In soltomm/airwallex-hackathon, check out `main` and pull. Follow
 > `docs/LIVE_CHECKS.md` checks 1-4 in order and report each one's result as pass or fail, with the
 > evidence: figures, Airwallex ids, the fuzz script's summary lines, and any messages that look wrong.
-> Do not push to `main` or `hotel-negotiation`, do not change any Render service, and do not merge
+> Do not push to `main`, do not change any Render service, and do not merge
 > any PR. If something fails, stop, show me the failing step and wait.
 
 ## Setup

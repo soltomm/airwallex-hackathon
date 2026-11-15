@@ -1,7 +1,8 @@
 # Render blueprint for the Harbour House group-sales demo (branch main).
 # Dashboard > New > Blueprint > this repo, branch main. Render asks for the sync:false secrets.
 # Open the dashboard at  https://<service>.onrender.com/?k=<GS_ACCESS_TOKEN>  (service > Environment).
-# The hotel-negotiation service is deployed from its own branch and its own blueprint.
+# hotel-negotiation is a separate Render service for the earlier project; its code is on the
+# hotel-negotiation branch, not on main, and this blueprint does not manage it.
 services:
   - type: web
     name: harbour-house-group-sales
@@ -21,8 +22,6 @@ services:
         value: groupsales
       - key: PAYMENTS
         value: airwallex
-      - key: BUYER_MODE                 # presenter plays the buyer; "agent" lets the buyer side answer itself
-        value: presenter
       - key: GS_MAX_CLAUDE_RUNS_PER_DAY # optional daily cap on Claude seller runs; 0 = no cap (set spend limits on the key)
         value: "0"
       - key: DATABASE_URL               # Postgres (Supabase transaction pooler URL); unset = files that reset on spin-down

@@ -1618,7 +1618,7 @@ def test_buyer_takes_the_first_dates_offered(eng):
     assert sug["text"].startswith(f"{_span(first['arrival'], first['departure'])} works for us")
 
 
-def test_buyer_agent_takes_a_turn_for_questions_its_drafts_cannot_answer(eng):
+def test_it_is_the_buyers_turn_for_questions_the_drafts_cannot_answer(eng):
     from agentbank.groupsales.buyer import wants_reply
     e = eng
     s, n = run_to_confirmed(e)                                        # before the organizer's change event is due
