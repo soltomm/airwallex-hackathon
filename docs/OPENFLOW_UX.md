@@ -59,7 +59,7 @@ node --check web/openflow.js
 node --check web/fx.js
 ```
 
-The GitHub **Group sales** workflow runs these offline checks on pull requests
+The GitHub **tests** workflow runs these offline checks on pull requests
 and pushes to main. Postgres tests require `TEST_DATABASE_URL`; otherwise they
 are explicitly skipped.
 

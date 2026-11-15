@@ -42,3 +42,11 @@ jobs:
         run: pip install -e ".[agent,postgres]" pytest
       - name: Test
         run: PYTHONPATH=src python -m pytest tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Frontend syntax
+        run: |
+          node --check web/openflow.js
+          node --check web/fx.js
+          node --check web/vendors.js
