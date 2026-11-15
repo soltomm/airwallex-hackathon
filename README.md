@@ -62,8 +62,7 @@ RFP can change them. In practice:
 
 ### 1. Watch the demo
 
-<!-- Add the video link here once it is recorded, e.g. "[3-minute walkthrough](https://...)" -->
-*Video link to be added.*
+[Watch the demo video](https://www.youtube.com/watch?v=5mecH4R6KMc)
 
 ### 2. Try it yourself
 
