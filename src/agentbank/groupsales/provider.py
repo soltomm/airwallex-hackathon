@@ -125,7 +125,7 @@ class AirwallexProvider:
     # capabilities (without them, intents tagged with the account fail "not enabled for payment acceptance").
     def onboard_account(self, name: str, email: str, request_id: str, account: str | None, step) -> bool:
         """Create (or resume) the connected account; step(status, info) reports progress. True once it
-        accepts cards. Reuses the onboarding the Hotel Negotiation Desk verified against the sandbox."""
+        accepts cards."""
         from ..hotel_onboarding import open_account
         return open_account(self.c, name, email, request_id=request_id, account=account, step=step)
 

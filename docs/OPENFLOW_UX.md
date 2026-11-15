@@ -61,7 +61,7 @@ node --check web/fx.js
 
 The GitHub **Group sales** workflow runs these offline checks on pull requests
 and pushes to main. Postgres tests require `TEST_DATABASE_URL`; otherwise they
-are explicitly skipped. The unrelated legacy MCP UI bundle is not changed.
+are explicitly skipped.
 
 For browser checks, install Playwright in a temporary directory rather than
 changing the legacy UI dependencies, and install its Chromium if needed:

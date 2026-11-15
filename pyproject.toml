@@ -1,12 +1,12 @@
 [project]
 name = "agentbank"
 version = "0.1.0"
-description = "Starter kit for the Airwallex Agentic Banking Hackathon"
+description = "Groupy: a hotel group-sales agent for the Airwallex Agentic Banking Hackathon"
 requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-agent = ["anthropic>=1.15", "mcp>=2.3"]
+agent = ["anthropic>=1.15"]
 postgres = ["psycopg[binary]>=3.2"]   # only when DATABASE_URL is set (agentbank/storage.py)
 
 [build-system]

@@ -16,8 +16,10 @@ deposit, an amendment and a partial refund. Read [README.md](README.md) and
 - `data/groupsales/scenario.json`: the hotel data, the two RFPs and the buyers' private briefs.
 - `tests/`: unit and server tests; `tests/fuzz_group_sales.py` randomized scenarios;
   `scripts/e2e_demo.js` browser walk-through of the demo script.
-- Other files (`hotel_*`, `offer_desk`, `metal/`, `payee_check`, ...) are the earlier Hotel
-  Negotiation Desk project. Don't change them unless the task is about them.
+- `src/agentbank/` outside `groupsales/` is shared plumbing: `storage.py` (files or Postgres),
+  `airwallex/` (API client and errors), `hotel_onboarding.py` (the hotel's connected account),
+  `webhooks.py` (signature check), `config.py` and `agent/loop.py` (the Claude client).
+- `ui/test/`: browser tests for the dashboard's optional features (see the docs under `docs/`).
 
 ## Setup and checks
 

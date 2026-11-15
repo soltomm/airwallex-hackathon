@@ -23,7 +23,7 @@ git fetch origin && git checkout main && git pull
 python3 -m venv .venv && .venv/bin/pip install -e '.[agent]' pytest
 cp -n .env.example .env       # fill in AWX_CLIENT_ID and AWX_API_KEY (sandbox), and ANTHROPIC_API_KEY
 set -a; source .env; set +a   # load the keys into this shell
-PYTHONPATH=src .venv/bin/python -m pytest tests -q     # expect every test to pass, with 7 skipped (Postgres)
+PYTHONPATH=src .venv/bin/python -m pytest tests -q     # expect every test to pass, with the Postgres tests skipped
 ```
 
 ## 1. Airwallex sandbox, rules seller
