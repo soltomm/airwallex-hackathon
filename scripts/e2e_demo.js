@@ -1,4 +1,4 @@
-// End-to-end check of the demo script in GROUP_SALES.md, clicking the dashboard's own buttons in a real
+// End-to-end check of the demo walkthrough in README.md, clicking the dashboard's own buttons in a real
 // browser. Run it against a server with simulated payments (the hosted page is the simulated one):
 //
 //   PAYMENTS=simulated SELLER_MODE=rules GS_VAR=var/e2e PYTHONPATH=src python scripts/group_sales.py &

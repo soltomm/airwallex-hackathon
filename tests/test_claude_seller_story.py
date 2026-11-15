@@ -3,7 +3,7 @@
 This does not test Claude's judgement: the moves are scripted. It checks that every tool the Claude seller needs
 for the recorded demo still takes the arguments its schema describes and reaches the engine without a refusal, so a
 change elsewhere can't quietly break the Claude path (the rest of the suite runs the rules seller). The figures at the
-end are the spec figures from GROUP_SALES.md.
+end are the demo figures listed in AGENTS.md.
 
 Run: PYTHONPATH=src python -m pytest tests/test_claude_seller_story.py -q
 """

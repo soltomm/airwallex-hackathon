@@ -2,8 +2,8 @@
 
 Groupy: a hotel group-sales agent for the Airwallex Agentic Banking Hackathon. A seller agent
 (Claude or a deterministic rules seller) takes a group RFP from first email to a paid Airwallex
-deposit, an amendment and a partial refund. Read [README.md](README.md) and
-[GROUP_SALES.md](GROUP_SALES.md) before changing behaviour.
+deposit, an amendment and a partial refund. Read [README.md](README.md) and the
+rules in `engine.py` / `policy.py` before changing behaviour.
 
 ## Where things are
 
@@ -75,9 +75,9 @@ variables or GitHub settings, and don't trigger deploys. Ask a person.
   of each completed refund. Hotel net + platform fee must equal the buyer's net payment. No agent tool
   moves payouts, and the buyer never sees them.
 - Amounts are `Decimal` / integer pence, never floats.
-- The spec figures in GROUP_SALES.md (£4,920 / £1,476, £9,600, £3,840, £8,280, £528, £3,312, £4,968)
-  are tested. If a change moves them, say so explicitly in the PR.
-- Don't claim something was verified live unless it was. GROUP_SALES.md "Verified live" records what was.
+- The demo figures (£4,920 / £1,476, £9,600, £3,840, £8,280, £528, £3,312, £4,968) are tested and
+  appear in the README walkthrough. If a change moves them, say so explicitly in the PR.
+- Don't claim something was verified live unless it was. README.md "Verified live" records what was.
 
 ## Secrets
 

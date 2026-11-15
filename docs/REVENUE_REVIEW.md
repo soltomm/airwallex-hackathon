@@ -7,7 +7,7 @@ When the rules seller receives a buyer counteroffer at or above the hard minimum
 below the prepayment floor (£195-£199 twin, £170-£174 king), it pauses and routes an
 inquiry-owned task to the Revenue team. From the prepayment floor up to the seller's
 floor, the seller first offers its own prepayment trade (a lower rate for 50% paid on
-signing, see GROUP_SALES.md); only if that trade can't be offered (margin on busy dates,
+signing); only if that trade can't be offered (margin on busy dates,
 capacity) does the request go to revenue. A package below the hard margin floor
 also routes to revenue for a higher counteroffer or an alternative scope. Below the
 absolute minimum the seller answers with the prepayment trade at its floor, or ordinary

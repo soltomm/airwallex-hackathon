@@ -38,7 +38,7 @@ cannot be merged.
 ## Checking a change on staging
 
 1. Wait for the PR's merge to go live on staging (Render → harbour-house-preview → Events).
-2. Run the demo script in [GROUP_SALES.md](../GROUP_SALES.md#demo-script-about-7-minutes) there, or
+2. Follow the walkthrough in [README.md](../README.md#2-try-it-yourself-about-5-minutes) there, or
    `BASE=https://harbour-house-preview.onrender.com TOKEN=<staging token> node scripts/e2e_demo.js`.
 3. The live demo already has the change (see above). If something is wrong, use **Rollback** on the
    live service in Render, then fix it with a new PR.
