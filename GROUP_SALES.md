@@ -29,7 +29,8 @@ src/agentbank/groupsales/
   provider.py   Airwallex sandbox (Payment Intents, refunds) and a simulated twin with the same shape
   seller.py     ClaudeSeller (tools over the engine) and RulesSeller (deterministic, same tools)
   trace.py      record of each seller run and its tool calls, for the dashboard's AI Agent tab
-  buyer.py      draft buyer replies from the private brief, sent by a person from the mailbox
+  buyer.py      scripted buyer that answers from the private brief, for tests and randomized runs;
+                the website doesn't use it (a person types the buyer's replies in the mailbox)
   extract.py    rule-based RFP extraction
 scripts/group_sales.py   server: dashboard, API, agent runner, payment page, webhooks
 web/group_sales.html     hotel dashboard          web/group_pay.html   booking payment page
@@ -340,7 +341,7 @@ approved refund.
 
 ## Checks
 
-`tests/test_group_sales.py` (40 tests, no network, no keys; run with
+`tests/test_group_sales.py` (no network, no keys; run with
 `PYTHONPATH=src python -m pytest tests/test_group_sales.py -q`) covers:
 
 - the spec's figures and the full demo story;
@@ -450,7 +451,7 @@ seed, so replaying a seed in the same run is refused rather than merged. From th
 ### Browser check of the demo script
 
 `scripts/e2e_demo.js` clicks through the demo script in a real browser against a running server with
-simulated payments, and checks 38 points: the seller starting on its own, every spec figure, the
+simulated payments, and checks about 70 points: the seller starting on its own, every spec figure, the
 buyer's moves made from the buyer's mailbox (none on the dashboard), the AI Agent tab, Seller rules
 (a refused change, a saved one and restoring the defaults), Availability, the late notification, 375 px
 width on every tab, the rules page and the mailbox, and no JavaScript errors or browser dialogs. It resets

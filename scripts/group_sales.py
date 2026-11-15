@@ -70,7 +70,7 @@ engine = Engine(VAR, provider, public_base=PUBLIC, fx_enabled=FX)
 
 
 class Runner:
-    """Runs the seller (and, in agent mode, the buyer) in the background when something changes.
+    """Runs the seller in the background when something changes.
 
     The seller always acts on its own: it wakes on every new email, buyer reply, decision, payment,
     clock move or rule change, and works until it reaches something that needs a person.
