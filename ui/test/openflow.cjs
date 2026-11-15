@@ -1,4 +1,4 @@
-// Run against an isolated simulated Harbour server; see docs/OPENFLOW_UX.md.
+// Run against an isolated simulated Harbour server; see README.md.
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
