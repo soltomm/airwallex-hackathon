@@ -66,8 +66,8 @@ RFP can change them. In practice:
 
 ### 2. Try it yourself (about 5 minutes)
 
-Open the live demo: **https://harbour-house-group-sales.onrender.com** (the access link with its token
-is in our submission). It sleeps when idle, so the first load can take a minute.
+Open the live demo: **https://harbour-house-group-sales.onrender.com** (no login needed). It sleeps
+when idle, so the first load can take a minute.
 Or [run it locally](#run-it-locally) with no keys.
 
 You play the **hotel** on the dashboard and the **buyer** in their mailbox. The agent works on its

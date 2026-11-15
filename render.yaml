@@ -1,6 +1,7 @@
 # Render blueprint for the Harbour House group-sales demo (branch main).
 # Dashboard > New > Blueprint > this repo, branch main. Render asks for the sync:false secrets.
-# Open the dashboard at  https://<service>.onrender.com/?k=<GS_ACCESS_TOKEN>  (service > Environment).
+# The demo is public: no access token is set. To gate it, add GS_ACCESS_TOKEN in the service's Environment
+# and open  https://<service>.onrender.com/?k=<token>  once.
 # hotel-negotiation is a separate Render service for the earlier project; its code is on the
 # hotel-negotiation branch, not on main, and this blueprint does not manage it.
 services:
@@ -16,8 +17,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.7
-      - key: GS_ACCESS_TOKEN            # needed once to open the dashboard: <service URL>/?k=<token>
-        generateValue: true
       - key: STORAGE_NAMESPACE          # keeps this demo's rows apart from hotel-negotiation's in the same database
         value: groupsales
       - key: PAYMENTS
