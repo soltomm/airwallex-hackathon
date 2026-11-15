@@ -62,6 +62,84 @@ The revenue manager's pricing review is described in [docs/REVENUE_REVIEW.md](do
 `/pay/…`, `/webhooks/…` and `/healthz` stay open when `GS_ACCESS_TOKEN` is set; the payment page
 checks the deal's own buyer token and webhooks check their signature.
 
+## Architecture
+
+One Python process (`scripts/group_sales.py`, standard-library HTTP server) serves the three pages and
+the API, runs the seller in the background, and receives Airwallex webhooks. Everything that changes
+state goes through the engine.
+
+```mermaid
+flowchart LR
+  subgraph Pages
+    H["Hotel dashboard<br/>web/group_sales.html"]
+    B["Buyer mailbox<br/>web/group_buyer.html"]
+    P["Payment page<br/>web/group_pay.html"]
+  end
+  S["Server and agent runner<br/>scripts/group_sales.py"]
+  A["Seller agent<br/>ClaudeSeller or RulesSeller"]
+  C[("Claude API")]
+  E["Engine<br/>rules, versions, inventory,<br/>approvals, money ledger"]
+  D[("Scenario data<br/>scenario.json")]
+  ST[("State<br/>var/groupsales or Postgres")]
+  PR["Payment provider<br/>provider.py"]
+  AWX[("Airwallex sandbox<br/>or simulated twin")]
+
+  H --> S
+  B --> S
+  P --> S
+  S -- wakes on each event --> A
+  A -- tools only --> E
+  A -. ClaudeSeller .-> C
+  S -- buyer and manager actions --> E
+  D --> E
+  E <--> ST
+  E --> PR
+  PR <--> AWX
+  AWX -- signed webhooks --> S
+  P -. hosted checkout .-> AWX
+```
+
+How a deal moves through it:
+
+1. An RFP arrives in the hotel's inbox (from the scenario, or a new inquiry from the dashboard). The
+   server wakes the seller on every new email, buyer reply, manager decision, payment and clock jump.
+2. The seller reads the email, checks availability and rates, and asks, quotes or counters. It acts only
+   by calling engine operations; the engine refuses anything outside the hotel's rules, and a refusal
+   comes back to the seller as a tool result.
+3. Offers and amendments are immutable versions with a hash of their terms. A manager approval or a
+   buyer acceptance names one version and its hash, so changed terms need a new yes. The first sent
+   offer puts a 24-hour hold on the rooms.
+4. After acceptance the seller opens checkout (an Airwallex Payment Intent). The buyer enters the card
+   on Airwallex's hosted page; the hold becomes a booking only after the engine has verified the
+   payment with Airwallex (on return from checkout, by webhook, or by the seller's `check_payment`).
+5. After a verified deposit the engine pays the hotel's share by funds split. A reduction creates a
+   refund and a funds split reversal for the hotel's share of it.
+
+| Part | Files | Role |
+|---|---|---|
+| Server | `scripts/group_sales.py` | Pages, JSON API, access token, background agent runner, webhook endpoint |
+| Engine | `groupsales/engine.py` | Shared hotel state and every enforced operation; the only code that changes state or moves money |
+| Rules and arithmetic | `policy.py`, `rules.py`, `calc.py`, `bookable.py` | Authority limits, staff-editable rule values, pricing and margin in integer pence, the bookable calendar |
+| Sellers | `seller.py`, `trace.py` | `ClaudeSeller` and `RulesSeller` over the same tools; each run is recorded for the dashboard's AI Agent tab |
+| Reading text | `extract.py`, `understand.py`, `intent.py` | Turn an RFP or a typed reply into structured fields (patterns, or Claude with the patterns as fallback). They only read; every value is still checked by the engine |
+| Payments | `provider.py` | Airwallex Payment Intents, refunds, funds splits and reversals, connected-account onboarding; a simulated twin with the same shape |
+| Storage | `agentbank/storage.py` | One JSON document saved after every change, in `GS_VAR` or Postgres |
+| Inquiry generator | `generator.py`, `buyer.py` | Generated RFPs with private buyer briefs, and a scripted buyer for tests and randomized runs |
+| Optional features | `vendors.py`, `folio.py`, `fx.py`, `fx_provider.py` | Behind `GS_VENDORS`, `GS_FOLIO` and `GS_FX` |
+
+Paths without a directory are under `src/agentbank/groupsales/`.
+
+What keeps it safe:
+
+- **The model has no authority.** Prices, floors, margin, approvals, inventory and money are checked in
+  the engine. Text in an RFP or a reply is data, never an instruction.
+- **Two views of each deal.** The seller's tools never return the buyer's private brief; the buyer's
+  pages never return floors, costs, margins or unsent versions.
+- **No credentials near an agent.** Only `provider.py` holds the Airwallex key, and card data stays on
+  Airwallex's hosted page.
+- **Money calls are at-most-once.** The engine saves each operation with its own request id before
+  calling the provider, and after a timeout it looks the operation up instead of sending it again.
+
 ## Hotel data and buyer briefs
 
 Everything the scenario needs is in [`data/groupsales/scenario.json`](data/groupsales/scenario.json):
