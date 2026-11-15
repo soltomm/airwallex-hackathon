@@ -76,7 +76,7 @@ variables or GitHub settings, and don't trigger deploys. Ask a person.
   moves payouts, and the buyer never sees them.
 - Amounts are `Decimal` / integer pence, never floats.
 - The demo figures (£4,920 / £1,476, £9,600, £3,840, £8,280, £528, £3,312, £4,968) are tested and
-  appear in the README walkthrough. If a change moves them, say so explicitly in the PR.
+  appear in the README's guided example. If a change moves them, say so explicitly in the PR.
 - Don't claim something was verified live unless it was. README.md "Verified live" records what was.
 
 ## Secrets
