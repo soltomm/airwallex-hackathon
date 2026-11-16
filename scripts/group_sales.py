@@ -58,7 +58,7 @@ FX = os.environ.get("GS_FX", "").strip().lower() in ("1", "true", "yes", "on")
 # Anthropic Console: past a cap the rules seller answered, which buyers noticed as worse replies.
 MAX_CLAUDE_RUNS = int(os.environ.get("GS_MAX_CLAUDE_RUNS_PER_DAY") or 0)
 MAX_BODY = 1_000_000          # bytes; the largest real request (an email of MAX_EMAIL_CHARS) is far below this
-OPEN_PATHS = ("/folio/", "/pay/", "/sim-hpp/", "/webhooks/", "/healthz")
+OPEN_PATHS = ("/folio/", "/pay/", "/sim-hpp/", "/webhooks/", "/healthz", "/landing")
 # The buyer's mailbox and its own moves skip the dashboard token: each handler checks the deal's buyer
 # token instead, so a buyer can use the link without the hotel's access token.
 BUYER_PATHS = re.compile(r"^/(inbox/[^/]+|api/buyer/[^/]+(/view)?)$")
@@ -250,6 +250,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self._send(200, dashboard_html(), "text/html")
+            if p == "/landing":                                    # the public product page: static, no token
+                return self._send(200, (WEB / "landing.html").read_text(), "text/html")
+            if p == "/landing/overview.png":
+                return self._send(200, (WEB / "landing-overview.png").read_bytes(), "image/png")
             assets = {"/assets/folio.js": ("folio.js", "text/javascript"),
                       "/assets/revenue.js": ("revenue.js", "text/javascript"),
                       "/assets/openflow.css": ("openflow.css", "text/css"),

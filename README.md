@@ -70,6 +70,8 @@ Open the live demo: **https://harbour-house-group-sales.onrender.com** (no login
 when idle, so the first load can take a minute.
 Or [run it locally](#run-it-locally) with no keys.
 
+A short product page for hotel managers is at `/landing` ([`web/landing.html`](web/landing.html)).
+
 You play the **hotel** on the dashboard and the **buyer** in their own mailbox page. The agent works on
 its own between your moves: there is no "run" button. Each deal has a coloured next-step card: amber
 means your decision as hotel manager, purple means waiting for the buyer, grey means the agent or

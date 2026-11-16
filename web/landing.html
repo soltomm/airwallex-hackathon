@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Groupy · AI group sales for hotels</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: forest-green hero band (the dashboard's sidebar colour) with the headline and a live deal card; below it, a few short, airy sections a hotel manager can skim in a minute. */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --fg: #18232e;
+  --muted: #5d6d6c;
+  --line: #dfe5e5;
+  --accent: #1f6650;
+  --accent-soft: #e9f3ed;
+  --on-accent: #ffffff;
+  --forest: #17332d;
+  --forest-2: #1f4239;
+  --forest-fg: #eef5f1;
+  --forest-muted: #a9c2b8;
+  --mint: #8fd6b0;
+  --warn: #8a5a00;
+  --warn-soft: #fff5df;
+  --warn-line: #ecd08d;
+  --buyer: #536f7b;
+  --buyer-soft: #eff4f6;
+  --shadow: 0 30px 70px -30px rgba(6, 24, 20, .6);
+  --display: "Inter Tight", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1615; --panel: #162120; --fg: #e7eeeb; --muted: #9aaaa6; --line: #283634;
+    --accent: #6cc3a0; --accent-soft: #18302a; --on-accent: #06231a;
+    --forest: #0a1f1a; --forest-2: #133029; --forest-fg: #eef5f1; --forest-muted: #a9c2b8;
+    --warn: #e5b452; --warn-soft: #2e2610; --warn-line: #5c4a1a;
+    --buyer: #a6c0cb; --buyer-soft: #1a282e;
+    --shadow: 0 30px 70px -30px rgba(0, 0, 0, .8);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1615; --panel: #162120; --fg: #e7eeeb; --muted: #9aaaa6; --line: #283634;
+  --accent: #6cc3a0; --accent-soft: #18302a; --on-accent: #06231a;
+  --forest: #0a1f1a; --forest-2: #133029; --forest-fg: #eef5f1; --forest-muted: #a9c2b8;
+  --warn: #e5b452; --warn-soft: #2e2610; --warn-line: #5c4a1a;
+  --buyer: #a6c0cb; --buyer-soft: #1a282e;
+  --shadow: 0 30px 70px -30px rgba(0, 0, 0, .8);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 17px; line-height: 1.55; }
+.wrap {
+  max-width: 1140px; margin-inline: auto;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+}
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; letter-spacing: -0.025em; font-weight: 600; }
+p { margin: 0; }
+a { color: inherit; }
+:focus-visible { outline: 3px solid var(--mint); outline-offset: 3px; border-radius: 6px; }
+.eyebrow { font: 500 12px var(--body); letter-spacing: .22em; text-transform: uppercase; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; text-decoration: none;
+  font: 600 15.5px var(--body); border: 0; border-radius: 8px; padding: 13px 20px;
+  background: var(--accent); color: var(--on-accent); transition: transform .15s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn.mint { background: var(--mint); color: #06231a; }
+.btn.line { background: transparent; color: var(--forest-fg); box-shadow: inset 0 0 0 1.5px var(--forest-muted); }
+.btn.small { padding: 9px 14px; font-size: 14.5px; }
+
+/* hero band */
+.hero { background: var(--forest); color: var(--forest-fg); }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-block: 22px; }
+.logo { font: 700 25px var(--display); letter-spacing: -0.03em; text-decoration: none; display: inline-flex; align-items: baseline; gap: 8px; }
+.logo span { color: var(--mint); font-weight: 500; }
+.top nav { display: flex; align-items: center; gap: 24px; font-size: 14.5px; font-weight: 500; }
+.top nav a { text-decoration: none; }
+.top nav a:not(.btn):hover { text-decoration: underline; text-underline-offset: 4px; }
+.top nav .hide-sm { display: none; }
+@media (min-width: 720px) { .top nav .hide-sm { display: inline; } }
+
+.hero-grid { display: grid; gap: 44px; padding-block: 36px 72px; align-items: center; }
+@media (min-width: 940px) { .hero-grid { grid-template-columns: 1fr 1fr; gap: 56px; padding-block: 56px 96px; } }
+.hero-grid > * { min-width: 0; }
+.hero .eyebrow { color: var(--forest-muted); }
+.hero h1 { font-size: clamp(42px, 6.4vw, 76px); line-height: 1; letter-spacing: -0.04em; margin-top: 18px; }
+.hero h1 em { font-style: normal; color: var(--mint); }
+.hero .lede { margin-top: 22px; font-size: 19px; color: var(--forest-muted); max-width: 32em; }
+.hero .actions { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
+.hero .fine { margin-top: 14px; font-size: 13.5px; color: var(--forest-muted); }
+
+/* deal card */
+.deal { background: var(--panel); color: var(--fg); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+.deal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.deal-head b { font: 600 16px var(--display); display: block; }
+.deal-head small { color: var(--muted); font-size: 13px; }
+.pill { font: 500 11.5px var(--body); padding: 4px 9px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.thread { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 20px; }
+.msg { border-radius: 10px; padding: 12px 14px; font-size: 14.5px; line-height: 1.5; max-width: 92%; }
+.msg .from { display: block; font: 500 11.5px var(--body); letter-spacing: .04em; margin-bottom: 4px; }
+.msg.buyer { background: var(--buyer-soft); align-self: flex-start; }
+.msg.buyer .from { color: var(--buyer); }
+.msg.seller { background: var(--accent-soft); align-self: flex-end; }
+.msg.seller .from { color: var(--accent); }
+.decision { border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.decision .from { font: 600 11.5px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--warn); }
+.decision p { font-size: 14.5px; }
+.events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 14.5px; }
+.events li { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: baseline; }
+.events li::before { content: "✓"; color: var(--accent); font-weight: 700; }
+.events .amt { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.link-btn { background: none; border: 0; padding: 0; font: 500 13.5px var(--body); color: var(--muted); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.caption { margin-top: 12px; font-size: 13px; color: var(--forest-muted); text-align: center; }
+
+/* sections */
+.section .wrap { padding-block: 88px; }
+.section h2 { font-size: clamp(30px, 4.4vw, 48px); line-height: 1.05; letter-spacing: -0.035em; max-width: 16em; }
+.section .intro { margin-top: 16px; color: var(--muted); max-width: 38em; font-size: 18px; }
+.section .eyebrow { color: var(--accent); margin-bottom: 14px; display: block; }
+.alt { background: var(--panel); border-block: 1px solid var(--line); }
+
+.points { margin-top: 44px; display: grid; gap: 28px 48px; }
+@media (min-width: 760px) { .points.three { grid-template-columns: repeat(3, 1fr); } .points.two { grid-template-columns: 1fr 1fr; } }
+.points > div { border-top: 2px solid var(--fg); padding-top: 14px; min-width: 0; }
+.points h3 { font-size: 20px; margin-bottom: 6px; }
+.points p { color: var(--muted); }
+
+.steps { list-style: none; margin: 48px 0 0; padding: 0; display: grid; gap: 36px 32px; counter-reset: s; }
+@media (min-width: 640px) { .steps { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 1000px) { .steps { grid-template-columns: repeat(4, 1fr); } }
+.steps li { counter-increment: s; min-width: 0; }
+.steps li::before { content: counter(s); display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--on-accent); font: 600 18px var(--display); margin-bottom: 16px; }
+.steps h3 { font-size: 20px; margin-bottom: 6px; }
+.steps p { color: var(--muted); }
+
+.shot { margin-top: 40px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: 0 30px 60px -40px rgba(6, 24, 20, .5); background: var(--panel); }
+.shot img { display: block; width: 100%; height: auto; }
+
+.model { display: grid; gap: 40px; align-items: center; }
+@media (min-width: 860px) { .model { grid-template-columns: 1.2fr .8fr; gap: 64px; } }
+.model > * { min-width: 0; }
+.fee { font: 600 clamp(84px, 14vw, 150px)/.9 var(--display); letter-spacing: -0.06em; color: var(--accent); }
+.fee small { display: block; font: 400 15px/1.5 var(--body); letter-spacing: 0; color: var(--muted); margin-top: 14px; max-width: 22em; }
+
+.cta { background: var(--forest); color: var(--forest-fg); }
+.cta .wrap { padding-block: 92px; }
+.cta h2 { font-size: clamp(38px, 6vw, 68px); line-height: 1; letter-spacing: -0.04em; max-width: 13em; }
+.cta .actions { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
+.cta .fine { margin-top: 18px; font-size: 14.5px; color: var(--forest-muted); max-width: 40em; }
+
+footer { background: var(--forest); color: var(--forest-muted); border-top: 1px solid var(--forest-2); }
+footer .wrap { padding-block: 24px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13.5px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } .btn:hover { transform: none; } }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <header class="wrap top">
+    <a class="logo" href="#top" aria-label="Groupy home"><span aria-hidden="true">↗</span>Groupy</a>
+    <nav>
+      <a class="hide-sm" href="#how">How it works</a>
+      <a class="hide-sm" href="#control">Your control</a>
+      <a class="btn mint small" href="/">Open the demo</a>
+    </nav>
+  </header>
+
+  <section class="wrap hero-grid" id="top">
+    <div>
+      <p class="eyebrow">Room for what's next</p>
+      <h1>Win more group bookings, <em>without a group sales team.</em></h1>
+      <p class="lede">Groupy is an AI sales agent for hotel groups. It answers every inquiry, sends a quote, negotiates within the rules you set and collects the deposit. You step in only for the decisions that need you.</p>
+      <div class="actions">
+        <a class="btn mint" href="/">Try the live demo</a>
+        <a class="btn line" href="https://www.youtube.com/watch?v=5mecH4R6KMc">Watch the video</a>
+      </div>
+    </div>
+
+    <div>
+      <div class="deal" aria-label="Example group deal">
+        <div class="deal-head">
+          <div><b>Northstar Analytics</b><small>12 rooms · 3 nights · team offsite</small></div>
+          <span class="pill" id="deal-pill">Offer · £9,600</span>
+        </div>
+        <div class="thread">
+          <div class="msg buyer"><span class="from">The organiser</span>The room rate works for us. Attendance is still uncertain, so we need more flexibility on numbers, and we'd like a 25% deposit.</div>
+          <div class="msg seller"><span class="from">Groupy, for your hotel</span>Keeps your rate and offers the flexibility in return for a 40% deposit.</div>
+
+          <div class="decision" id="decision">
+            <span class="from">Your decision</span>
+            <p>This trade goes beyond the limits you set, so Groupy is waiting for your yes.</p>
+            <div><button class="btn small" id="approve" type="button">Approve</button></div>
+          </div>
+
+          <div id="after" hidden>
+            <ul class="events">
+              <li><span>You approved the offer</span><span class="amt"></span></li>
+              <li><span>The organiser accepted and paid the deposit</span><span class="amt">£3,840</span></li>
+              <li><span>Booking confirmed</span><span class="amt"></span></li>
+            </ul>
+            <button class="link-btn" id="replay" type="button" style="margin-top:14px">Replay</button>
+          </div>
+        </div>
+      </div>
+      <p class="caption">An example deal. One click from you, the rest from Groupy.</p>
+    </div>
+  </section>
+</div>
+
+<main>
+  <section class="section">
+    <div class="wrap">
+      <span class="eyebrow">Why it matters</span>
+      <h2>Group business is valuable, and slow to win by hand.</h2>
+      <div class="points three">
+        <div><h3>The first clear quote usually wins</h3><p>Organisers send the same request to several hotels. Groupy replies in minutes, any time of day.</p></div>
+        <div><h3>Every inquiry gets an answer</h3><p>Offsites, wedding parties and conference blocks no longer wait in an inbox until someone has time.</p></div>
+        <div><h3>Deposits arrive sooner</h3><p>Organisers pay online as soon as they accept, so there are no invoices to send and no transfers to chase.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section alt" id="how">
+    <div class="wrap">
+      <span class="eyebrow">How it works</span>
+      <h2>From inquiry to confirmed booking.</h2>
+      <ol class="steps">
+        <li><h3>Reads the inquiry</h3><p>Groupy picks out dates, rooms, meeting space and budget, and asks the organiser only for what is missing.</p></li>
+        <li><h3>Sends a quote</h3><p>It checks your availability and rates, sends a priced offer and holds the rooms while the organiser decides.</p></li>
+        <li><h3>Negotiates</h3><p>It trades instead of giving ground, such as more flexibility on numbers for a larger deposit.</p></li>
+        <li><h3>Collects the deposit</h3><p>The organiser pays online and the booking is confirmed. Later changes, refunds and instalments are handled too.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <span class="eyebrow">Your dashboard</span>
+      <h2>See every group, what it's worth and whose move it is.</h2>
+      <p class="intro">Groupy works in the background. When a deal needs your decision, it tells you.</p>
+      <div class="shot"><img src="/landing/overview.png" alt="Groupy dashboard for a hotel: the value of the open pipeline, group room nights, new inquiries and deposits collected, above a list of group inquiries with their dates, rooms, proposal value and status." width="1440" height="1378"></div>
+    </div>
+  </section>
+
+  <section class="section alt" id="control">
+    <div class="wrap">
+      <span class="eyebrow">Your control</span>
+      <h2>Your rules. Groupy can't break them.</h2>
+      <p class="intro">Your limits are built into the system, so no clever email from a buyer can talk the agent past them.</p>
+      <div class="points two">
+        <div><h3>You set the limits</h3><p>Target rates, the lowest rate you'll accept, deposit terms and how many rooms a group may release.</p></div>
+        <div><h3>Exceptions wait for you</h3><p>Anything beyond those limits, including larger refunds, needs one click from you before it goes ahead.</p></div>
+        <div><h3>No booking without payment</h3><p>Rooms are held while the organiser decides and confirmed only once the deposit has been paid.</p></div>
+        <div><h3>Your numbers stay private</h3><p>Organisers never see your costs, margins or lowest rates. You can see every step Groupy took and why.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap">
+      <h2>See it handle a group from inquiry to deposit.</h2>
+      <div class="actions">
+        <a class="btn mint" href="/">Open the live demo</a>
+        <a class="btn line" href="https://www.youtube.com/watch?v=5mecH4R6KMc">Watch the video</a>
+      </div>
+      <p class="fine">No login needed. The first load can take a minute.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Groupy · AI group sales for hotels</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var decision = document.getElementById('decision');
+  var after = document.getElementById('after');
+  var pill = document.getElementById('deal-pill');
+  document.getElementById('approve').addEventListener('click', function () {
+    decision.hidden = true; after.hidden = false; pill.textContent = 'Confirmed · deposit paid';
+    document.getElementById('replay').focus();
+  });
+  document.getElementById('replay').addEventListener('click', function () {
+    after.hidden = true; decision.hidden = false; pill.textContent = 'Offer · £9,600';
+    document.getElementById('approve').focus();
+  });
+})();
+</script>
+</body>
+</html>

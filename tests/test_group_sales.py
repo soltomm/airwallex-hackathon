@@ -1799,6 +1799,22 @@ def test_workbench_assets_are_explicit_and_authenticated(server, monkeypatch):
         assert _req(server, path, headers=headers)[0] == 404
 
 
+def test_landing_page_is_public_and_the_dashboard_stays_private(server, monkeypatch):
+    monkeypatch.setattr(server, "ACCESS", "landing-demo-token")
+    code, headers, body = _req(server, "/landing")                                # no token, no cookie
+    assert code == 200 and "text/html" in headers["Content-Type"]
+    assert "AI sales agent for hotel groups" in body and 'src="/landing/overview.png"' in body
+    assert "landing-demo-token" not in body
+    with _OPENER.open(server.base + "/landing/overview.png", timeout=10) as resp:
+        assert resp.status == 200 and resp.headers["Content-Type"] == "image/png"
+        assert resp.read().startswith(b"\x89PNG")
+    # Opening /landing opens nothing else: the dashboard, its data and unknown files under /landing still refuse.
+    for path in ("/", "/api/state", "/assets/openflow.css"):
+        assert _req(server, path)[0] == 401, path
+    for path in ("/landing/group_sales.html", "/landing/../.env", "/landing-overview.png"):
+        assert _req(server, path)[0] == 404, path
+
+
 # ------------------------------------------------------------------------------ hotel payouts (Payments for Platforms)
 def test_hotel_paid_by_funds_split_and_share_of_refund_clawed_back(eng):
     e = eng
